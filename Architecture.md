@@ -86,23 +86,63 @@ All three are objects. `Actor` and `Note` are written by application code. `Note
 
 ### Store&lt;T&gt; — storage and indexing in one place
 
-`opts.Store<T>()` is the single place that defines everything about how a type is persisted (Azure Table Storage) and indexed (Lucene). It wraps `Azure.EntityServices.Tables`'s `EntityTableClientConfig<T>` for table storage and `Iciclecreek.Lucene.Net.Linq`'s field mapping for Lucene.
+`Store<T>()` defines everything about how a type is persisted (Azure Table Storage) and indexed (Lucene). Both table storage config and Lucene index config can be specified via **attributes on the POCO** or **fluently** in `Store<T>()`. Convention defaults handle the rest.
 
 Each registered object type gets **its own Azure table** (one table per CLR type) and **its own Lucene index**.
 
-#### Minimal — just table storage keys:
+#### Attribute-based (zero fluent config)
+
+Decorate the POCO with table storage and Lucene attributes — `Store<T>()` needs no lambda:
 
 ```csharp
-opts.Store<Actor>(s =>
+public class Actor
 {
-    s.SetPartitionKey(a => a.Domain);
-    s.SetRowKey(a => a.Username);
-    // table name defaults to "actors"
-    // Lucene: all public properties indexed with convention defaults
-});
+    [PartitionKey]
+    public string Domain       { get; set; }
+
+    [RowKey]
+    public string Username     { get; set; }
+
+    [Field(IndexMode.NotAnalyzed)]
+    public string DisplayName  { get; set; }
+
+    public string AvatarUrl    { get; set; }
+}
+
+public class Note
+{
+    [PartitionKey]
+    public string Domain       { get; set; }
+
+    [RowKey(Strategy = RowKeyStrategy.DescendingTime)]
+    public DateTimeOffset Published { get; set; }
+
+    [Tag] public string AuthorId   { get; set; }
+
+    [Field(Key = true)]
+    public string NoteId       { get; set; }
+
+    [Field(Analyzer = typeof(EnglishAnalyzer))]
+    public string Content      { get; set; }
+
+    [NumericField(DocValues = true)]
+    public DateTimeOffset Published { get; set; }
+
+    public List<string> Tags   { get; set; }    // multi-valued, auto-handled
+
+    [IgnoreField]
+    public string InternalState { get; set; }   // not indexed
+}
+
+// Registration — everything inferred from attributes
+opts.Store<Actor>();
+opts.Store<Note>();
 ```
 
-#### Full — table storage tags + Lucene index customization:
+Table storage attributes: `[PartitionKey]`, `[RowKey]`, `[Tag]`, `[ComputedTag]`.
+Lucene attributes (from `Iciclecreek.Lucene.Net.Linq`): `[Field]`, `[NumericField]`, `[IgnoreField]`, `[DocumentKey]`.
+
+#### Fluent (for types you can't or don't want to attribute)
 
 ```csharp
 opts.Store<Note>(s =>
@@ -116,59 +156,37 @@ opts.Store<Note>(s =>
 
     // --- Lucene index ---
     s.Index(n => n.NoteId).AsKey();
-    s.Index(n => n.AuthorId).NotAnalyzed();              // exact match
-    s.Index(n => n.Content).AnalyzedWith<EnglishAnalyzer>();  // full-text
-    s.Index(n => n.Published).AsNumeric().WithDocValues();    // range queries, fast sort
-    s.Index(n => n.Tags);                                // multi-valued, default
-    s.Ignore(n => n.InternalState);                      // excluded from both table and index
+    s.Index(n => n.AuthorId).NotAnalyzed();
+    s.Index(n => n.Content).AnalyzedWith<EnglishAnalyzer>();
+    s.Index(n => n.Published).AsNumeric().WithDocValues();
+    s.Index(n => n.Tags);
+    s.Ignore(n => n.InternalState);
 });
 ```
 
-The table storage side (partition key, row key, tags) defines what's server-side filterable via `QueryAsync<T>()`. The Lucene side (`Index`, `Ignore`) defines what's searchable via `SearchAsync<T>()`. Both live in the same `Store<T>` block because they're both storage metadata for the same type.
-
-#### Three ways to define the Lucene schema
-
-The `s.Index(...)` fluent API is one option. You can also use:
-
-**Attributes on the POCO** (declarative, zero `Store<T>` config needed):
+You can also pass a `ClassMap<T>` for the Lucene side if you prefer that style:
 
 ```csharp
-public class Note
-{
-    [Field(Key = true)]           public string NoteId   { get; set; }
-    [Field(IndexMode.NotAnalyzed)] public string AuthorId { get; set; }
-    [Field(Analyzer = typeof(EnglishAnalyzer))] public string Content { get; set; }
-    [NumericField(DocValues = true)] public DateTimeOffset Published { get; set; }
-    public List<string> Tags { get; set; }    // multi-valued, auto-handled
-    [IgnoreField] public string InternalState { get; set; }
-}
-```
-
-**ClassMap&lt;T&gt;** (for types you can't attribute):
-
-```csharp
-public class NoteMap : ClassMap<Note>
-{
-    public NoteMap() : base(LuceneVersion.LUCENE_48)
-    {
-        Key(n => n.NoteId);
-        Property(n => n.AuthorId).NotAnalyzed();
-        Property(n => n.Content).AnalyzedWith(new EnglishAnalyzer(LuceneVersion.LUCENE_48));
-        NumericField(n => n.Published);
-    }
-}
-
 opts.Store<Note>(s =>
 {
     s.SetPartitionKey(n => n.Domain);
     s.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published));
-    s.SetLuceneMap(new NoteMap());
+    s.SetLuceneMap(new NoteMap());   // ClassMap<Note> from Iciclecreek.Lucene.Net.Linq
 });
 ```
 
-**Convention** (no attributes, no fluent config): all public properties indexed with sensible defaults (analyzed, stored). This is what you get if `Store<T>` only specifies table storage keys.
+#### Convention defaults
 
-All three produce the same internal mapping. The fluent `s.Index(...)` API, attributes, and `ClassMap<T>` are interchangeable — use whichever fits your style.
+Anything not explicitly configured gets sensible defaults:
+- **Table name** — lowercased CLR type name (`Note` → `notes`)
+- **Lucene fields** — all public properties indexed, analyzed, stored
+- **Tags** — none by default (opt-in via `[Tag]` or `s.AddTag(...)`)
+
+#### Mix and match
+
+Attributes and fluent config combine freely. Attributes set the base; fluent overrides them. This lets you attribute the POCO for the common case and use `Store<T>()` for environment-specific tweaks.
+
+The table storage side (partition key, row key, tags) defines what's server-side filterable via `QueryAsync<T>()`. The Lucene side defines what's searchable via `SearchAsync<T>()`. Both live together because they're both storage metadata for the same type — separate from materialized view logic (`CreateView`).
 
 #### Row key strategies
 
@@ -605,25 +623,13 @@ services.AddLottaDB(opts =>
     opts.UseAzureTables(connectionString);
     opts.UseLuceneDirectory(new FSDirectoryProvider("./lucene-indexes"));
 
-    // --- Storage: how objects are persisted and indexed ---
+    // --- Storage: inferred from attributes on Actor and Note ---
+    opts.Store<Actor>();
+    opts.Store<Note>();
 
-    opts.Store<Actor>(s =>
-    {
-        s.SetPartitionKey(a => a.Domain);
-        s.SetRowKey(a => a.Username);
-        s.AddTag(a => a.DisplayName);
-        // Lucene: convention defaults (all properties indexed)
-    });
-
-    opts.Store<Note>(s =>
-    {
-        s.SetPartitionKey(n => n.Domain);
-        s.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published));
-        s.AddTag(n => n.AuthorId);
-        s.AddTag(n => n.Published);
-        s.Index(n => n.Content).AnalyzedWith<EnglishAnalyzer>();  // full-text
-        s.Index(n => n.Published).AsNumeric().WithDocValues();     // fast sort
-    });
+    // Or fluent if you prefer:
+    // opts.Store<Actor>(s => { s.SetPartitionKey(a => a.Domain); s.SetRowKey(a => a.Username); });
+    // opts.Store<Note>(s => { s.SetPartitionKey(n => n.Domain); s.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published)); });
 
     // --- Materialized view: one LINQ expression, storage inferred ---
 
@@ -702,8 +708,9 @@ Tag columns can be regenerated by replaying every row's `_json` through the curr
 | **Unopinionated about data semantics** | Natural keys → upsert; time keys → append. The library doesn't care. |
 | **One table per CLR type, name inferred** | Table name defaults to lowercased type name; no boilerplate. |
 | **`SaveAsync` is always upsert** | No insert/upsert distinction. One operation, no ambiguity. |
-| **`Store<T>()` — storage + indexing in one place** | Table storage config (PK, RK, tags) and Lucene index config (fields, analyzers) in a single block. Separate from `CreateView` (materialized view logic). |
-| Objects are plain POCOs | Domain models stay clean; PK/RK/tags/index config are infrastructure, configured via `Store<T>`. |
+| **`Store<T>()` — storage + indexing in one place** | Table storage config (PK, RK, tags) and Lucene index config (fields, analyzers) in one block. Attributes or fluent — same result. Separate from `CreateView` (materialized view logic). |
+| **Attributes or fluent — your choice** | `[PartitionKey]`, `[RowKey]`, `[Tag]` for table storage; `[Field]`, `[NumericField]` for Lucene. Fluent `Store<T>(s => ...)` for types you can't attribute. Mix and match freely. |
+| Objects are plain POCOs | Domain models stay clean; storage/index config lives in attributes or `Store<T>`, not base classes. |
 | Storage modeled on `Azure.EntityServices.Tables` | Reuse a battle-tested mapping/tags model. |
 | Azure Table Storage (Azurite for dev/test) | One backend, one code path. |
 | Tags = property promotion | Server-side filterable hot fields without sacrificing the JSON document. |
