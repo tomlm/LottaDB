@@ -2,11 +2,11 @@
 
 ## Overview
 
-LottaDB is a .NET library that stores **POCOs in Azure Table Storage** and maintains **Lucene-backed materialized views**.
+LottaDB is a .NET library that stores **POCOs in Azure Table Storage** and automatically indexes them into **Lucene** for rich queries. When an object is saved, user-defined **builders** can produce additional derived objects that are also stored and indexed — enabling denormalized, query-optimized projections that cascade automatically.
 
-Applications hand LottaDB ordinary POCOs. `SaveObjectAsync` writes a row to Azure Table Storage, then runs user-defined view builders that read related objects and produce denormalized view documents indexed into Lucene. Queries against views are expressed in LINQ via `Iciclecreek.Lucene.Net.Linq` and return strongly-typed objects.
+There is no distinction between "entities" and "views." **Everything is an object.** Some objects are written by application code, some are produced by builders. All objects live in Azure Table Storage and are automatically indexed into Lucene.
 
-LottaDB is **unopinionated about data semantics**. Whether you use it for mutable objects (upsert by natural key), time-ordered immutable records (append with time-based keys), or a mix — that's your choice, expressed through the per-type `EntityMapping<T>`. LottaDB just stores what you give it and runs the projections.
+LottaDB is **unopinionated about data semantics**. Whether you use it for mutable objects (upsert by natural key), time-ordered immutable records (append with time-based keys), or a mix — that's your choice, expressed through the per-type mapping. LottaDB just stores what you give it and runs the builders.
 
 A per-type **mapping** (modeled after [`Azure.EntityServices.Tables`](https://github.com/Aguafrommars/Azure.EntityServices)) tells LottaDB how to compute partition keys, row keys, and which properties to promote to native table columns ("tags"). The full POCO is always stored as JSON.
 
@@ -15,10 +15,10 @@ Storage backend: **Azure Table Storage**, accessed via `Azure.Data.Tables` + `Az
 ### Design goals
 
 1. **Store POCOs in Azure Table Storage** with a clean mapping — no `ITableEntity`, no infrastructure on the domain model.
-2. **Promote hot properties to tags** for server-side filtering without polluting the domain model.
-3. **Materialize views into Lucene** automatically when objects are written.
-4. **Query views with LINQ** and get back POCOs.
-5. **Rebuildable**: any view can be rebuilt from table storage.
+2. **Auto-index everything into Lucene** — every object is searchable out of the box.
+3. **Builders produce derived objects** that are stored and indexed like any other object, enabling cascading projections.
+4. **Query with async LINQ** — `SearchAsync<T>()` for Lucene, `QueryAsync<T>()` for table storage.
+5. **Rebuildable**: any Lucene index can be rebuilt from table storage.
 
 ## High-Level Components
 
@@ -26,239 +26,31 @@ Storage backend: **Azure Table Storage**, accessed via `Azure.Data.Tables` + `Az
 flowchart LR
     App[Application code] --> Facade[ILottaDB facade]
 
-    subgraph "Azure Table Storage (Objects)"
-        Facade -->|"SaveObjectAsync / GetObjectAsync"| ETC[IEntityTableClient&lt;T&gt;<br/>Azure.EntityServices]
+    subgraph "Azure Table Storage"
+        Facade -->|"SaveAsync / GetAsync / QueryAsync"| ETC[IEntityTableClient&lt;T&gt;<br/>Azure.EntityServices]
         ETC --> Tables[(Tables<br/>Azurite or Azure)]
     end
 
-    ETC -->|"IEntityObserver&lt;T&gt;"| Engine[ViewProjectionEngine]
+    ETC -->|"IEntityObserver&lt;T&gt;"| Engine[BuilderEngine]
     Engine -->|"reads related objects"| Facade
-    Engine -->|"upsert / delete"| Index
+    Engine -->|"SaveAsync derived objects"| Facade
 
-    subgraph "Lucene (Views)"
-        Facade -->|"QueryView&lt;TView&gt;"| Index[ILuceneViewIndex&lt;TView&gt;]
+    subgraph "Lucene"
+        Facade -->|"SearchAsync&lt;T&gt;"| Index[Lucene Index<br/>auto-indexed per type]
         Index --> Dir[(Directory<br/>via IDirectoryProvider)]
     end
 
-    Index -->|"IViewObserver&lt;TView&gt;"| Observers[View observers<br/>UI / SignalR / etc.]
-    Engine -->|"SaveResult"| App
+    Index -->|"Observe&lt;T&gt;"| Observers[Observers<br/>UI / SignalR / etc.]
+    Engine -->|"ObjectResult"| App
 ```
 
 ## Core Concepts
 
-### Objects are plain POCOs
+### Everything is an object
 
 Objects in LottaDB are ordinary classes. They do **not** implement `ITableEntity`, do **not** inherit a base class, and do **not** carry `PartitionKey` / `RowKey` / `ETag` / `Timestamp` properties.
 
 ```csharp
-public class Order
-{
-    public string TenantId   { get; set; }
-    public string OrderId    { get; set; }
-    public string CustomerId { get; set; }
-    public decimal Total     { get; set; }
-    public DateTimeOffset CreatedAt { get; set; }
-    public List<OrderLine> Lines { get; set; }
-}
-```
-
-How that POCO becomes a table row is described entirely by an **`EntityMapping<T>`** registered at composition time.
-
-### Entity Mapping
-
-`EntityMapping<T>` is LottaDB's per-type configuration, a thin wrapper over `Azure.EntityServices.Tables`'s `EntityTableClientConfig<T>`. A mapping defines:
-
-- **Table name** — defaults to the **CLR type name**, lowercased (e.g., `Order` → `orders`). Override with `SetTableName()` if needed.
-- **Partition key resolver** — a `Func<T, string>` (or constant). This is the only required configuration.
-- **Row key resolver** — a `Func<T, string>`. Can be a natural key, descending-time, ascending-time, or any custom function.
-- **Tags** — properties promoted to native table columns so they can be filtered/sorted server-side.
-- **Computed tags** — derived values written as columns but not stored on the POCO.
-
-Each registered object type gets **its own Azure table** (one table per CLR type). The partition key provides the within-table grouping dimension.
-
-Minimal mapping — only partition key and row key are needed:
-
-```csharp
-opts.Entity<Actor>(e =>
-{
-    e.SetPartitionKey(a => a.Domain);       // required
-    e.SetRowKey(a => a.Username);           // natural key
-    // table name defaults to "actors"
-});
-```
-
-Full mapping with tags:
-
-```csharp
-opts.Entity<Order>(e =>
-{
-    e.SetPartitionKey(o => $"tenant:{o.TenantId}");
-    e.SetRowKey(o => o.OrderId);
-
-    e.AddTag(o => o.CustomerId);
-    e.AddTag(o => o.Total);
-    e.AddTag(o => o.CreatedAt);
-    e.AddComputedTag("Year", o => o.CreatedAt.Year);
-});
-```
-
-The row key strategy determines the storage semantics:
-
-| Strategy | RowKey | Behavior | Use case |
-|----------|--------|----------|----------|
-| `o => o.OrderId` (natural key) | `order-42` | **Upsert** — one row per object, latest state | Mutable objects (users, profiles) |
-| `RowKeyStrategy.DescendingTime(o => o.Published)` | `0250479199999_01HW...` | **Insert** — new row every write, newest first | Time-ordered records (activities, posts) |
-| `RowKeyStrategy.AscendingTime(o => o.Published)` | `0638792800000_01HW...` | **Insert** — new row every write, oldest first | Logs, audit trails |
-| Custom `Func<T,string>` | anything | Whatever you need | Composite keys, domain-specific ordering |
-
-`SaveObjectAsync` is always an **upsert** (insert-or-replace) at the Azure Table Storage level. For natural-key objects this overwrites the existing row. For time-keyed objects every write has a unique RowKey, so the upsert is effectively an insert.
-
-When stored, a row looks like:
-
-| Column         | Value                                                               |
-|----------------|---------------------------------------------------------------------|
-| PartitionKey   | `tenant:acme`                                                       |
-| RowKey         | `order-42` *(or time-based, depending on strategy)*                 |
-| Timestamp      | server-assigned                                                     |
-| ETag           | server-assigned                                                     |
-| `_json`        | `{"tenantId":"acme","orderId":"...","lines":[...], ...}`            |
-| CustomerId     | `cust-123`     *(tag)*                                              |
-| Total          | `429.50`       *(tag)*                                              |
-| CreatedAt      | `2026-04-09T...` *(tag)*                                            |
-| Year           | `2026`         *(computed tag)*                                     |
-
-The full POCO graph (including `Lines`) is preserved losslessly in `_json`. Tags exist purely as a write-side index for cheap server-side filtering; on read, the POCO is always rehydrated from `_json`.
-
-### ILottaDB facade
-
-LottaDB does **not** define its own `IEntityStore` abstraction. Storage is handled by [`Azure.EntityServices.Tables`](https://github.com/Aguafrommars/Azure.EntityServices) via `IEntityTableClient<T>`. For each registered object type, an `IEntityTableClient<T>` is created from the `EntityMapping<T>` and cached internally.
-
-What LottaDB *does* own is a thin **`ILottaDB`** facade whose job is to:
-
-1. Own the per-type `IEntityTableClient<T>` instances.
-2. **Fire the view projection engine after every write.**
-
-The API is split into two clear groups — **objects** (Azure Table Storage) and **views** (Lucene):
-
-```csharp
-public interface ILottaDB
-{
-    // === Objects (Azure Table Storage) ===
-
-    // Save: upsert row, run view builders, notify observers
-    Task<SaveResult> SaveObjectAsync<T>(T entity, CancellationToken ct = default);
-
-    // Read by key (point-read)
-    Task<T?> GetObjectAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default);
-
-    // Query table storage (async LINQ — tag predicates push down to OData)
-    IAsyncQueryable<T> QueryObjects<T>();
-
-    // Delete from table storage, then run view builders (which remove affected views)
-    Task<SaveResult> DeleteObjectAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default);
-
-    // === Views (Lucene) ===
-
-    // Query materialized views (async LINQ to Lucene)
-    IAsyncQueryable<TView> QueryView<TView>();
-
-    // Subscribe to view changes
-    IDisposable ObserveView<TView>(Func<ViewChange<TView>, Task> handler);
-
-    // Rebuild a view by replaying all relevant objects through builders
-    Task RebuildViews<TView>(CancellationToken ct = default);
-
-    // === Escape hatch ===
-
-    // Raw Azure.EntityServices client (bypasses projection engine)
-    IEntityTableClient<T> Table<T>();
-}
-```
-
-`SaveObjectAsync` returns a `SaveResult` containing the view changes that occurred, so synchronous callers can inspect what happened without subscribing to observers. `DeleteObjectAsync` also returns a `SaveResult` — deleting an object triggers view builders which remove affected views from Lucene. `ObserveView<TView>` registers a callback for decoupled consumers (UI, SignalR, etc.).
-
-`QueryObjects<T>()` and `QueryView<TView>()` both return `IAsyncQueryable<T>` (from `System.Linq.Async`). Async-only — everything in LottaDB is I/O-bound (network to Azure Table Storage, disk to Lucene), so there's no reason to offer sync materialization.
-
-```csharp
-// Async materialization
-var notes = await lottaDb.QueryObjects<Note>()
-    .Where(n => n.Domain == "example.com" && n.AuthorId == "alice")
-    .OrderByDescending(n => n.Published)
-    .Take(20)
-    .ToListAsync();
-
-// Async streaming
-await foreach (var note in lottaDb.QueryObjects<Note>()
-    .Where(n => n.Domain == "example.com"))
-{
-    Process(note);
-}
-
-// Views — same pattern
-var results = await lottaDb.QueryView<NoteView>()
-    .Where(v => v.Tags.Contains("csharp"))
-    .OrderByDescending(v => v.Published)
-    .Take(20)
-    .ToListAsync();
-```
-
-For objects, predicates against **tagged** properties are translated to server-side OData filters and pushed down to Azure Table Storage; predicates against **non-tagged** properties are evaluated client-side after JSON deserialization. For views, the LINQ provider is `Iciclecreek.Lucene.Net.Linq`.
-
-`IViewBuilder<TTrigger,TView>.BuildAsync` receives the `ILottaDB` facade so view builders can load related objects via `GetObjectAsync` — the same interface the application uses.
-
-**Local development and tests use [Azurite](https://github.com/Azure/Azurite)**. The test connection string is `UseDevelopmentStorage=true`; tests exercise the same code path as production.
-
-```csharp
-services.AddLottaDB(opts =>
-{
-    opts.UseAzureTables("UseDevelopmentStorage=true");   // Azurite for dev/test
-    // or: opts.UseAzureTables(productionConnectionString);
-});
-```
-
-### Materialized Views
-
-A **materialized view** is a denormalized POCO purpose-built for a query pattern. Views live only in Lucene and can be rebuilt at any time from table storage.
-
-```csharp
-public class OrderSummaryView
-{
-    public string OrderId { get; set; }
-    public string CustomerName { get; set; }
-    public string CustomerEmail { get; set; }
-    public decimal Total { get; set; }
-    public string[] ProductNames { get; set; }
-    public DateTimeOffset CreatedAt { get; set; }
-}
-```
-
-Views are produced by an `IViewBuilder<TTrigger, TView>`:
-
-```csharp
-public interface IViewBuilder<TTrigger, TView>
-{
-    /// <summary>
-    /// Called whenever a TTrigger object is saved or deleted. The builder may
-    /// read related objects via ILottaDB and return zero or more view documents
-    /// to upsert into (or delete from) the Lucene index.
-    /// </summary>
-    IAsyncEnumerable<ViewResult<TView>> BuildAsync(TTrigger entity, ILottaDB db, CancellationToken ct);
-}
-
-/// <summary>
-/// Result from a view builder — either an upsert or a delete.
-/// </summary>
-public record ViewResult<TView>
-{
-    public string Key { get; init; }
-    public TView? View { get; init; }        // null = delete this key from the index
-}
-```
-
-Example — an ActivityPub-style scenario with actors and notes:
-
-```csharp
-// Objects: Actor is upserted by natural key, Note is appended by time
 public class Actor
 {
     public string Domain       { get; set; }
@@ -277,7 +69,7 @@ public class Note
     public List<string> Tags { get; set; }
 }
 
-// Materialized view: denormalized note with author info baked in
+// A derived object — produced by a builder, but stored and indexed like any other object
 public class NoteView
 {
     public string NoteId          { get; set; }
@@ -288,19 +80,237 @@ public class NoteView
     public DateTimeOffset Published { get; set; }
     public string[] Tags          { get; set; }
 }
+```
 
-// View builder: when a Note is saved, load the author and produce a NoteView
-public class NoteViewBuilder : IViewBuilder<Note, NoteView>
+All three are objects. `Actor` and `Note` are written by application code. `NoteView` is produced by a builder when a `Note` or `Actor` is saved. All three are stored in Azure Table Storage and auto-indexed into Lucene.
+
+### Object Mapping
+
+`ObjectMapping<T>` is LottaDB's per-type configuration, a thin wrapper over `Azure.EntityServices.Tables`'s `EntityTableClientConfig<T>`. It defines:
+
+- **Table name** — defaults to the **CLR type name**, lowercased (e.g., `Note` → `notes`). Override with `SetTableName()` if needed.
+- **Partition key resolver** — a `Func<T, string>` (or constant). This is the only required configuration.
+- **Row key resolver** — a `Func<T, string>`. Can be a natural key, descending-time, ascending-time, or any custom function.
+- **Tags** — properties promoted to native table columns so they can be filtered/sorted server-side.
+- **Computed tags** — derived values written as columns but not stored on the POCO.
+
+Each registered object type gets **its own Azure table** (one table per CLR type). The partition key provides the within-table grouping dimension.
+
+Minimal mapping — only partition key and row key are needed:
+
+```csharp
+opts.Map<Actor>(m =>
 {
-    public async IAsyncEnumerable<ViewResult<NoteView>> BuildAsync(
-        Note note, ILottaDB db, [EnumeratorCancellation] CancellationToken ct)
-    {
-        var author = await db.GetObjectAsync<Actor>(note.Domain, note.AuthorId, ct);
+    m.SetPartitionKey(a => a.Domain);       // required
+    m.SetRowKey(a => a.Username);           // natural key
+    // table name defaults to "actors"
+});
+```
 
-        yield return new ViewResult<NoteView>
+Full mapping with tags:
+
+```csharp
+opts.Map<Note>(m =>
+{
+    m.SetPartitionKey(n => n.Domain);
+    m.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published));
+    m.AddTag(n => n.AuthorId);
+    m.AddTag(n => n.Published);
+    m.AddComputedTag("Year", n => n.Published.Year);
+});
+```
+
+The row key strategy determines the storage semantics:
+
+| Strategy | RowKey | Behavior | Use case |
+|----------|--------|----------|----------|
+| `o => o.OrderId` (natural key) | `order-42` | **Upsert** — one row per object, latest state | Mutable objects (users, profiles) |
+| `RowKeyStrategy.DescendingTime(o => o.Published)` | `0250479199999_01HW...` | **Insert** — new row every write, newest first | Time-ordered records (activities, posts) |
+| `RowKeyStrategy.AscendingTime(o => o.Published)` | `0638792800000_01HW...` | **Insert** — new row every write, oldest first | Logs, audit trails |
+| Custom `Func<T,string>` | anything | Whatever you need | Composite keys, domain-specific ordering |
+
+`SaveAsync` is always an **upsert** (insert-or-replace) at the Azure Table Storage level. For natural-key objects this overwrites the existing row. For time-keyed objects every write has a unique RowKey, so the upsert is effectively an insert.
+
+When stored, a row looks like:
+
+| Column         | Value                                                               |
+|----------------|---------------------------------------------------------------------|
+| PartitionKey   | `example.com`                                                       |
+| RowKey         | `0250479199999_01HW...` *(or natural key)*                          |
+| Timestamp      | server-assigned                                                     |
+| ETag           | server-assigned                                                     |
+| `_json`        | `{"noteId":"...","authorId":"...","content":"...", ...}`            |
+| AuthorId       | `alice`        *(tag)*                                              |
+| Published      | `2026-04-10T...` *(tag)*                                           |
+| Year           | `2026`         *(computed tag)*                                     |
+
+The full POCO graph is preserved losslessly in `_json`. Tags exist purely as a write-side index for cheap server-side filtering; on read, the POCO is always rehydrated from `_json`.
+
+**Every object is automatically indexed into Lucene.** No opt-in needed. `SearchAsync<Note>()` works out of the box.
+
+### ILottaDB facade
+
+Storage is handled by [`Azure.EntityServices.Tables`](https://github.com/Aguafrommars/Azure.EntityServices) via `IEntityTableClient<T>`. For each registered object type, an `IEntityTableClient<T>` is created from the `ObjectMapping<T>` and cached internally.
+
+What LottaDB owns is a thin **`ILottaDB`** facade whose job is to:
+
+1. Own the per-type `IEntityTableClient<T>` instances and Lucene indexes.
+2. **Auto-index every object into Lucene on save.**
+3. **Run builders after every write**, which may produce additional objects (stored and indexed the same way).
+4. **Detect cycles** in builder chains to prevent infinite loops.
+
+```csharp
+public interface ILottaDB
+{
+    // === Write ===
+
+    // Save: upsert to table storage, auto-index into Lucene, run builders
+    Task<ObjectResult> SaveAsync<T>(T entity, CancellationToken ct = default);
+
+    // Delete: remove from table storage and Lucene, run builders
+    Task<ObjectResult> DeleteAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default);
+
+    // === Read (table storage) ===
+
+    // Point-read by key
+    Task<T?> GetAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default);
+
+    // Async LINQ against table storage (tag predicates push down to OData)
+    IAsyncQueryable<T> QueryAsync<T>();
+
+    // === Read (Lucene) ===
+
+    // Async LINQ against Lucene (full-text search, rich queries)
+    IAsyncQueryable<T> SearchAsync<T>();
+
+    // === Observe ===
+
+    // Subscribe to changes for any object type (user-written or builder-produced)
+    IDisposable Observe<T>(Func<ObjectChange<T>, Task> handler);
+
+    // === Maintain ===
+
+    // Rebuild the Lucene index for a type from table storage
+    Task RebuildIndex<T>(CancellationToken ct = default);
+
+    // === Escape hatch ===
+
+    // Raw Azure.EntityServices client (bypasses builders and indexing)
+    IEntityTableClient<T> Table<T>();
+}
+```
+
+`SaveAsync` and `DeleteAsync` return an `ObjectResult` containing all the objects that were created, updated, or deleted — both the original object and any derived objects produced by builders.
+
+`QueryAsync<T>()` and `SearchAsync<T>()` both return `IAsyncQueryable<T>` (from `System.Linq.Async`). Async-only — everything in LottaDB is I/O-bound.
+
+```csharp
+// Save an object — triggers builders, auto-indexes into Lucene
+var result = await lottaDb.SaveAsync(note);
+
+// Point-read from table storage
+var actor = await lottaDb.GetAsync<Actor>("example.com", "alice");
+
+// Query table storage (tag-filtered)
+var notes = await lottaDb.QueryAsync<Note>()
+    .Where(n => n.Domain == "example.com" && n.AuthorId == "alice")
+    .OrderByDescending(n => n.Published)
+    .Take(20)
+    .ToListAsync();
+
+// Search Lucene (rich queries, full-text)
+var results = await lottaDb.SearchAsync<NoteView>()
+    .Where(v => v.Tags.Contains("csharp") && v.Published > cutoff)
+    .OrderByDescending(v => v.Published)
+    .Take(20)
+    .ToListAsync();
+
+// Stream from Lucene
+await foreach (var view in lottaDb.SearchAsync<NoteView>()
+    .Where(v => v.AuthorUsername == "alice"))
+{
+    Process(view);
+}
+
+// Delete — triggers builders to clean up derived objects
+var deleteResult = await lottaDb.DeleteAsync<Note>("example.com", noteRowKey);
+
+// Observe changes to any type
+var subscription = lottaDb.Observe<NoteView>(async change =>
+{
+    await hub.Clients.All.SendAsync("noteChanged", change);
+});
+```
+
+For `QueryAsync<T>()`, predicates against **tagged** properties are translated to server-side OData filters and pushed down to Azure Table Storage; predicates against **non-tagged** properties are evaluated client-side after JSON deserialization. For `SearchAsync<T>()`, the LINQ provider is `Iciclecreek.Lucene.Net.Linq`.
+
+**Local development and tests use [Azurite](https://github.com/Azure/Azurite)**. The test connection string is `UseDevelopmentStorage=true`; tests exercise the same code path as production.
+
+```csharp
+services.AddLottaDB(opts =>
+{
+    opts.UseAzureTables("UseDevelopmentStorage=true");   // Azurite for dev/test
+    // or: opts.UseAzureTables(productionConnectionString);
+});
+```
+
+### Builders
+
+A **builder** is triggered when an object of a specific type is saved or deleted. It receives the object, the operation, and the `ILottaDB` facade. It produces zero or more derived objects that are saved back through the same pipeline — stored in table storage, auto-indexed into Lucene, and potentially triggering further builders.
+
+```csharp
+public enum TriggerKind { Saved, Deleted }
+
+public interface IBuilder<TTrigger, TDerived>
+{
+    /// <summary>
+    /// Called whenever a TTrigger object is saved or deleted. Returns zero or
+    /// more derived objects to save (or keys to delete) via the same pipeline.
+    /// </summary>
+    IAsyncEnumerable<BuildResult<TDerived>> BuildAsync(
+        TTrigger entity,
+        TriggerKind trigger,
+        ILottaDB db,
+        CancellationToken ct);
+}
+
+/// <summary>
+/// Result from a builder — either a save or a delete of a derived object.
+/// </summary>
+public record BuildResult<T>
+{
+    public T? Object { get; init; }              // non-null = save this object; null = delete by Key
+    public string? Key { get; init; }            // used for delete (partition key + row key, or entity key)
+}
+```
+
+#### Smart defaults
+
+The engine applies sensible defaults so most builders only need to handle the happy path:
+
+| Scenario | Default behavior |
+|----------|-----------------|
+| **`Deleted` trigger, builder yields zero results** | Engine **auto-deletes** derived objects by the trigger object's entity key. You only handle delete explicitly if you need custom logic. |
+| **`Saved` trigger, builder yields zero results** | Engine does **nothing**. This lets builders conditionally skip (e.g., "only build views for published notes"). |
+
+#### Example — builder that produces a denormalized NoteView
+
+```csharp
+public class NoteViewBuilder : IBuilder<Note, NoteView>
+{
+    public async IAsyncEnumerable<BuildResult<NoteView>> BuildAsync(
+        Note note, TriggerKind trigger, ILottaDB db,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // On delete, yield nothing — engine auto-deletes by entity key
+        if (trigger == TriggerKind.Deleted)
+            yield break;
+
+        var author = await db.GetAsync<Actor>(note.Domain, note.AuthorId, ct);
+
+        yield return new BuildResult<NoteView>
         {
-            Key = note.NoteId,
-            View = new NoteView
+            Object = new NoteView
             {
                 NoteId         = note.NoteId,
                 AuthorUsername = author?.Username ?? "",
@@ -315,67 +325,120 @@ public class NoteViewBuilder : IViewBuilder<Note, NoteView>
 }
 ```
 
-A trigger may fan out to **multiple** view builders, and one builder may emit **multiple** view results (e.g., an `Actor` change rewrites every `NoteView` for that actor's posts).
+#### Cascading builders
 
-### View Projection Engine
-
-The `ViewProjectionEngine` is registered as an `IEntityObserver<T>` on each object type's `IEntityTableClient<T>`. When `Azure.EntityServices` writes or deletes a row, the observer fires and the engine:
-
-1. Looks up all `IViewBuilder<TEntity, *>` registrations for the written object's CLR type.
-2. Invokes each builder, which yields `ViewResult<TView>` items.
-3. For each result: if `View` is non-null → **upsert** into Lucene; if `View` is null → **delete** from Lucene by key.
-4. Notifies all registered view observers with the full typed view.
-5. Collects all `ViewChange` items into the `SaveResult` returned to the caller.
-
-Projection runs **inline by default** so reads after writes are consistent. An optional `IProjectionDispatcher` allows queueing to a background channel for high-throughput scenarios.
-
-### Observers & SaveResult
-
-LottaDB provides two ways to access the view changes produced by a write:
-
-#### 1. SaveResult (synchronous return)
-
-`SaveObjectAsync` and `DeleteObjectAsync` return a `SaveResult` containing the view changes that were produced:
+When a related object changes, builders can query Lucene to find affected derived objects and rebuild them. Since derived objects are just objects, they can trigger further builders — enabling **view-on-view cascading**.
 
 ```csharp
-public record SaveResult
+// When an Actor changes, rebuild every NoteView for that actor
+public class ActorChangedToNoteViewBuilder : IBuilder<Actor, NoteView>
 {
-    public IReadOnlyList<ViewChange> ViewChanges { get; init; }
+    public async IAsyncEnumerable<BuildResult<NoteView>> BuildAsync(
+        Actor actor, TriggerKind trigger, ILottaDB db,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Find all NoteViews for this actor via Lucene
+        var affected = await db.SearchAsync<NoteView>()
+            .Where(v => v.AuthorUsername == actor.Username)
+            .ToListAsync(ct);
+
+        if (trigger == TriggerKind.Deleted)
+        {
+            foreach (var view in affected)
+                yield return new BuildResult<NoteView> { Key = view.NoteId, Object = null };
+            yield break;
+        }
+
+        // Rebuild each affected NoteView with updated actor info
+        foreach (var view in affected)
+        {
+            var note = await db.GetAsync<Note>(view.NoteId, view.NoteId, ct);
+            if (note == null) continue;
+
+            yield return new BuildResult<NoteView>
+            {
+                Object = new NoteView
+                {
+                    NoteId         = note.NoteId,
+                    AuthorUsername = actor.Username,
+                    AuthorDisplay  = actor.DisplayName,
+                    AvatarUrl      = actor.AvatarUrl,
+                    Content        = note.Content,
+                    Published      = note.Published,
+                    Tags           = note.Tags?.ToArray() ?? Array.Empty<string>(),
+                }
+            };
+        }
+    }
+}
+```
+
+The pattern: **search Lucene to find affected objects, re-read source data from table storage, rebuild.**
+
+Since `NoteView` is an object too, saving it can trigger *its own* builders — for example, a `FeedBuilder` that produces `FeedEntry` objects from `NoteView` changes. The engine detects cycles (same object key processed twice in one chain) and stops.
+
+### Builder Engine
+
+The `BuilderEngine` is registered as an `IEntityObserver<T>` on each object type's `IEntityTableClient<T>`. When a row is written or deleted, the observer fires:
+
+1. **On delete**: loads the object from table storage *before* the delete is applied, so the builder receives the full object.
+2. Looks up all `IBuilder<T, *>` registrations for the object's CLR type.
+3. Invokes each builder with the object and `TriggerKind` (`Saved` or `Deleted`).
+4. For each `BuildResult<T>`: if `Object` is non-null → **save** via `SaveAsync` (which triggers that type's builders in turn); if `Object` is null → **delete** by key.
+5. If the trigger is `Deleted` and a builder yields zero results → **auto-delete** derived objects by the trigger object's entity key.
+6. **Cycle detection**: tracks object keys processed in the current chain. If the same key appears again, the chain stops for that branch.
+7. Notifies all registered observers.
+8. Collects all changes into the `ObjectResult` returned to the caller.
+
+Projection runs **inline by default** so reads after writes are consistent. An optional dispatcher allows queueing to a background channel for high-throughput scenarios.
+
+### Observers & ObjectResult
+
+LottaDB provides two ways to access the changes produced by a write:
+
+#### 1. ObjectResult (synchronous return)
+
+`SaveAsync` and `DeleteAsync` return an `ObjectResult` containing everything that changed:
+
+```csharp
+public record ObjectResult
+{
+    public IReadOnlyList<ObjectChange> Changes { get; init; }
 }
 
-public record ViewChange
+public record ObjectChange
 {
-    public string ViewTypeName { get; init; }    // e.g., "NoteView"
-    public string Key { get; init; }             // view key
-    public ViewChangeKind Kind { get; init; }    // Upserted or Deleted
-    public object? View { get; init; }           // the full typed view (or null if deleted)
+    public string TypeName { get; init; }        // e.g., "NoteView"
+    public string Key { get; init; }             // entity key
+    public ChangeKind Kind { get; init; }        // Saved or Deleted
+    public object? Object { get; init; }         // the full typed object (or null if deleted)
 }
 
-public enum ViewChangeKind { Upserted, Deleted }
+public enum ChangeKind { Saved, Deleted }
 ```
 
 Usage:
 
 ```csharp
-var result = await lottaDb.SaveObjectAsync(note);
+var result = await lottaDb.SaveAsync(note);
 
-foreach (var change in result.ViewChanges)
+foreach (var change in result.Changes)
 {
-    if (change.View is NoteView noteView)
-        Console.WriteLine($"View {change.Kind}: {noteView.NoteId} by {noteView.AuthorDisplay}");
+    if (change.Object is NoteView noteView)
+        Console.WriteLine($"{change.Kind}: {noteView.NoteId} by {noteView.AuthorDisplay}");
 }
 ```
 
-#### 2. ObserveView&lt;TView&gt; (decoupled, async callback)
+#### 2. Observe&lt;T&gt; (decoupled, async callback)
 
-For consumers that want to react to view changes without being the caller of `SaveObjectAsync` — UI updates, SignalR push, cache invalidation, etc.:
+For consumers that want to react to changes without being the caller of `SaveAsync`:
 
 ```csharp
-public record ViewChange<TView>
+public record ObjectChange<T>
 {
     public string Key { get; init; }
-    public TView? View { get; init; }            // full typed view; null = deleted
-    public ViewChangeKind Kind { get; init; }
+    public T? Object { get; init; }              // full typed object; null = deleted
+    public ChangeKind Kind { get; init; }
 }
 ```
 
@@ -383,7 +446,7 @@ Usage:
 
 ```csharp
 // Subscribe — returns IDisposable for unsubscription
-var subscription = lottaDb.ObserveView<NoteView>(async change =>
+var subscription = lottaDb.Observe<NoteView>(async change =>
 {
     await hub.Clients.Group(change.Key).SendAsync("noteChanged", change);
 });
@@ -392,62 +455,71 @@ var subscription = lottaDb.ObserveView<NoteView>(async change =>
 subscription.Dispose();
 ```
 
-Multiple observers can be registered per view type. Observers are invoked after the Lucene index has been updated, so `QueryView<TView>()` is consistent by the time the observer fires.
+Multiple observers can be registered per type. Observers are invoked after the object has been saved to table storage and indexed into Lucene.
 
-#### How the two layers connect
+#### How it all connects
+
+**Save flow:**
 
 ```mermaid
 sequenceDiagram
     participant App
     participant Lotta as ILottaDB
     participant ATS as Azure Table Storage
-    participant Eng as ViewProjectionEngine
-    participant Idx as ILuceneViewIndex&lt;TView&gt;
-    participant Obs as IViewObserver&lt;TView&gt;
+    participant Lucene as Lucene Index
+    participant Eng as BuilderEngine
+    participant Obs as Observe&lt;T&gt;
 
-    App->>Lotta: SaveObjectAsync(note)
-    Lotta->>ATS: write row (JSON + tags)
-    ATS-->>Lotta: ok
-
-    note over Lotta,Eng: Azure.EntityServices IEntityObserver fires
-
-    Lotta->>Eng: project(note)
-    Eng->>Lotta: GetObjectAsync(actor)
-    Lotta->>ATS: point-read
-    ATS-->>Lotta: actor
+    App->>Lotta: SaveAsync(note)
+    Lotta->>ATS: upsert row (JSON + tags)
+    Lotta->>Lucene: index note
+    Lotta->>Eng: run builders(note, Saved)
+    Eng->>Lotta: GetAsync(actor)
     Lotta-->>Eng: actor
-    Eng->>Idx: Upsert or Delete (per ViewResult)
-    Idx-->>Eng: ok
-    Eng->>Obs: ViewChange&lt;NoteView&gt; (full typed view)
-    Obs-->>Eng: ok
-    Eng-->>Lotta: list of ViewChanges
-    Lotta-->>App: SaveResult (with ViewChanges)
+    Eng->>Lotta: SaveAsync(noteView)
+    Lotta->>ATS: upsert NoteView row
+    Lotta->>Lucene: index NoteView
+    Lotta->>Obs: ObjectChange&lt;NoteView&gt;
+    Eng-->>Lotta: all changes collected
+    Lotta-->>App: ObjectResult
 ```
 
-The projection engine is itself registered as an `IEntityObserver<T>` on the `Azure.EntityServices` `IEntityTableClient<T>`. When a row is written or deleted, the SDK calls the observer, which runs view builders, updates Lucene, notifies view observers, and collects the changes into the `SaveResult` returned to the caller.
+**Delete flow:**
 
-### Lucene View Index
+```mermaid
+sequenceDiagram
+    participant App
+    participant Lotta as ILottaDB
+    participant ATS as Azure Table Storage
+    participant Lucene as Lucene Index
+    participant Eng as BuilderEngine
+    participant Obs as Observe&lt;T&gt;
 
-`ILuceneViewIndex<TView>` wraps a Lucene.Net `IndexWriter` / `IndexSearcher` pair for a single view type:
-
-```csharp
-public interface ILuceneViewIndex<TView>
-{
-    void Upsert(string key, TView view);
-    void Delete(string key);
-    IQueryable<TView> AsQueryable();   // Iciclecreek.Lucene.Net.Linq
-    void Commit();
-}
+    App->>Lotta: DeleteAsync(pk, rk)
+    Lotta->>ATS: load note (before delete)
+    ATS-->>Lotta: note
+    Lotta->>ATS: delete row
+    Lotta->>Lucene: remove from index
+    Lotta->>Eng: run builders(note, Deleted)
+    Eng->>Lotta: DeleteAsync(noteView)
+    Lotta->>ATS: delete NoteView row
+    Lotta->>Lucene: remove NoteView from index
+    Lotta->>Obs: ObjectChange&lt;NoteView&gt; (Deleted)
+    Eng-->>Lotta: all changes collected
+    Lotta-->>App: ObjectResult
 ```
 
-- One Lucene index (one `Directory`) per view type.
-- Schema is inferred from the view POCO via `Iciclecreek.Lucene.Net.Linq` attributes (`[Field]`, `[NumericField]`, etc.) or convention.
+### Lucene Indexing
+
+Every registered object type is automatically indexed into Lucene. One Lucene index (one `Directory`) per type.
+
+- Schema is inferred from the POCO via `Iciclecreek.Lucene.Net.Linq` attributes (`[Field]`, `[NumericField]`, etc.) or convention.
 - The `Directory` is **pluggable** via an `IDirectoryProvider`:
 
 ```csharp
 public interface IDirectoryProvider
 {
-    Lucene.Net.Store.Directory GetDirectory(string viewName);
+    Lucene.Net.Store.Directory GetDirectory(string typeName);
 }
 ```
 
@@ -457,110 +529,77 @@ Built-in providers:
 - `RAMDirectoryProvider` — in-memory (default for tests).
 - Room for `AzureBlobDirectoryProvider` or any community Directory implementation.
 
-### Query API
-
-**Point-read** an object from table storage:
-
-```csharp
-var actor = await lottaDb.GetObjectAsync<Actor>("example.com", "alice");
-```
-
-**Query objects** (LINQ — tag predicates push down to server-side OData):
-
-```csharp
-// Async
-var notes = await lottaDb.QueryObjects<Note>()
-    .Where(n => n.Domain == "example.com" && n.AuthorId == "alice")
-    .OrderByDescending(n => n.Published)
-    .Take(20)
-    .ToListAsync();
-
-// Streaming
-await foreach (var note in lottaDb.QueryObjects<Note>()
-    .Where(n => n.Domain == "example.com")
-    .OrderByDescending(n => n.Published))
-{
-    Console.WriteLine($"{note.Published}: {note.Content}");
-}
-```
-
-**Delete** an object:
-
-```csharp
-var result = await lottaDb.DeleteObjectAsync<Note>("example.com", noteRowKey);
-// result.ViewChanges shows which views were removed
-```
-
-**Query a materialized view** (LINQ to Lucene):
-
-```csharp
-var results = await lottaDb.QueryView<NoteView>()
-    .Where(v => v.Tags.Contains("csharp") && v.Published > cutoff)
-    .OrderByDescending(v => v.Published)
-    .Take(20)
-    .ToListAsync();
-```
-
 ## Registration & Composition
 
 ```csharp
 services.AddLottaDB(opts =>
 {
     opts.UseAzureTables(connectionString);
-    opts.UseLuceneDirectory(new FSDirectoryProvider("./lucene-views"));
+    opts.UseLuceneDirectory(new FSDirectoryProvider("./lucene-indexes"));
 
     // Mutable object — natural key, one row per actor
-    // Table name defaults to "actors"
-    opts.Entity<Actor>(e =>
+    opts.Map<Actor>(m =>
     {
-        e.SetPartitionKey(a => a.Domain);
-        e.SetRowKey(a => a.Username);
-        e.AddTag(a => a.DisplayName);
+        m.SetPartitionKey(a => a.Domain);
+        m.SetRowKey(a => a.Username);
+        m.AddTag(a => a.DisplayName);
     });
 
     // Time-ordered object — descending time, one row per write
-    // Table name defaults to "notes"
-    opts.Entity<Note>(e =>
+    opts.Map<Note>(m =>
     {
-        e.SetPartitionKey(n => n.Domain);
-        e.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published));
-        e.AddTag(n => n.AuthorId);
-        e.AddTag(n => n.Published);
+        m.SetPartitionKey(n => n.Domain);
+        m.SetRowKey(RowKeyStrategy.DescendingTime(n => n.Published));
+        m.AddTag(n => n.AuthorId);
+        m.AddTag(n => n.Published);
     });
 
-    opts.AddView<Note,  NoteView, NoteViewBuilder>();
-    opts.AddView<Actor, NoteView, ActorChangedToNoteViewBuilder>();
-
-    // Optional: register view observers at composition time
-    opts.AddViewObserver<NoteView>(async change =>
+    // Derived object — natural key, produced by builders
+    opts.Map<NoteView>(m =>
     {
-        // Push to SignalR, update cache, etc.
+        m.SetPartitionKey(v => v.NoteId);
+        m.SetRowKey(v => v.NoteId);
+    });
+
+    // Builders: Note → NoteView, Actor → NoteView
+    opts.AddBuilder<Note,  NoteView, NoteViewBuilder>();
+    opts.AddBuilder<Actor, NoteView, ActorChangedToNoteViewBuilder>();
+
+    // Optional: observe NoteView changes at composition time
+    opts.Observe<NoteView>(async change =>
+    {
         await hub.Clients.All.SendAsync("noteChanged", change);
     });
 });
 ```
 
-Note how `Actor` uses a natural key (upsert — one row per actor) while `Note` uses descending time (append — one row per write). Both trigger view builders the same way. Neither needs `SetTableName()` — the CLR type name is used by convention. Observers can also be registered at runtime via `lottaDb.ObserveView<TView>(...)`.
+Note:
+- `Actor` uses a natural key (upsert — one row per actor), `Note` uses descending time (append — one row per write). Both work the same way.
+- `NoteView` is registered as an object type like any other — it needs its own mapping because it's stored in table storage too.
+- No `SearchAsync<Note>()` opt-in needed — all registered types are auto-indexed.
+- Observers can also be registered at runtime via `lottaDb.Observe<T>(...)`.
 
 ## Rebuild & Backfill
 
-Because views are projections from table storage, LottaDB exposes a `RebuildViews<TView>()` operation that:
+LottaDB exposes `RebuildIndex<T>()` to rebuild the Lucene index for any type:
 
-1. Drops or creates the Lucene index for `TView`.
-2. Streams every relevant object from table storage via `QueryObjects<T>()`.
-3. Re-runs each registered builder for each object.
+1. Drops or creates the Lucene index for `T`.
+2. Streams every object of that type from table storage via `QueryAsync<T>()`.
+3. Re-indexes each object into Lucene.
 4. Commits in batches.
 
-This is the recovery mechanism. If Lucene data is lost, corrupted, or a view's shape changes, rebuild it. Table storage is the system of record; the view is disposable.
+This is the recovery mechanism. If Lucene data is lost, corrupted, or the indexing schema changes, rebuild it. Table storage is the system of record; Lucene is disposable.
 
-Tag columns can be regenerated by replaying every row's `_json` through the current `EntityMapping<T>` — useful when adding a new tag to an existing object type.
+Note: `RebuildIndex<T>()` re-indexes objects from table storage into Lucene. It does **not** re-run builders. To re-derive objects (e.g., after changing a builder's logic), delete the derived objects and re-save the source objects, or provide a migration script.
+
+Tag columns can be regenerated by replaying every row's `_json` through the current `ObjectMapping<T>` — useful when adding a new tag to an existing object type.
 
 ## Project Layout (proposed)
 
 ```
 /src
-  LottaDB                          // EntityMapping<T>, RowKeyStrategy, ViewProjectionEngine, ILottaDB
-  LottaDB.Lucene                   // ILuceneViewIndex, IDirectoryProvider
+  LottaDB                          // ObjectMapping<T>, RowKeyStrategy, BuilderEngine, ILottaDB
+  LottaDB.Lucene                   // Lucene indexing, IDirectoryProvider, SearchAsync provider
 /test
   LottaDB.Tests                    // run against Azurite
 ```
@@ -569,30 +608,33 @@ Tag columns can be regenerated by replaying every row's `_json` through the curr
 
 | Decision | Rationale |
 |---|---|
-| **Clear Object/View split in the API** | `*Object*` methods = table storage (raw POCOs). `*View*` methods = Lucene (materialized projections). No ambiguity about which side you're talking to. |
-| **Unopinionated about data semantics** | Natural keys → upsert; time keys → append. The library doesn't care; the row key strategy determines behavior. |
-| **One table per CLR type, name inferred** | Table name defaults to lowercased type name; no boilerplate. Type segregation at the table level, partition key for within-type grouping. |
-| **`SaveObjectAsync` is always upsert** | No insert/upsert distinction. Natural keys → overwrites; time keys → unique RowKey makes upsert equivalent to insert. One operation, no ambiguity. |
-| **`DeleteObjectAsync` is a real delete** | Removes the row from table storage and triggers view builders to clean up affected views. |
+| **Everything is an object** | No entity/view distinction. Derived objects are stored and indexed like any other object. Simplifies the mental model and enables cascading. |
+| **Auto-index into Lucene** | Every object is searchable via `SearchAsync<T>()` with zero configuration. |
+| **Builders produce objects, not "view documents"** | Builder output goes through the same save pipeline — stored in table storage, indexed in Lucene, triggers further builders. Cascading is free. |
+| **Cycle detection in builder chains** | Prevents infinite loops when builders cascade (A→B→A). |
+| **Smart defaults (auto-delete, skip-on-empty)** | Most builders only handle the happy path. Delete cleanup works out of the box. |
+| **`SaveAsync` / `SearchAsync` / `QueryAsync` / `GetAsync`** | Clean verb split: Save writes, Get point-reads, Query scans table storage, Search queries Lucene. |
+| **`IAsyncQueryable<T>` — async-only LINQ** | Everything is I/O-bound; no reason to offer sync. |
+| **Unopinionated about data semantics** | Natural keys → upsert; time keys → append. The library doesn't care. |
+| **One table per CLR type, name inferred** | Table name defaults to lowercased type name; no boilerplate. |
+| **`SaveAsync` is always upsert** | No insert/upsert distinction. One operation, no ambiguity. |
 | Objects are plain POCOs | Domain models stay clean; PK/RK/tags are infrastructure, configured via mapping. |
 | Mapping modeled on `Azure.EntityServices.Tables` | Reuse a battle-tested mapping/tags model. |
 | Azure Table Storage (Azurite for dev/test) | One backend, one code path. |
-| No bespoke `IEntityStore` — reuse `IEntityTableClient<T>` | Thin `ILottaDB` facade hosts the post-write projection hook. |
-| **`IAsyncQueryable<T>` — async-only LINQ** | Everything is I/O-bound; no reason to offer sync. Clean, modern, no legacy `IQueryable` baggage. |
 | Tags = property promotion | Server-side filterable hot fields without sacrificing the JSON document. |
 | Full POCO as JSON in `_json` column | The POCO is the source of truth; reads always rehydrate from JSON. |
-| `ViewResult<TView>` with nullable `View` | Builders signal upsert *or* delete from the same method. |
-| **`SaveResult` + `ObserveView<TView>` — both access patterns** | Synchronous callers get view changes in the return value; decoupled consumers subscribe to typed observer callbacks. Complementary, not redundant. |
-| **Projection engine is an `IEntityObserver<T>`** | Hooks into `Azure.EntityServices`' built-in observer mechanism — no custom post-write plumbing. |
-| Views are write-through, inline by default | Read-after-write consistency for the writer. |
+| **`ObjectResult` + `Observe<T>` — both access patterns** | Synchronous callers get all changes in the return value; decoupled consumers subscribe to typed observer callbacks. |
+| **Builder engine is an `IEntityObserver<T>`** | Hooks into `Azure.EntityServices`' built-in observer mechanism. |
+| Inline by default | Read-after-write consistency for the writer. |
 | Lucene `Directory` is pluggable | Same indexing code works on disk, in RAM, or in blob storage. |
 | Builders are explicit and typed | Projections are discoverable, testable, and rebuildable. |
 | LINQ via Iciclecreek.Lucene.Net.Linq | Strongly-typed queries returning POCOs. |
-| One Lucene index per view type | Clean schema, isolated rebuilds, simpler concurrency. |
+| One Lucene index per type | Clean schema, isolated rebuilds, simpler concurrency. |
 
 ## Out of Scope (initially)
 
 - Change logs / event sourcing (layer this on top if you need it).
 - Cross-view transactions.
-- Distributed projection coordination across multiple writer processes.
+- Distributed builder coordination across multiple writer processes.
 - Full-text analyzer customization beyond what `Iciclecreek.Lucene.Net.Linq` exposes by default.
+- Builder re-derivation (re-running builders to regenerate derived objects after logic changes).
