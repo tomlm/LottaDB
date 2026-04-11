@@ -19,28 +19,19 @@ This is a genuinely new idea in this space. A developer looks at that LINQ expre
 - **The cost story.** Table Storage is pennies. Cosmos is dollars. For ActivityPub workloads (high read, moderate write, lots of denormalization) this is orders of magnitude cheaper.
 - **Concurrency model is honest.** Save clobbers, Change retries. No pretending you have transactions when you don't.
 - **Everything-is-an-object** eliminates a whole category of "where does this live?" questions.
+- **CreateView execution is just LINQ.** No custom query provider needed. At execution time, `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. The only custom work is registration-time expression tree walking to extract join keys for incremental maintenance — bounded, focused work.
 
 ## What concerns me
 
-### 1. CreateView expression tree parsing — simpler than it looked
-
-~~This was originally the biggest risk.~~ After deeper analysis, the scope is much smaller than feared:
-
-- **No custom `IQueryProvider` needed.** At execution time, the LINQ expression runs as-is — `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. LottaDB doesn't implement join semantics.
-- **The only custom work is registration-time expression tree walking** to extract the `on` clause join keys (for incremental maintenance — knowing which views to rebuild when a source changes). This is a focused visitor, not a general query translator.
-- **Edge cases exist** (composite keys, multiple joins, nullable navigation) but are manageable since we're walking a constrained subset of LINQ, not translating it.
-
-**Revised recommendation:** CreateView can ship in v1 alongside explicit builders. The expression tree walking for join key extraction is bounded work — not the open-ended query translation problem EF Core faces.
-
-### 2. Inline write amplification at scale
+### 1. Inline write amplification at scale
 
 An Actor with 10,000 NoteViews gets updated. That's 10,000 table writes + 10,000 Lucene updates, inline, before `SaveAsync` returns. That could be seconds. The background dispatcher is mentioned but hand-waved. For the ActivityPub use case, a popular account updating their avatar could stall.
 
-### 3. Single-writer Lucene
+### 2. Single-writer Lucene
 
 Lucene indexes are single-writer. Two app instances writing to the same `FSDirectory` = corruption. This is fine for a single-server app but blocks horizontal scaling. The doc mentions it in out-of-scope but it's a real deployment constraint that needs an answer before production.
 
-### 4. No transactions across objects
+### 3. No transactions across objects
 
 Save a Note, builder saves a NoteView — two separate table operations. Crash between them = Note exists, NoteView doesn't. The error handling model (eventually consistent, retry via sink) is the right answer, but users coming from SQL will feel the gap.
 
