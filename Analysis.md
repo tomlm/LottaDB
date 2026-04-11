@@ -1,69 +1,75 @@
-# LottaDB Competitive Analysis
+# LottaDB Analysis
 
-## What's genuinely novel
+## What makes this different
 
-**`CreateView<T>(db => from...join...select)` is the standout.** Comparing to Marten, RavenDB, CosmosDB + Change Feed, EF Core, Event Store — none of them have declarative LINQ-based materialized view maintenance that extracts join keys and incrementally maintains itself.
+**`CreateView<T>(db => from...join...select)`** — declarative materialized views as LINQ joins, incrementally maintained. No other library in this space does this:
 
-- Marten has projections, but they're imperative C# classes
-- RavenDB has map-reduce indexes, but they're a custom DSL
-- CosmosDB requires manual Change Feed → Azure Function plumbing
-- SQL Server has indexed views, but they're SQL and don't cascade
-- EF Core doesn't even try
+- Marten: imperative C# projection classes
+- RavenDB: custom map-reduce DSL
+- CosmosDB: manual Change Feed → Azure Function wiring
+- SQL Server: indexed views in SQL, don't cascade
+- EF Core: no materialized view concept
 
-This is a genuinely new idea in this space. A developer looks at that LINQ expression and immediately understands what the view is. And they didn't have to write a builder class, wire up triggers, or think about what happens when Actor changes.
+A developer reads the LINQ expression and immediately understands the view. No builder classes, no trigger wiring, no "what happens when Actor changes" — LottaDB infers it from the join keys.
 
-## What's strong
+The execution model is clean: `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. The only custom work is walking the expression tree at registration time to extract join keys. This is bounded work, not an open-ended query translation problem.
 
-- **9-method API.** Save, Change, Delete, Get, Query, Search, Observe, RebuildIndex, Table. That's it. Compare to Cosmos SDK or EF Core's surface area.
-- **`Store<T>` + `CreateView<T>` separation** is the right cut. Storage metadata vs. derivation logic. Clean.
-- **The cost story.** Table Storage is pennies. Cosmos is dollars. For ActivityPub workloads (high read, moderate write, lots of denormalization) this is orders of magnitude cheaper.
-- **Concurrency model is honest.** Save clobbers, Change retries. No pretending you have transactions when you don't.
-- **Everything-is-an-object** eliminates a whole category of "where does this live?" questions.
-- **CreateView execution is just LINQ.** No custom query provider needed. At execution time, `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. The only custom work is registration-time expression tree walking to extract join keys for incremental maintenance — bounded, focused work.
+## Strengths
+
+- **9-method API.** Save, Change, Delete, Get, Query, Search, Observe, RebuildIndex, Table. Compare to Cosmos SDK or EF Core's surface area.
+- **`Store<T>` + `CreateView<T>` separation.** Storage metadata vs. derivation logic. One is about how to persist and index; the other is about relationships between objects. Clean cut.
+- **Everything is an object.** No entity/view split. Derived objects are stored and indexed like any other. Cascading views fall out naturally. Eliminates "where does this live?" questions.
+- **Cost.** Table Storage is pennies. Cosmos is dollars. For read-heavy, moderate-write workloads this is orders of magnitude cheaper.
+- **Concurrency model.** `SaveAsync` clobbers (fast path). `ChangeAsync` retries with ETags (safe path). Honest about what it offers — no fake transactions.
+- **Attributes + fluent.** `[PartitionKey]`, `[RowKey]`, `[Tag]`, `[Field]` on the POCO for the common case. `Store<T>(s => ...)` for overrides. Convention defaults fill gaps. Three tiers, one mental model.
+- **Ad-hoc joins at query time.** `SearchAsync<Note>() join SearchAsync<Actor>()` works naturally via client-side hash join since Lucene is in-process. CreateView for hot paths, ad-hoc joins for everything else.
 
 ## Scaling model
 
-LottaDB is designed for **small-to-medium database workloads** — per-user data, per-tenant data, per-instance data. Scaling is horizontal by **creating separate databases per user/tenant**, not by scaling a single database to millions of rows. This is a deliberate design choice that sidesteps the traditional scaling concerns:
+LottaDB targets **small-to-medium workloads** — per-user, per-tenant, per-instance. Scaling is horizontal by creating **separate LottaDB instances per tenant**, not by scaling a single database.
 
-- **Write amplification** is bounded by one user's data set, not a global table
-- **Single-writer Lucene** is natural — one process per user DB, no contention
-- **Transaction scope** is small — user-scoped data has fewer cross-entity consistency needs
-- **Cost scales linearly** with users, and each user's footprint is cheap (Table Storage + local Lucene)
+This is deliberate. Within a tenant-scoped instance:
+- Write amplification is bounded by one tenant's data
+- Single-writer Lucene is the natural model — one process per instance
+- Transaction scope is small
+- Cost scales linearly, each tenant's footprint is cheap
 
-This fits workloads like ActivityPub (each instance/user has their own data), personal apps, per-tenant SaaS, and edge/offline scenarios where each node has its own LottaDB instance.
+Fits: ActivityPub instances, per-user personal apps, per-tenant SaaS, edge/offline nodes.
 
-## Remaining concerns
+## Concerns
 
-### 1. Inline write amplification at scale
+### 1. Expression tree walking for CreateView
 
-An Actor with 10,000 NoteViews gets updated. That's 10,000 table writes + 10,000 Lucene updates, inline, before `SaveAsync` returns. That could be seconds. The background dispatcher is mentioned but hand-waved. For the ActivityPub use case, a popular account updating their avatar could stall.
+The execution model is simple (just LINQ), but the **registration-time expression tree walker** still needs to handle: composite join keys, multiple joins in one expression, `where` clauses that filter before the join, nullable properties, and type conversions in the `on` clause. This is a constrained problem but it has real edge cases. Good test coverage is critical — a bug here means views silently don't rebuild when they should.
 
-### 2. Single-writer Lucene
+### 2. Fan-out on popular objects
 
-Lucene indexes are single-writer. Two app instances writing to the same `FSDirectory` = corruption. This is fine for a single-server app but blocks horizontal scaling. The doc mentions it in out-of-scope but it's a real deployment constraint that needs an answer before production.
+Within the per-tenant scaling model, some objects are still "hot." An ActivityPub Actor with 5,000 Notes means an Actor display name change triggers 5,000 NoteView rebuilds inline. Even at 1ms per rebuild, that's 5 seconds blocking `SaveAsync`. The architecture mentions a background dispatcher but doesn't define it. This needs a concrete design before production use with any object that has high fan-out.
 
-### 3. No transactions across objects
+### 3. Lucene index durability
 
-Save a Note, builder saves a NoteView — two separate table operations. Crash between them = Note exists, NoteView doesn't. The error handling model (eventually consistent, retry via sink) is the right answer, but users coming from SQL will feel the gap.
+Lucene indexes are "disposable" (rebuildable from table storage), but rebuilding a large index is slow. If the Lucene directory is on ephemeral storage (containers, app restarts), frequent rebuilds degrade the experience. The architecture needs guidance on when to use persistent vs. ephemeral directories and what the cold-start story looks like.
 
-## Where it sits in the market
+### 4. Builder failure retry semantics
 
-| Solution | LottaDB's advantage | LottaDB's disadvantage |
+`IBuilderFailureSink` captures failures, but the retry path isn't defined. What does a retry look like? Re-save the source object? Re-run just the failed builder? What if the source object has changed since the failure? This needs a concrete design — "retry later" is too vague for production reliability.
+
+### 5. Testing derived objects
+
+Testing a `CreateView` expression requires Azurite + Lucene to be running — there's no way to unit test the join logic in isolation. Explicit `IBuilder` implementations are testable (pass mock `ILottaDB`), but CreateView is a black box. Consider whether the compiled projection should be extractable for unit testing.
+
+## Competitive positioning
+
+| Solution | LottaDB advantage | LottaDB disadvantage |
 |---|---|---|
-| **Marten** (PostgreSQL) | CreateView > imperative projections. Cheaper (no PostgreSQL). | No transactions. No SQL. Less mature. |
-| **RavenDB** | Not a server to operate. CreateView > map-reduce DSL. | RavenDB has built-in clustering, replication, full ACID. |
-| **CosmosDB** | 10-100x cheaper. CreateView > manual Change Feed. Full-text search. | No geo-replication. No RU guarantees. Less mature. |
-| **EF Core + SQL** | Document flexibility. Materialized views. | No joins at query time. No transactions. Limited ecosystem. |
-| **Firebase/Firestore** | Richer queries (Lucene). Materialized views. | Firebase has real-time sync, auth, hosting — full platform. |
+| **Marten** (PostgreSQL) | Declarative CreateView > imperative projections. No server to operate. Cheaper. | No transactions. No SQL. Less mature. |
+| **RavenDB** | No server. CreateView > map-reduce DSL. Cheaper. | No clustering, no replication, no ACID. |
+| **CosmosDB** | 10-100x cheaper. CreateView > Change Feed plumbing. Full-text search built in. | No geo-distribution. No SLAs. Single-region. |
+| **EF Core + SQL** | Document flexibility. Materialized views. Simpler for denormalized data. | No ad-hoc joins at query time beyond search. No transactions. Smaller ecosystem. |
+| **Firebase/Firestore** | Richer queries via Lucene. Materialized views. | Firebase is a full platform (auth, hosting, real-time sync). LottaDB is just storage. |
 
-## Bottom line
+## Shipping sequence
 
-The architecture is clean, the API is elegant, and `CreateView` is a genuine innovation. The risk is all in execution.
-
-## Recommended shipping sequence
-
-1. **v1:** `Store<T>`, `SaveAsync`/`ChangeAsync`/`GetAsync`/`QueryAsync`/`SearchAsync`/`DeleteAsync`, explicit `IBuilder<T,U>`, `CreateView<T>`, `Observe<T>`, `RebuildIndex<T>`. The full API — CreateView's expression tree walking is bounded work, not a v2 feature.
-2. **v2:** Background dispatcher for write amplification, performance tuning for cascading builders with large fan-out.
-3. **v3:** Multi-writer Lucene story (distributed deployment).
-
-Ship the whole thing. The "wow" feature is ready.
+1. **v1:** Full API — `Store<T>`, `SaveAsync`/`ChangeAsync`/`DeleteAsync`/`GetAsync`/`QueryAsync`/`SearchAsync`, `CreateView<T>`, `IBuilder<T,U>`, `Observe<T>`, `RebuildIndex<T>`. CreateView expression tree walker scoped to single joins + where + select.
+2. **v2:** Background dispatcher for fan-out. Builder retry mechanics. Multi-join CreateView support. Cold-start / rebuild performance.
+3. **v3:** Multi-instance coordination. Distributed Lucene (or alternative search backend).
