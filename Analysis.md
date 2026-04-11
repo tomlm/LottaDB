@@ -23,6 +23,7 @@ The execution model is clean: `Iciclecreek.Lucene.Net.Linq` handles each Lucene 
 - **Concurrency model.** `SaveAsync` clobbers (fast path). `ChangeAsync` retries with ETags (safe path). Honest about what it offers — no fake transactions.
 - **Attributes + fluent.** `[PartitionKey]`, `[RowKey]`, `[Tag]`, `[Field]` on the POCO for the common case. `Store<T>(s => ...)` for overrides. Convention defaults fill gaps. Three tiers, one mental model.
 - **Ad-hoc joins at query time.** `SearchAsync<Note>() join SearchAsync<Actor>()` works naturally via client-side hash join since Lucene is in-process. CreateView for hot paths, ad-hoc joins for everything else.
+- **Fully in-process testing.** `Spotflow.InMemory.Azure.Storage` for Table Storage fakes + Lucene `RAMDirectory` for search. No Docker, no Azurite, no external processes. Unit tests run fast and anywhere.
 
 ## Scaling model
 
@@ -53,10 +54,6 @@ Lucene indexes are "disposable" (rebuildable from table storage), but rebuilding
 ### 4. Builder failure retry semantics
 
 `IBuilderFailureSink` captures failures, but the retry path isn't defined. What does a retry look like? Re-save the source object? Re-run just the failed builder? What if the source object has changed since the failure? This needs a concrete design — "retry later" is too vague for production reliability.
-
-### 5. Testing derived objects
-
-Testing a `CreateView` expression requires Azurite + Lucene to be running — there's no way to unit test the join logic in isolation. Explicit `IBuilder` implementations are testable (pass mock `ILottaDB`), but CreateView is a black box. Consider whether the compiled projection should be extractable for unit testing.
 
 ## Competitive positioning
 
