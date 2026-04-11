@@ -21,7 +21,18 @@ This is a genuinely new idea in this space. A developer looks at that LINQ expre
 - **Everything-is-an-object** eliminates a whole category of "where does this live?" questions.
 - **CreateView execution is just LINQ.** No custom query provider needed. At execution time, `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. The only custom work is registration-time expression tree walking to extract join keys for incremental maintenance — bounded, focused work.
 
-## What concerns me
+## Scaling model
+
+LottaDB is designed for **small-to-medium database workloads** — per-user data, per-tenant data, per-instance data. Scaling is horizontal by **creating separate databases per user/tenant**, not by scaling a single database to millions of rows. This is a deliberate design choice that sidesteps the traditional scaling concerns:
+
+- **Write amplification** is bounded by one user's data set, not a global table
+- **Single-writer Lucene** is natural — one process per user DB, no contention
+- **Transaction scope** is small — user-scoped data has fewer cross-entity consistency needs
+- **Cost scales linearly** with users, and each user's footprint is cheap (Table Storage + local Lucene)
+
+This fits workloads like ActivityPub (each instance/user has their own data), personal apps, per-tenant SaaS, and edge/offline scenarios where each node has its own LottaDB instance.
+
+## Remaining concerns
 
 ### 1. Inline write amplification at scale
 
