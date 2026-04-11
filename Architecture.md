@@ -384,6 +384,19 @@ All write operations (`SaveAsync`, `ChangeAsync`, `DeleteAsync`) return an `Obje
 
 `QueryAsync<T>()` and `SearchAsync<T>()` both return `IAsyncQueryable<T>` (from `System.Linq.Async`). For `QueryAsync<T>()`, predicates against **tagged** properties are translated to server-side OData filters; non-tagged predicates evaluate client-side. For `SearchAsync<T>()`, `Iciclecreek.Lucene.Net.Linq` provides the underlying sync `IQueryable<T>` — LottaDB wraps it in `IAsyncQueryable<T>` at the API boundary. Lucene.Net is in-process memory-mapped I/O with no network calls, so there's no benefit to async internally; the async wrapper keeps LottaDB's API consistent without pretending Lucene has await points.
 
+**Ad-hoc joins at query time** work naturally via standard LINQ — no custom query provider needed:
+
+```csharp
+var results = await (
+    from note in lottaDb.SearchAsync<Note>().Where(n => n.Domain == "example.com")
+    join actor in lottaDb.SearchAsync<Actor>()
+        on note.AuthorId equals actor.Username
+    select new { note.NoteId, note.Content, actor.DisplayName }
+).ToListAsync();
+```
+
+Since Lucene is in-process, this executes as a **client-side hash join** — each side queries its Lucene index independently, then LINQ joins the results in memory. O(N+M), not O(N*M). Perfectly reasonable for ad-hoc queries with moderate result sets. For hot paths with large result sets, use `CreateView` to pre-materialize the join instead.
+
 **Local development and tests use [Azurite](https://github.com/Azure/Azurite)**. The test connection string is `UseDevelopmentStorage=true`; tests exercise the same code path as production.
 
 ```csharp
@@ -416,36 +429,49 @@ opts.CreateView<NoteView>(db =>
 );
 ```
 
-That single declaration replaces what would otherwise be two builder classes, a mapping, and two builder registrations. LottaDB parses the expression tree and infers:
+That single declaration replaces what would otherwise be two builder classes, a mapping, and two builder registrations.
 
-| Inferred from expression | What LottaDB does |
+#### Registration vs. execution
+
+At **registration time**, LottaDB parses the expression tree to extract:
+
+| Inferred from expression | What LottaDB extracts |
 |---|---|
 | `from note in db.SearchAsync<Note>()` | NoteView **depends on** Note |
 | `join actor in db.SearchAsync<Actor>()` | NoteView **depends on** Actor |
-| `on new { note.Domain, note.AuthorId } equals new { actor.Domain, Username = actor.Username }` | **Join keys** — used to find affected NoteViews when a Note or Actor changes |
-| `select new NoteView { ... }` | **Output mapping** — how to build each NoteView |
-| The shape of NoteView | **Output mapping** — how to build each NoteView. Storage config comes from `Store<NoteView>()` + attributes. |
+| `on new { note.Domain, note.AuthorId } equals new { actor.Domain, Username = actor.Username }` | **Join keys** — used to scope which views need rebuilding when a source changes |
+| `select new NoteView { ... }` | **Output mapping** — the compiled projection |
 
-When a `Note` is saved, the engine uses the join key to find the matching `Actor` and re-evaluates the `select`. When an `Actor` is saved, the engine uses the join key to find all affected `Note`s and re-evaluates the `select` for each. Deletes propagate the same way — if a source object is deleted, the derived NoteView is auto-deleted.
+At **execution time** (when a source object changes), the engine doesn't need a custom query provider or join implementation. It **just executes the LINQ expression** — `Iciclecreek.Lucene.Net.Linq` handles each side's Lucene query, and standard LINQ does the in-memory hash join. This is the same mechanism as ad-hoc joins on `SearchAsync`, but scoped to the affected rows:
 
-#### What the engine does under the hood
+1. Note saved → use join keys to query just the matching Actor(s) from Lucene
+2. Execute the LINQ join + select in memory
+3. `SaveAsync` the resulting NoteView(s)
+
+The only custom work is **walking the expression tree at registration time** to extract the `on` clause keys — not implementing a query provider.
 
 ```mermaid
 flowchart TB
     CV["CreateView&lt;NoteView&gt;(db => from...join...select)"]
-    CV --> Parse[Parse expression tree]
-    Parse --> Deps[Extract dependencies:<br/>Note, Actor]
-    Parse --> Keys[Extract join keys:<br/>Domain+AuthorId ↔ Domain+Username]
-    Parse --> Select[Extract select mapping]
 
-    Deps --> Trigger1["When Note saved/deleted:<br/>find Actor by join key → rebuild NoteView"]
-    Deps --> Trigger2["When Actor saved/deleted:<br/>find Notes by join key → rebuild NoteViews"]
+    subgraph "Registration time"
+        CV --> Parse[Parse expression tree]
+        Parse --> Deps[Extract dependencies:<br/>Note, Actor]
+        Parse --> Keys[Extract join keys from 'on' clause]
+        Parse --> Compile[Compile select projection]
+    end
 
-    Trigger1 --> Save["SaveAsync(noteView)"]
-    Trigger2 --> Save
+    subgraph "Execution time (Note saved)"
+        Trigger[Note changed] --> Scope["Use join keys to scope:<br/>find matching Actor(s) from Lucene"]
+        Scope --> Join["Execute LINQ expression<br/>(Lucene queries + in-memory hash join)"]
+        Join --> Save["SaveAsync(noteView)"]
+    end
+
     Save --> ATS[(Table Storage)]
     Save --> Lucene[(Lucene Index)]
 ```
+
+When an `Actor` is saved, the engine works the other direction — uses join keys to find affected Notes, re-executes the join for each, saves updated NoteViews. Deletes propagate the same way — source object deleted → derived NoteViews auto-deleted.
 
 #### Cascading views
 

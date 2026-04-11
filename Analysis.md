@@ -22,11 +22,15 @@ This is a genuinely new idea in this space. A developer looks at that LINQ expre
 
 ## What concerns me
 
-### 1. CreateView expression tree parsing is HARD
+### 1. CreateView expression tree parsing — simpler than it looked
 
-This is the biggest risk. Extracting join keys from arbitrary LINQ expressions and generating incremental maintenance logic is exactly what database query optimizers do — and they have teams of PhDs. EF Core's expression visitor is ~50K lines. We don't need to handle the general case (just joins + where + select), but even that subset has edge cases: composite keys, multiple joins, nullable navigation, type conversions.
+~~This was originally the biggest risk.~~ After deeper analysis, the scope is much smaller than feared:
 
-**Recommendation:** ship explicit builders first, add CreateView as the v2 killer feature. The builder model works today. CreateView is the thing that makes people say "holy shit" — but it needs to be rock-solid when it ships, not half-baked.
+- **No custom `IQueryProvider` needed.** At execution time, the LINQ expression runs as-is — `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. LottaDB doesn't implement join semantics.
+- **The only custom work is registration-time expression tree walking** to extract the `on` clause join keys (for incremental maintenance — knowing which views to rebuild when a source changes). This is a focused visitor, not a general query translator.
+- **Edge cases exist** (composite keys, multiple joins, nullable navigation) but are manageable since we're walking a constrained subset of LINQ, not translating it.
+
+**Revised recommendation:** CreateView can ship in v1 alongside explicit builders. The expression tree walking for join key extraction is bounded work — not the open-ended query translation problem EF Core faces.
 
 ### 2. Inline write amplification at scale
 
@@ -56,8 +60,8 @@ The architecture is clean, the API is elegant, and `CreateView` is a genuine inn
 
 ## Recommended shipping sequence
 
-1. **v1:** `Store<T>`, `SaveAsync`/`GetAsync`/`QueryAsync`/`SearchAsync`, explicit `IBuilder<T,U>`, `Observe<T>`. This is usable today.
-2. **v2:** `CreateView<T>` with expression tree parsing. This is the "wow" feature that differentiates.
-3. **v3:** Background dispatcher for write amplification, multi-writer Lucene story.
+1. **v1:** `Store<T>`, `SaveAsync`/`ChangeAsync`/`GetAsync`/`QueryAsync`/`SearchAsync`/`DeleteAsync`, explicit `IBuilder<T,U>`, `CreateView<T>`, `Observe<T>`, `RebuildIndex<T>`. The full API — CreateView's expression tree walking is bounded work, not a v2 feature.
+2. **v2:** Background dispatcher for write amplification, performance tuning for cascading builders with large fan-out.
+3. **v3:** Multi-writer Lucene story (distributed deployment).
 
-Ship the useful thing, then ship the magical thing.
+Ship the whole thing. The "wow" feature is ready.
