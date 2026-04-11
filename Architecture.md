@@ -382,7 +382,7 @@ var subscription = lottaDb.Observe<NoteView>(async change =>
 
 All write operations (`SaveAsync`, `ChangeAsync`, `DeleteAsync`) return an `ObjectResult` containing all the objects that were created, updated, or deleted — both the original object and any derived objects produced by builders.
 
-`QueryAsync<T>()` and `SearchAsync<T>()` both return `IAsyncQueryable<T>` (from `System.Linq.Async`). Async-only — everything in LottaDB is I/O-bound. For `QueryAsync<T>()`, predicates against **tagged** properties are translated to server-side OData filters; non-tagged predicates evaluate client-side. For `SearchAsync<T>()`, the LINQ provider is `Iciclecreek.Lucene.Net.Linq`.
+`QueryAsync<T>()` and `SearchAsync<T>()` both return `IAsyncQueryable<T>` (from `System.Linq.Async`). For `QueryAsync<T>()`, predicates against **tagged** properties are translated to server-side OData filters; non-tagged predicates evaluate client-side. For `SearchAsync<T>()`, `Iciclecreek.Lucene.Net.Linq` provides the underlying sync `IQueryable<T>` — LottaDB wraps it in `IAsyncQueryable<T>` at the API boundary. Lucene.Net is in-process memory-mapped I/O with no network calls, so there's no benefit to async internally; the async wrapper keeps LottaDB's API consistent without pretending Lucene has await points.
 
 **Local development and tests use [Azurite](https://github.com/Azure/Azurite)**. The test connection string is `UseDevelopmentStorage=true`; tests exercise the same code path as production.
 
