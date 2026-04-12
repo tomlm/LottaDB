@@ -30,7 +30,7 @@ public class BuilderTests
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n2", AuthorId = "alice", Content = "Stored", Published = DateTimeOffset.UtcNow });
 
         // Should be in table storage (QueryAsync hits table storage)
-        var views = await db.QueryAsync<NoteView>().ToListAsync();
+        var views = db.Query<NoteView>().ToList();
         Assert.Contains(views, v => v.NoteId == "n2");
     }
 
@@ -42,7 +42,7 @@ public class BuilderTests
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n3", AuthorId = "alice", Content = "Indexed", Published = DateTimeOffset.UtcNow });
 
         // Should be in Lucene (SearchAsync hits Lucene)
-        var views = await db.SearchAsync<NoteView>().ToListAsync();
+        var views = db.Search<NoteView>().ToList();
         Assert.Contains(views, v => v.NoteId == "n3");
     }
 
@@ -159,7 +159,7 @@ public class BuilderTests
         await db.SaveAsync(note);
 
         // Note should still be in table storage despite builder failure
-        var notes = await db.QueryAsync<Note>().Where(n => n.NoteId == "fail2").ToListAsync();
+        var notes = db.Query<Note>().Where(n => n.NoteId == "fail2").ToList();
         Assert.Single(notes);
     }
 }

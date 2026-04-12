@@ -35,9 +35,9 @@ public class StoreRegistrationTests
         db.SaveAsync(note2).Wait();
 
         // Tag on AuthorId should allow server-side filtering via QueryAsync
-        var aliceNotes = db.QueryAsync<Note>()
+        var aliceNotes = db.Query<Note>()
             .Where(n => n.AuthorId == "alice")
-            .ToListAsync().Result;
+            .ToList();
         Assert.Single(aliceNotes);
         Assert.Equal("n1", aliceNotes[0].NoteId);
     }
@@ -86,9 +86,9 @@ public class StoreRegistrationTests
         db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alice" }).Wait();
         db.SaveAsync(new Actor { Domain = "test.com", Username = "bob", DisplayName = "Bob" }).Wait();
 
-        var results = db.QueryAsync<Actor>()
+        var results = db.Query<Actor>()
             .Where(a => a.DisplayName == "Alice")
-            .ToListAsync().Result;
+            .ToList();
         Assert.Single(results);
     }
 
@@ -108,7 +108,7 @@ public class StoreRegistrationTests
         Assert.NotNull(actor);
 
         // Note uses descending time RowKey, so we query instead of get
-        var notes = db.QueryAsync<Note>().ToListAsync().Result;
+        var notes = db.Query<Note>().ToList();
         Assert.Single(notes);
     }
 
@@ -153,7 +153,7 @@ public class StoreRegistrationTests
         db.SaveAsync(newer).Wait();
 
         // Both notes should be stored
-        var notes = db.QueryAsync<Note>().ToListAsync().Result;
+        var notes = db.Query<Note>().ToList();
         Assert.Equal(2, notes.Count);
         // Both notes should be retrievable
         Assert.Contains(notes, n => n.NoteId == "n1");
@@ -171,7 +171,7 @@ public class StoreRegistrationTests
         await db.SaveAsync(newer);
 
         // Ascending time: oldest first
-        var logs = await db.QueryAsync<LogEntry>().ToListAsync();
+        var logs = db.Query<LogEntry>().ToList();
         Assert.Equal(2, logs.Count);
         Assert.Equal("L1", logs[0].LogId);
         Assert.Equal("L2", logs[1].LogId);

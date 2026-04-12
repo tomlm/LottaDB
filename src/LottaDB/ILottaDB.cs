@@ -32,7 +32,7 @@ public interface ILottaDB
     /// <summary>Delete an object. Keys are extracted from [PartitionKey]/[RowKey] attributes.</summary>
     Task<ObjectResult> DeleteAsync<T>(T entity, CancellationToken ct = default) where T : class, new();
 
-    // === Read (table storage) ===
+    // === Read (point) ===
 
     /// <summary>Point-read an object from Azure Table Storage by partition key and row key.</summary>
     Task<T?> GetAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default) where T : class, new();
@@ -43,25 +43,24 @@ public interface ILottaDB
     /// </summary>
     Task<T?> GetAsync<T>(T entity, bool force = false, CancellationToken ct = default) where T : class, new();
 
+    // === Read (query) ===
+
     /// <summary>
-    /// Query Azure Table Storage. Returns an async enumerable that supports LINQ operators.
-    /// Predicates on tagged properties are pushed down as server-side OData filters.
+    /// Query Azure Table Storage. Returns an IQueryable backed by the Azure SDK —
+    /// predicates on tagged properties are pushed down as server-side OData filters.
     /// </summary>
-    IAsyncEnumerable<T> QueryAsync<T>() where T : class, new();
-
-    // === Read (Lucene) ===
+    IQueryable<T> Query<T>() where T : class, new();
 
     /// <summary>
-    /// Search the Lucene index. Returns an async enumerable that supports LINQ operators.
-    /// Optionally pass a Lucene query string to pre-filter results (e.g. "content:lucene* AND authorId:alice").
-    /// </summary>
-    IAsyncEnumerable<T> SearchAsync<T>(string? query = null) where T : class, new();
-
-    /// <summary>
-    /// Search the Lucene index, returning an IQueryable for LINQ query syntax.
+    /// Search the Lucene index. Returns an IQueryable backed by Iciclecreek.Lucene.Net.Linq.
     /// Used in <c>CreateView</c> expressions and for ad-hoc joins across types.
     /// </summary>
     IQueryable<T> Search<T>() where T : class, new();
+
+    /// <summary>
+    /// Search the Lucene index with a Lucene query string pre-filter (e.g. "content:lucene* AND authorId:alice").
+    /// </summary>
+    IQueryable<T> Search<T>(string query) where T : class, new();
 
     // === Observe ===
 

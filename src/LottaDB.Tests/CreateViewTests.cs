@@ -88,9 +88,9 @@ public class CreateViewTests
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "p2", AuthorId = "prolific", Content = "Two", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "p3", AuthorId = "prolific", Content = "Three", Published = DateTimeOffset.UtcNow });
 
-        var views = await db.SearchAsync<NoteView>()
+        var views = db.Search<NoteView>()
             .Where(v => v.AuthorUsername == "prolific")
-            .ToListAsync();
+            .ToList();
         Assert.Equal(3, views.Count);
     }
 
@@ -106,9 +106,9 @@ public class CreateViewTests
         Assert.NotNull(fromTable);
 
         // Lucene
-        var fromLucene = await db.SearchAsync<NoteView>()
+        var fromLucene = db.Search<NoteView>()
             .Where(v => v.NoteId == "dual-n")
-            .ToListAsync();
+            .ToList();
         Assert.Single(fromLucene);
     }
 
@@ -138,7 +138,7 @@ public class CreateViewTests
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "imp", AuthorId = "filter", Content = "This is important", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "boring", AuthorId = "filter", Content = "This is boring", Published = DateTimeOffset.UtcNow });
 
-        var views = await db.SearchAsync<NoteView>().ToListAsync();
+        var views = db.Search<NoteView>().ToList();
         Assert.Single(views);
         Assert.Equal("imp", views[0].NoteId);
     }

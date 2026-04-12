@@ -13,8 +13,8 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow });
 
         // Ad-hoc join: materialize both sides via SearchAsync, then LINQ join in memory
-        var notes = await db.SearchAsync<Note>().ToListAsync();
-        var actors = await db.SearchAsync<Actor>().ToListAsync();
+        var notes = db.Search<Note>();
+        var actors = db.Search<Actor>();
 
         var joined = (
             from note in notes
@@ -37,8 +37,8 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow });
 
-        var notes = await db.SearchAsync<Note>().Where(n => n.Content.Contains("Important")).ToListAsync();
-        var actors = await db.SearchAsync<Actor>().ToListAsync();
+        var notes = db.Search<Note>().Where(n => n.Content.Contains("Important"));
+        var actors = db.Search<Actor>();
 
         var joined = (
             from note in notes
@@ -60,11 +60,11 @@ public class AdHocJoinTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" });
 
         // SearchAsync with no query returns all
-        var all = await db.SearchAsync<Actor>().ToListAsync();
+        var all = db.Search<Actor>().ToList();
         Assert.Equal(2, all.Count);
 
         // SearchAsync with query parameter (basic test — full Lucene query support depends on indexer)
-        var filtered = await db.SearchAsync<Actor>("DisplayName:Alice").ToListAsync();
+        var filtered = db.Search<Actor>("DisplayName:Alice").ToList();
         // Note: until Lucene searcher refresh is implemented, this may return all or filtered
         // The test verifies the parameter is accepted without error
         Assert.NotNull(filtered);

@@ -223,61 +223,30 @@ internal class LottaDBInstance : ILottaDB
         return await GetAsync<T>(pk, rk, ct);
     }
 
-    public async IAsyncEnumerable<T> QueryAsync<T>() where T : class, new()
+    public IQueryable<T> Query<T>() where T : class, new()
     {
         var meta = GetMetadata<T>();
-        await foreach (var item in _tableStore.QueryAllAsync<T>(meta.TableName))
-        {
-            yield return item;
-        }
+        // TODO: When Azure.Data.Tables supports IQueryable with OData pushdown,
+        // wire that in here. For now, use in-memory queryable over table storage.
+        return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
     }
 
     // === Read (Lucene) ===
 
-    public async IAsyncEnumerable<T> SearchAsync<T>(string? query = null) where T : class, new()
-    {
-        // TODO: Once Iciclecreek.Lucene.Net.Linq supports searcher refresh,
-        // switch this to use the Lucene index directly for full-text search.
-        // For now, use table storage as the backing source to ensure consistency.
-        var meta = GetMetadata<T>();
-        var items = _tableStore.QueryAll<T>(meta.TableName);
-
-        // If a Lucene query string is provided, filter via Lucene query parser
-        if (!string.IsNullOrEmpty(query))
-        {
-            items = FilterByLuceneQuery(items, query, meta).ToList();
-        }
-
-        foreach (var item in items)
-        {
-            yield return item;
-        }
-        await Task.CompletedTask;
-    }
-
     public IQueryable<T> Search<T>() where T : class, new()
     {
+        // TODO: Once Iciclecreek.Lucene.Net.Linq supports searcher refresh,
+        // switch to provider.AsQueryable<T>() for real Lucene query pushdown.
+        // For now, use table storage as the backing queryable.
         var meta = GetMetadata<T>();
         return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
     }
 
-    private IEnumerable<T> FilterByLuceneQuery<T>(IEnumerable<T> items, string queryString, TypeMetadata meta) where T : class, new()
+    public IQueryable<T> Search<T>(string query) where T : class, new()
     {
-        try
-        {
-            // Use Lucene to parse and execute the query against the index
-            var provider = GetOrCreateLuceneProvider<T>();
-            var luceneResults = provider.AsQueryable<T>().ToList();
-            // If Lucene has results, return them (they're already filtered by the query)
-            // Fall back: use Lucene query parser to filter the table storage results
-            // For now, return Lucene results directly when available
-            if (luceneResults.Count > 0)
-                return luceneResults;
-        }
-        catch { }
-
-        // Fallback: return all items (query not applied)
-        return items;
+        // TODO: Use Lucene query parser to pre-filter results
+        var meta = GetMetadata<T>();
+        return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
     }
 
     // === Observe ===

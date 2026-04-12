@@ -11,14 +11,14 @@ public class RebuildIndexTests
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "bob", DisplayName = "Bob" });
 
         // Verify search works
-        var before = await db.SearchAsync<Actor>().ToListAsync();
+        var before = db.Search<Actor>().ToList();
         Assert.Equal(2, before.Count);
 
         // Rebuild the index (simulates recovery after Lucene data loss)
         await db.RebuildIndex<Actor>();
 
         // Should still find everything
-        var after = await db.SearchAsync<Actor>().ToListAsync();
+        var after = db.Search<Actor>().ToList();
         Assert.Equal(2, after.Count);
     }
 
@@ -30,7 +30,7 @@ public class RebuildIndexTests
         // Rebuild with no data — should not throw
         await db.RebuildIndex<Actor>();
 
-        var results = await db.SearchAsync<Actor>().ToListAsync();
+        var results = db.Search<Actor>().ToList();
         Assert.Empty(results);
     }
 
@@ -45,14 +45,14 @@ public class RebuildIndexTests
         await db.SaveAsync(new Note { Domain = "rebuild.test", NoteId = "rn1", AuthorId = "auth", Content = "Test", Published = DateTimeOffset.UtcNow });
 
         // NoteView should exist from the builder
-        var viewBefore = await db.SearchAsync<NoteView>().ToListAsync();
+        var viewBefore = db.Search<NoteView>().ToList();
         Assert.Single(viewBefore);
 
         // Rebuild only Actor index — should not affect NoteViews
         await db.RebuildIndex<Actor>();
 
         // NoteView should still be searchable (its index wasn't rebuilt/cleared)
-        var viewAfter = await db.SearchAsync<NoteView>().ToListAsync();
+        var viewAfter = db.Search<NoteView>().ToList();
         Assert.Single(viewAfter);
     }
 }
