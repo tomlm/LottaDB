@@ -34,11 +34,22 @@ internal class ViewExpressionParser
         var compiled = lambda.Compile();
         return db =>
         {
-            var queryable = compiled.DynamicInvoke(db);
-            if (queryable is IEnumerable<object> enumerable)
-                return enumerable;
-            if (queryable is IQueryable queryableObj)
-                return queryableObj.Cast<object>().ToList();
+            var result = compiled.DynamicInvoke(db);
+            if (result is IQueryable queryable)
+            {
+                // Execute the queryable and cast each result to object
+                var list = new List<object>();
+                foreach (var item in queryable)
+                    list.Add(item);
+                return list;
+            }
+            if (result is System.Collections.IEnumerable enumerable)
+            {
+                var list = new List<object>();
+                foreach (var item in enumerable)
+                    list.Add(item);
+                return list;
+            }
             return Enumerable.Empty<object>();
         };
     }
@@ -59,11 +70,31 @@ internal class ViewExpressionVisitor : ExpressionVisitor
                 SourceTypes.Add(sourceType);
         }
 
-        // Detect Join calls to extract join keys
-        if (node.Method.Name == "Join" && node.Arguments.Count >= 5)
+        // Detect SearchAsync<T>() as well
+        if (node.Method.Name == "SearchAsync" && node.Method.IsGenericMethod)
         {
-            // Standard LINQ Join(outer, inner, outerKeySelector, innerKeySelector, resultSelector)
-            ExtractJoinKeys(node);
+            var sourceType = node.Method.GetGenericArguments()[0];
+            if (!SourceTypes.Contains(sourceType))
+                SourceTypes.Add(sourceType);
+        }
+
+        // Detect Join calls to extract source types from generic arguments and join keys
+        if (node.Method.Name == "Join")
+        {
+            if (node.Method.IsGenericMethod)
+            {
+                // Queryable.Join<TOuter, TInner, TKey, TResult> — TOuter and TInner are source types
+                var genericArgs = node.Method.GetGenericArguments();
+                if (genericArgs.Length >= 2)
+                {
+                    if (!SourceTypes.Contains(genericArgs[0]))
+                        SourceTypes.Add(genericArgs[0]);
+                    if (!SourceTypes.Contains(genericArgs[1]))
+                        SourceTypes.Add(genericArgs[1]);
+                }
+            }
+            if (node.Arguments.Count >= 5)
+                ExtractJoinKeys(node);
         }
 
         return base.VisitMethodCall(node);
