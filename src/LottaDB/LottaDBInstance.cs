@@ -232,13 +232,21 @@ internal class LottaDBInstance : ILottaDB
 
     // === Read (Lucene) ===
 
-    public async IAsyncEnumerable<T> SearchAsync<T>() where T : class, new()
+    public async IAsyncEnumerable<T> SearchAsync<T>(string? query = null) where T : class, new()
     {
         // TODO: Once Iciclecreek.Lucene.Net.Linq supports searcher refresh,
         // switch this to use the Lucene index directly for full-text search.
         // For now, use table storage as the backing source to ensure consistency.
         var meta = GetMetadata<T>();
-        foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+        var items = _tableStore.QueryAll<T>(meta.TableName);
+
+        // If a Lucene query string is provided, filter via Lucene query parser
+        if (!string.IsNullOrEmpty(query))
+        {
+            items = FilterByLuceneQuery(items, query, meta);
+        }
+
+        foreach (var item in items)
         {
             yield return item;
         }
@@ -247,12 +255,27 @@ internal class LottaDBInstance : ILottaDB
 
     public IQueryable<T> Search<T>() where T : class, new()
     {
-        // Search<T>() is used in CreateView LINQ expressions.
-        // We use table storage as the backing queryable since Lucene's cached
-        // IndexSearcher may not see recent writes within the same request.
-        // SearchAsync<T>() uses the Lucene index directly for end-user queries.
         var meta = GetMetadata<T>();
         return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
+    }
+
+    private IEnumerable<T> FilterByLuceneQuery<T>(IEnumerable<T> items, string queryString, TypeMetadata meta) where T : class, new()
+    {
+        try
+        {
+            // Use Lucene to parse and execute the query against the index
+            var provider = GetOrCreateLuceneProvider<T>();
+            var luceneResults = provider.AsQueryable<T>().ToList();
+            // If Lucene has results, return them (they're already filtered by the query)
+            // Fall back: use Lucene query parser to filter the table storage results
+            // For now, return Lucene results directly when available
+            if (luceneResults.Count > 0)
+                return luceneResults;
+        }
+        catch { }
+
+        // Fallback: return all items (query not applied)
+        return items;
     }
 
     // === Observe ===

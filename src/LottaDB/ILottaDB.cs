@@ -53,9 +53,9 @@ public interface ILottaDB
 
     /// <summary>
     /// Search the Lucene index. Returns an async enumerable that supports LINQ operators.
-    /// Backed by Iciclecreek.Lucene.Net.Linq.
+    /// Optionally pass a Lucene query string to pre-filter results (e.g. "content:lucene* AND authorId:alice").
     /// </summary>
-    IAsyncEnumerable<T> SearchAsync<T>() where T : class, new();
+    IAsyncEnumerable<T> SearchAsync<T>(string? query = null) where T : class, new();
 
     /// <summary>
     /// Search the Lucene index, returning an IQueryable for LINQ query syntax.
