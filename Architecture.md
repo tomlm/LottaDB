@@ -24,26 +24,37 @@ A `LottaDB` instance represents a single database:
 - **Name** — used as the Azure table name and the Lucene directory/index name.
 - **One Azure table** — all object types stored in the same table, discriminated by `PartitionKey = typeof(T).Name`.
 - **One Lucene index** — all object types indexed together, discriminated by a `_Type` field.
-- **`TableServiceClient`** — injected via DI. Real Azure for production, Spotflow in-memory for tests.
-- **`Directory`** — a single Lucene `Directory` for the database (FSDirectory for production, RAMDirectory for tests).
+- **`TableServiceClient`** — Azure Table Storage client. Real Azure for production, Spotflow in-memory for tests.
+- **`Directory`** — a single Lucene `Directory` for the database. `FSDirectory` for production, `RAMDirectory` for tests.
+
+LottaDB takes its dependencies in the constructor — no DI framework required:
 
 ```csharp
-// Production
-services.AddSingleton(new TableServiceClient(connectionString));
-services.AddLottaDB("myapp", new FSDirectory("./myapp-index"), opts =>
+// Direct construction
+var db = new LottaDB("myapp", tableServiceClient, directory, opts =>
 {
     opts.Store<Actor>();
     opts.Store<Note>();
     opts.Store<NoteView>();
 });
 
-// Tests
-services.AddSingleton<TableServiceClient>(InMemoryTableServiceClient.FromAccount(account));
-services.AddLottaDB("testdb", new RAMDirectory(), opts =>
-{
-    opts.Store<Actor>();
-    opts.Store<Note>();
-});
+// Production example
+var db = new LottaDB("myapp",
+    new TableServiceClient(connectionString),
+    FSDirectory.Open("./myapp-index"),
+    opts => { opts.Store<Actor>(); opts.Store<Note>(); });
+
+// Test example
+var db = new LottaDB("testdb",
+    InMemoryTableServiceClient.FromAccount(account),
+    new RAMDirectory(),
+    opts => { opts.Store<Actor>(); opts.Store<Note>(); });
+```
+
+A DI convenience extension is available but optional:
+
+```csharp
+services.AddLottaDB("myapp", tableServiceClient, directory, opts => { ... });
 ```
 
 ### How objects are stored
@@ -284,9 +295,7 @@ Each instance = one table + one Lucene index. Write amplification, single-writer
 ## Registration & Composition
 
 ```csharp
-services.AddSingleton(new TableServiceClient(connectionString));
-
-services.AddLottaDB("myapp", new FSDirectory("./myapp-index"), opts =>
+var db = new LottaDB("myapp", tableServiceClient, directory, opts =>
 {
     opts.Store<Actor>();
     opts.Store<Note>();
@@ -320,7 +329,8 @@ services.AddLottaDB("myapp", new FSDirectory("./myapp-index"), opts =>
 | **One table + one index per database** | Simplest possible model. Types discriminated by PartitionKey / `_Type` field. |
 | **`_Type` hierarchy for polymorphic queries** | `Query<BaseClass>()` returns all derived types. No manual type filtering. |
 | **`[Key]` is the only required attribute** | No partition keys, no row keys. LottaDB handles storage internals. |
-| **Single Lucene Directory per DB** | One writer, one searcher, dirty-flag flush. No per-type index management. |
+| **Single Lucene Directory per DB** | One writer, one searcher, dirty-flag flush. Caller provides the Directory. |
+| **Constructor dependencies, DI-neutral** | LottaDB takes TableServiceClient + Directory in constructor. No DI framework required. Optional AddLottaDB extension for DI users. |
 | **`CreateView<T>()` as LINQ joins** | Declarative materialized views. Dependencies and join keys inferred from expression tree. |
 | **Everything is an object** | No entity/view distinction. Derived objects stored and indexed like any other. |
 | **Dirty flag Lucene writes** | Writes don't flush; Search flushes and creates fresh IndexSearcher. Efficient bulk writes. |
