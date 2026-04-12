@@ -3,7 +3,7 @@ namespace LottaDB.Tests;
 public class BuilderTests
 {
     private ILottaDB CreateDbWithBuilder<TTrigger, TDerived, TBuilder>()
-        where TTrigger : class where TDerived : class where TBuilder : class, IBuilder<TTrigger, TDerived>
+        where TTrigger : class, new() where TDerived : class, new() where TBuilder : class, IBuilder<TTrigger, TDerived>, new()
     {
         return TestLottaDBFactory.CreateWithBuilders(opts =>
             opts.AddBuilder<TTrigger, TDerived, TBuilder>());

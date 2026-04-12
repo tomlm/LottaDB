@@ -2,7 +2,7 @@ using System.Linq.Expressions;
 
 namespace LottaDB;
 
-public class StoreConfiguration<T> : IStoreConfiguration<T> where T : class
+public class StoreConfiguration<T> : IStoreConfiguration<T> where T : class, new()
 {
     internal string? TableName { get; private set; }
     internal LambdaExpression? PartitionKeyExpression { get; private set; }

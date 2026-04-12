@@ -31,7 +31,7 @@ public class LottaDBOptions : ILottaDBOptions
         return this;
     }
 
-    public ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class
+    public ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new()
     {
         var config = new StoreConfiguration<T>();
         configure?.Invoke(config);
@@ -39,22 +39,22 @@ public class LottaDBOptions : ILottaDBOptions
         return this;
     }
 
-    public ILottaDBOptions CreateView<TView>(Expression<Func<ILottaDB, IQueryable<TView>>> viewExpression) where TView : class
+    public ILottaDBOptions CreateView<TView>(Expression<Func<ILottaDB, IQueryable<TView>>> viewExpression) where TView : class, new()
     {
         ViewRegistrations.Add(new ViewRegistration(typeof(TView), viewExpression));
         return this;
     }
 
     public ILottaDBOptions AddBuilder<TTrigger, TDerived, TBuilder>()
-        where TTrigger : class
-        where TDerived : class
-        where TBuilder : class, IBuilder<TTrigger, TDerived>
+        where TTrigger : class, new()
+        where TDerived : class, new()
+        where TBuilder : class, IBuilder<TTrigger, TDerived>, new()
     {
         BuilderRegistrations.Add(new BuilderRegistration(typeof(TTrigger), typeof(TDerived), typeof(TBuilder)));
         return this;
     }
 
-    public ILottaDBOptions Observe<T>(Func<ObjectChange<T>, Task> handler) where T : class
+    public ILottaDBOptions Observe<T>(Func<ObjectChange<T>, Task> handler) where T : class, new()
     {
         ObserverRegistrations.Add(new ObserverRegistration(typeof(T), handler));
         return this;
