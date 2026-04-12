@@ -7,9 +7,9 @@ public class BuilderFailureSinkTests
     {
         var sink = new TestBuilderFailureSink();
         var services = new ServiceCollection();
+        services.AddSingleton<Azure.Data.Tables.TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
             opts.Store<Note>();
             opts.Store<ModerationView>();
@@ -30,9 +30,9 @@ public class BuilderFailureSinkTests
     {
         var sink = new TestBuilderFailureSink();
         var services = new ServiceCollection();
+        services.AddSingleton<Azure.Data.Tables.TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
             opts.Store<Note>();
             opts.Store<ModerationView>();
@@ -56,9 +56,9 @@ public class BuilderFailureSinkTests
     {
         var sink = new TestBuilderFailureSink();
         var services = new ServiceCollection();
+        services.AddSingleton<Azure.Data.Tables.TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
             opts.Store<Note>();
             opts.Store<ModerationView>();

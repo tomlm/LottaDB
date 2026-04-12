@@ -7,12 +7,6 @@ namespace LottaDB;
 /// </summary>
 public interface ILottaDBOptions
 {
-    /// <summary>Use Azure Table Storage with the given connection string.</summary>
-    ILottaDBOptions UseAzureTables(string connectionString);
-
-    /// <summary>Use in-memory table storage (Spotflow fakes). For unit tests.</summary>
-    ILottaDBOptions UseInMemoryTables();
-
     /// <summary>Set the Lucene Directory provider (e.g. <see cref="RAMDirectoryProvider"/> or <see cref="FSDirectoryProvider"/>).</summary>
     ILottaDBOptions UseLuceneDirectory(IDirectoryProvider provider);
 

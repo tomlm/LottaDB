@@ -95,9 +95,9 @@ public class ObserveTests
     {
         ObjectChange<Actor>? received = null;
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddSingleton<Azure.Data.Tables.TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
             opts.Store<Actor>();
             opts.Observe<Actor>(change =>

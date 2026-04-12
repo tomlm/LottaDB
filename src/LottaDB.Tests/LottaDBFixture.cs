@@ -1,5 +1,8 @@
+using Azure.Data.Tables;
 using LottaDB;
 using Microsoft.Extensions.DependencyInjection;
+using Spotflow.InMemory.Azure.Storage;
+using Spotflow.InMemory.Azure.Storage.Tables;
 
 namespace LottaDB.Tests;
 
@@ -11,11 +14,10 @@ public class LottaDBFixture : IDisposable
     public LottaDBFixture()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<TableServiceClient>(CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
-
             opts.Store<Actor>();
             opts.Store<Note>();
             opts.Store<NoteView>();
@@ -35,6 +37,13 @@ public class LottaDBFixture : IDisposable
     {
         ServiceProvider.Dispose();
     }
+
+    public static TableServiceClient CreateInMemoryTableServiceClient()
+    {
+        var provider = new InMemoryStorageProvider();
+        var account = provider.AddAccount($"test{Guid.NewGuid():N}");
+        return InMemoryTableServiceClient.FromAccount(account);
+    }
 }
 
 /// <summary>
@@ -45,11 +54,10 @@ public static class TestLottaDBFactory
     public static ILottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
     {
         var services = new ServiceCollection();
+        services.AddSingleton<TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
         services.AddLottaDB(opts =>
         {
-            opts.UseInMemoryTables();
             opts.UseLuceneDirectory(new RAMDirectoryProvider());
-
             opts.Store<Actor>();
             opts.Store<Note>();
             opts.Store<NoteView>();

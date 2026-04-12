@@ -4,26 +4,11 @@ namespace LottaDB;
 
 public class LottaDBOptions : ILottaDBOptions
 {
-    internal string? ConnectionString { get; private set; }
-    internal bool UseInMemory { get; private set; }
     internal IDirectoryProvider? DirectoryProvider { get; private set; }
     internal Dictionary<Type, object> StoreConfigurations { get; } = new();
     internal List<ViewRegistration> ViewRegistrations { get; } = new();
     internal List<BuilderRegistration> BuilderRegistrations { get; } = new();
     internal List<ObserverRegistration> ObserverRegistrations { get; } = new();
-
-    public ILottaDBOptions UseAzureTables(string connectionString)
-    {
-        ConnectionString = connectionString;
-        UseInMemory = false;
-        return this;
-    }
-
-    public ILottaDBOptions UseInMemoryTables()
-    {
-        UseInMemory = true;
-        return this;
-    }
 
     public ILottaDBOptions UseLuceneDirectory(IDirectoryProvider provider)
     {

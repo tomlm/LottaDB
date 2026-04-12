@@ -12,7 +12,8 @@
       "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/spotflow.inmemory.azure.storage/index.json\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(v\\) for v in d['versions'][-10:]]\")",
       "Bash(dotnet add:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(dotnet list:*)"
     ]
   }
 }

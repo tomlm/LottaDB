@@ -13,7 +13,7 @@ internal class LottaDBInstance : ILottaDB
 {
     private readonly LottaDBOptions _options;
     private readonly IBuilderFailureSink? _failureSink;
-    private readonly InMemoryTableStore _tableStore = new();
+    private readonly Internal.TableStorageAdapter _tableStore;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, object> _luceneProviders = new();
     private readonly ConcurrentDictionary<string, (string pk, string rk, string etag)> _etagTracker = new();
@@ -23,10 +23,11 @@ internal class LottaDBInstance : ILottaDB
 
     private const LuceneVersion AppLuceneVersion = LuceneVersion.LUCENE_48;
 
-    public LottaDBInstance(LottaDBOptions options, IBuilderFailureSink? failureSink = null)
+    public LottaDBInstance(LottaDBOptions options, Azure.Data.Tables.TableServiceClient tableServiceClient, IBuilderFailureSink? failureSink = null)
     {
         _options = options;
         _failureSink = failureSink;
+        _tableStore = new Internal.TableStorageAdapter(tableServiceClient);
         InitializeMetadata();
         InitializeObservers();
     }
@@ -79,9 +80,10 @@ internal class LottaDBInstance : ILottaDB
         HashSet<string>? cycleGuard = null) where T : class, new()
     {
         // Write to table storage
-        _tableStore.Upsert(meta.TableName, pk, rk, entity, out var etag);
+        await _tableStore.UpsertAsync(meta.TableName, pk, rk, entity, meta);
 
         // Track ETag and RowKey (for time-keyed objects, RowKey is generated and must be tracked)
+        var etag = _tableStore.GetETag(meta.TableName, pk, rk) ?? "";
         TrackETag(typeof(T), pk, rk, etag);
         TrackRowKey(typeof(T), entity, pk, rk);
 
@@ -110,7 +112,7 @@ internal class LottaDBInstance : ILottaDB
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            var current = _tableStore.Get<T>(meta.TableName, partitionKey, rowKey, out var currentETag);
+            var (current, currentETag) = await _tableStore.GetAsync<T>(meta.TableName, partitionKey, rowKey);
             if (current == null)
                 throw new InvalidOperationException($"Object {typeof(T).Name} with key ({partitionKey}, {rowKey}) not found.");
 
@@ -118,8 +120,9 @@ internal class LottaDBInstance : ILottaDB
             var pk = meta.GetPartitionKey(mutated);
             var rk = meta.GetRowKey(mutated);
 
-            if (_tableStore.TryUpsertWithETag(meta.TableName, pk, rk, mutated, currentETag!, out var newETag))
+            if (await _tableStore.UpsertWithETagAsync(meta.TableName, pk, rk, mutated, meta, currentETag!))
             {
+                var newETag = _tableStore.GetETag(meta.TableName, pk, rk) ?? "";
                 TrackETag(typeof(T), pk, rk, newETag);
                 IndexObject(mutated, meta, pk, rk);
 
@@ -153,10 +156,10 @@ internal class LottaDBInstance : ILottaDB
         var meta = GetMetadata<T>();
 
         // Load before delete (for builders)
-        var existing = _tableStore.Get<T>(meta.TableName, partitionKey, rowKey, out _);
+        var (existing, _) = await _tableStore.GetAsync<T>(meta.TableName, partitionKey, rowKey);
 
         // Delete from table storage
-        _tableStore.Delete(meta.TableName, partitionKey, rowKey, out _);
+        await _tableStore.DeleteAsync(meta.TableName, partitionKey, rowKey);
 
         // Remove from Lucene
         RemoveFromIndex<T>(meta, partitionKey, rowKey);
@@ -191,20 +194,20 @@ internal class LottaDBInstance : ILottaDB
 
     // === Read (table storage) ===
 
-    public Task<T?> GetAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default) where T : class, new()
+    public async Task<T?> GetAsync<T>(string partitionKey, string rowKey, CancellationToken ct = default) where T : class, new()
     {
         var meta = GetMetadata<T>();
-        var result = _tableStore.Get<T>(meta.TableName, partitionKey, rowKey, out var etag);
+        var (result, etag) = await _tableStore.GetAsync<T>(meta.TableName, partitionKey, rowKey);
         if (result != null && etag != null)
             TrackETag(typeof(T), partitionKey, rowKey, etag);
-        return Task.FromResult(result);
+        return result;
     }
 
-    public Task<T?> GetAsync<T>(T entity, bool force = false, CancellationToken ct = default) where T : class, new()
+    public async Task<T?> GetAsync<T>(T entity, bool force = false, CancellationToken ct = default) where T : class, new()
     {
         var meta = GetMetadata<T>();
         var pk = meta.GetPartitionKey(entity);
-        var rk = meta.GetRowKey(entity);
+        var rk = GetTrackedRowKey(typeof(T), entity, pk) ?? meta.GetRowKey(entity);
 
         if (!force)
         {
@@ -213,21 +216,20 @@ internal class LottaDBInstance : ILottaDB
             {
                 var currentETag = _tableStore.GetETag(meta.TableName, pk, rk);
                 if (currentETag == trackedETag)
-                    return Task.FromResult<T?>(null); // Unchanged
+                    return null; // Unchanged
             }
         }
 
-        return GetAsync<T>(pk, rk, ct);
+        return await GetAsync<T>(pk, rk, ct);
     }
 
     public async IAsyncEnumerable<T> QueryAsync<T>() where T : class, new()
     {
         var meta = GetMetadata<T>();
-        foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+        await foreach (var item in _tableStore.QueryAllAsync<T>(meta.TableName))
         {
             yield return item;
         }
-        await Task.CompletedTask;
     }
 
     // === Read (Lucene) ===
@@ -243,7 +245,7 @@ internal class LottaDBInstance : ILottaDB
         // If a Lucene query string is provided, filter via Lucene query parser
         if (!string.IsNullOrEmpty(query))
         {
-            items = FilterByLuceneQuery(items, query, meta);
+            items = FilterByLuceneQuery(items, query, meta).ToList();
         }
 
         foreach (var item in items)
@@ -549,7 +551,7 @@ internal class LottaDBInstance : ILottaDB
 
             foreach (var (derivedPk, derivedRk) in keysToDelete)
             {
-                _tableStore.Delete(derivedMeta.TableName, derivedPk, derivedRk, out _);
+                await _tableStore.DeleteAsync(derivedMeta.TableName, derivedPk, derivedRk);
                 RemoveFromIndex<TDerived>(derivedMeta, derivedPk, derivedRk);
                 changes.Add(new ObjectChange { TypeName = typeof(TDerived).Name, Key = $"{derivedPk}|{derivedRk}", Kind = ChangeKind.Deleted });
                 await NotifyObserversAsync<TDerived>(null, derivedPk, derivedRk, ChangeKind.Deleted);
@@ -599,13 +601,6 @@ internal class LottaDBInstance : ILottaDB
 
         var viewMeta = _metadata[viewReg.ViewType];
 
-        // Get existing view keys before rebuild (for detecting deletes)
-        var existingKeys = new HashSet<string>();
-        foreach (var existing in _tableStore.QueryAll<object>(viewMeta.TableName))
-        {
-            // Can't easily enumerate typed objects here; skip for now
-        }
-
         // Execute the full view expression to produce new views
         List<object> newViews;
         try
@@ -625,7 +620,7 @@ internal class LottaDBInstance : ILottaDB
         }
 
         // Clear existing views of this type and replace with new results
-        _tableStore.Clear(viewMeta.TableName);
+        _tableStore.ClearTable(viewMeta.TableName);
 
         var saveMethod = typeof(LottaDBInstance)
             .GetMethod(nameof(SaveDerivedAsync), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
