@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="../Analysis.md" />
+    <File Path="../Architecture.md" />
+  </Folder>
+  <Project Path="LottaDB.Tests/LottaDB.Tests.csproj" Id="8068fd34-450f-41f2-9c0e-f39330c38af3" />
+  <Project Path="S:/github/LottaDB/src/LottaDB/LottaDB.csproj" Id="09a3fe38-05b1-48a6-90b9-689077d56a36" />
+</Solution>
