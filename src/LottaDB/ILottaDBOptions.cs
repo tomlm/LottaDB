@@ -20,7 +20,7 @@ public interface ILottaDBOptions
     /// <summary>
     /// Declare a materialized view as a LINQ join expression. LottaDB parses the expression tree
     /// to extract dependencies and join keys, and incrementally maintains the view as source objects change.
-    /// Use <see cref="ILottaDB.Search{T}"/> in the expression for LINQ query syntax support.
+    /// Use <see cref="ILottaDB.Query{T}"/> in the expression for LINQ query syntax support.
     /// </summary>
     ILottaDBOptions CreateView<TView>(Expression<Func<ILottaDB, IQueryable<TView>>> viewExpression) where TView : class, new();
 

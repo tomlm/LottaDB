@@ -15,13 +15,12 @@ internal class LottaDBInstance : ILottaDB
     private readonly IBuilderFailureSink? _failureSink;
     private readonly Internal.TableStorageAdapter _tableStore;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
-    private readonly ConcurrentDictionary<Type, object> _luceneProviders = new();
+    private readonly ConcurrentDictionary<Type, LuceneIndex> _luceneIndexes = new();
     private readonly ConcurrentDictionary<string, (string pk, string rk, string etag)> _etagTracker = new();
     // Track generated RowKeys for objects so DeleteAsync(entity) works for time-keyed types
     private readonly ConcurrentDictionary<string, string> _rowKeyTracker = new();
     private readonly ConcurrentDictionary<Type, List<object>> _observers = new();
 
-    private const LuceneVersion AppLuceneVersion = LuceneVersion.LUCENE_48;
 
     public LottaDBInstance(LottaDBOptions options, Azure.Data.Tables.TableServiceClient tableServiceClient, IBuilderFailureSink? failureSink = null)
     {
@@ -235,18 +234,14 @@ internal class LottaDBInstance : ILottaDB
 
     public IQueryable<T> Search<T>() where T : class, new()
     {
-        // TODO: Once Iciclecreek.Lucene.Net.Linq supports searcher refresh,
-        // switch to provider.AsQueryable<T>() for real Lucene query pushdown.
-        // For now, use table storage as the backing queryable.
-        var meta = GetMetadata<T>();
-        return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
+        var index = GetOrCreateLuceneIndex<T>();
+        return index.Search<T>();
     }
 
     public IQueryable<T> Search<T>(string query) where T : class, new()
     {
-        // TODO: Use Lucene query parser to pre-filter results
-        var meta = GetMetadata<T>();
-        return _tableStore.QueryAll<T>(meta.TableName).AsQueryable();
+        // TODO: Parse Lucene query string and apply as pre-filter
+        return Search<T>();
     }
 
     // === Observe ===
@@ -266,31 +261,28 @@ internal class LottaDBInstance : ILottaDB
     public Task RebuildIndex<T>(CancellationToken ct = default) where T : class, new()
     {
         var meta = GetMetadata<T>();
-        var provider = GetOrCreateLuceneProvider<T>();
+        var index = GetOrCreateLuceneIndex<T>();
 
-        using var session = provider.OpenSession<T>();
-        session.DeleteAll();
-
-        foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+        index.WriteWithSession<T>(session =>
         {
-            session.Add(item);
-        }
+            session.DeleteAll();
+            foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+            {
+                session.Add(item);
+            }
+        });
 
         return Task.CompletedTask;
     }
 
     // === Lucene internals ===
 
-    private Lucene.Net.Linq.LuceneDataProvider GetOrCreateLuceneProvider<T>() where T : class, new()
+    private LuceneIndex GetOrCreateLuceneIndex<T>() where T : class, new()
     {
-        return (Lucene.Net.Linq.LuceneDataProvider)_luceneProviders.GetOrAdd(typeof(T), _ =>
+        return _luceneIndexes.GetOrAdd(typeof(T), _ =>
         {
             var dir = _options.DirectoryProvider!.GetDirectory(typeof(T).Name.ToLowerInvariant());
-            using (var writer = new IndexWriter(dir, new IndexWriterConfig(AppLuceneVersion, new StandardAnalyzer(AppLuceneVersion))))
-            {
-                writer.Commit();
-            }
-            return new Lucene.Net.Linq.LuceneDataProvider(dir, AppLuceneVersion);
+            return new LuceneIndex(dir);
         });
     }
 
@@ -298,20 +290,19 @@ internal class LottaDBInstance : ILottaDB
     {
         try
         {
-            var provider = GetOrCreateLuceneProvider<T>();
-            using var session = provider.OpenSession<T>();
-            // Delete all existing docs and re-add from table storage for consistency
-            // This handles both inserts and updates
-            session.DeleteAll();
-            foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+            var index = GetOrCreateLuceneIndex<T>();
+            index.WriteWithSession<T>(session =>
             {
-                session.Add(item);
-            }
+                session.DeleteAll();
+                foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+                {
+                    session.Add(item);
+                }
+            });
         }
         catch
         {
             // If Lucene can't index this type (e.g., unsupported field types), skip silently.
-            // The object is still in table storage.
         }
     }
 
@@ -319,19 +310,17 @@ internal class LottaDBInstance : ILottaDB
     {
         try
         {
-            var provider = GetOrCreateLuceneProvider<T>();
-            using var session = provider.OpenSession<T>();
-            session.DeleteAll();
-            // Re-add remaining objects from table storage
-            foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+            var index = GetOrCreateLuceneIndex<T>();
+            index.WriteWithSession<T>(session =>
             {
-                session.Add(item);
-            }
+                session.DeleteAll();
+                foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+                {
+                    session.Add(item);
+                }
+            });
         }
-        catch
-        {
-            // Skip if Lucene can't handle this type
-        }
+        catch { }
     }
 
 
@@ -614,16 +603,17 @@ internal class LottaDBInstance : ILottaDB
         try
         {
             var meta = GetMetadata<T>();
-            var provider = GetOrCreateLuceneProvider<T>();
-
-            using var session = provider.OpenSession<T>();
-            session.DeleteAll();
-            foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+            var index = GetOrCreateLuceneIndex<T>();
+            index.WriteWithSession<T>(session =>
             {
-                session.Add(item);
-            }
+                session.DeleteAll();
+                foreach (var item in _tableStore.QueryAll<T>(meta.TableName))
+                {
+                    session.Add(item);
+                }
+            });
         }
-        catch { /* skip if Lucene can't handle this type */ }
+        catch { }
     }
 }
 

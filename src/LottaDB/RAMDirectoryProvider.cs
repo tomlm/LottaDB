@@ -13,6 +13,7 @@ public class RAMDirectoryProvider : IDirectoryProvider
         if (!_directories.TryGetValue(typeName, out var dir))
         {
             dir = new Lucene.Net.Store.RAMDirectory();
+            dir.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
             _directories[typeName] = dir;
         }
         return dir;

@@ -13,8 +13,8 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow });
 
         // Ad-hoc join: materialize both sides via SearchAsync, then LINQ join in memory
-        var notes = db.Search<Note>();
-        var actors = db.Search<Actor>();
+        var notes = db.Search<Note>().ToList();
+        var actors = db.Search<Actor>().ToList();
 
         var joined = (
             from note in notes
@@ -37,8 +37,8 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow });
 
-        var notes = db.Search<Note>().Where(n => n.Content.Contains("Important"));
-        var actors = db.Search<Actor>();
+        var notes = db.Search<Note>().ToList().Where(n => n.Content.Contains("Important"));
+        var actors = db.Search<Actor>().ToList();
 
         var joined = (
             from note in notes

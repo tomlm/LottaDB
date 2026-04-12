@@ -62,16 +62,8 @@ internal class ViewExpressionVisitor : ExpressionVisitor
 
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
-        // Detect db.Search<T>() calls to extract source types
-        if (node.Method.Name == "Search" && node.Method.IsGenericMethod)
-        {
-            var sourceType = node.Method.GetGenericArguments()[0];
-            if (!SourceTypes.Contains(sourceType))
-                SourceTypes.Add(sourceType);
-        }
-
-        // Detect SearchAsync<T>() as well
-        if (node.Method.Name == "SearchAsync" && node.Method.IsGenericMethod)
+        // Detect db.Query<T>() or db.Search<T>() calls to extract source types
+        if ((node.Method.Name == "Query" || node.Method.Name == "Search") && node.Method.IsGenericMethod)
         {
             var sourceType = node.Method.GetGenericArguments()[0];
             if (!SourceTypes.Contains(sourceType))
@@ -163,12 +155,12 @@ internal class ViewExpressionVisitor : ExpressionVisitor
 
     private static Type? GetSourceTypeFromExpression(Expression expr)
     {
-        // Walk through to find the Search<T>() call
+        // Walk through to find the Query<T>() or Search<T>() call
         if (expr is MethodCallExpression methodCall)
         {
-            if (methodCall.Method.Name == "Search" && methodCall.Method.IsGenericMethod)
+            if ((methodCall.Method.Name == "Query" || methodCall.Method.Name == "Search") && methodCall.Method.IsGenericMethod)
                 return methodCall.Method.GetGenericArguments()[0];
-            // Could be chained: Search<T>().Where(...)
+            // Could be chained: Query<T>().Where(...)
             foreach (var arg in methodCall.Arguments)
             {
                 var result = GetSourceTypeFromExpression(arg);

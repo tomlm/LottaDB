@@ -7,8 +7,8 @@ public class CreateViewTests
         return TestLottaDBFactory.CreateWithBuilders(opts =>
         {
             opts.CreateView<NoteView>(db =>
-                from note in db.Search<Note>()
-                join actor in db.Search<Actor>()
+                from note in db.Query<Note>()
+                join actor in db.Query<Actor>()
                     on note.AuthorId equals actor.Username
                 select new NoteView
                 {
@@ -119,8 +119,8 @@ public class CreateViewTests
         {
             // Only create views for notes with content containing "important"
             opts.CreateView<NoteView>(d =>
-                from note in d.Search<Note>().Where(n => n.Content.Contains("important"))
-                join actor in d.Search<Actor>()
+                from note in d.Query<Note>().Where(n => n.Content.Contains("important"))
+                join actor in d.Query<Actor>()
                     on note.AuthorId equals actor.Username
                 select new NoteView
                 {

@@ -35,7 +35,7 @@ public class Note
     [Field]
     public string Content { get; set; } = "";
 
-    public List<string> Tags { get; set; } = new();
+    public IList<string> Tags { get; set; } = new List<string>();
 }
 
 public class NoteView
@@ -59,7 +59,7 @@ public class NoteView
 
     public DateTimeOffset Published { get; set; }
 
-    public string[] Tags { get; set; } = Array.Empty<string>();
+    public IList<string> Tags { get; set; } = new List<string>();
 }
 
 public class ModerationView

@@ -8,8 +8,8 @@ public class CascadingViewTests
         {
             // NoteView depends on Note + Actor
             opts.CreateView<NoteView>(db =>
-                from note in db.Search<Note>()
-                join actor in db.Search<Actor>()
+                from note in db.Query<Note>()
+                join actor in db.Query<Actor>()
                     on note.AuthorId equals actor.Username
                 select new NoteView
                 {
@@ -26,7 +26,7 @@ public class CascadingViewTests
 
             // FeedEntry depends on NoteView (cascading!)
             opts.CreateView<FeedEntry>(db =>
-                from nv in db.Search<NoteView>()
+                from nv in db.Query<NoteView>()
                 select new FeedEntry
                 {
                     Domain = nv.Domain,
