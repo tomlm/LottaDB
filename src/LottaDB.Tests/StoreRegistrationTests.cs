@@ -158,4 +158,76 @@ public class StoreRegistrationTests
         Assert.Equal("n2", notes[0].NoteId);
         Assert.Equal("n1", notes[1].NoteId);
     }
+
+    [Fact]
+    public async Task Store_Fluent_SetRowKey_WithAscendingTime()
+    {
+        var db = TestLottaDBFactory.CreateWithBuilders();
+
+        var older = new LogEntry { Source = "app", LogId = "L1", Message = "first", Timestamp = DateTimeOffset.UtcNow.AddHours(-1) };
+        var newer = new LogEntry { Source = "app", LogId = "L2", Message = "second", Timestamp = DateTimeOffset.UtcNow };
+        await db.SaveAsync(older);
+        await db.SaveAsync(newer);
+
+        // Ascending time: oldest first
+        var logs = await db.QueryAsync<LogEntry>().ToListAsync();
+        Assert.Equal(2, logs.Count);
+        Assert.Equal("L1", logs[0].LogId);
+        Assert.Equal("L2", logs[1].LogId);
+    }
+
+    [Fact]
+    public async Task Store_Fluent_CustomRowKey()
+    {
+        var services = new ServiceCollection();
+        services.AddLottaDB(opts =>
+        {
+            opts.UseInMemoryTables();
+            opts.UseLuceneDirectory(new RAMDirectoryProvider());
+            opts.Store<Actor>(s =>
+            {
+                s.SetPartitionKey(a => a.Domain);
+                s.SetRowKey(a => $"{a.Username}-custom");
+            });
+        });
+        var sp = services.BuildServiceProvider();
+        var db = sp.GetRequiredService<ILottaDB>();
+
+        await db.SaveAsync(new Actor { Domain = "custom.test", Username = "alice", DisplayName = "Alice" });
+
+        // The custom row key should be "alice-custom"
+        var loaded = await db.GetAsync<Actor>("custom.test", "alice-custom");
+        Assert.NotNull(loaded);
+        Assert.Equal("Alice", loaded.DisplayName);
+    }
+
+    [Fact]
+    public async Task Store_MixedAttributeAndFluent_FluentWins()
+    {
+        var services = new ServiceCollection();
+        services.AddLottaDB(opts =>
+        {
+            opts.UseInMemoryTables();
+            opts.UseLuceneDirectory(new RAMDirectoryProvider());
+            // Actor has [PartitionKey] on Domain, but fluent overrides it
+            opts.Store<Actor>(s =>
+            {
+                s.SetPartitionKey(a => $"override:{a.Domain}");
+                s.SetRowKey(a => a.Username);
+            });
+        });
+        var sp = services.BuildServiceProvider();
+        var db = sp.GetRequiredService<ILottaDB>();
+
+        await db.SaveAsync(new Actor { Domain = "mixed.test", Username = "alice", DisplayName = "Alice" });
+
+        // Fluent partition key should win: "override:mixed.test"
+        var loaded = await db.GetAsync<Actor>("override:mixed.test", "alice");
+        Assert.NotNull(loaded);
+        Assert.Equal("Alice", loaded.DisplayName);
+
+        // Original attribute-derived key should NOT work
+        var notFound = await db.GetAsync<Actor>("mixed.test", "alice");
+        Assert.Null(notFound);
+    }
 }

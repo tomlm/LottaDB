@@ -23,6 +23,8 @@ public class LottaDBFixture : IDisposable
             opts.Store<OrderWithLines>();
             opts.Store<CycleA>();
             opts.Store<CycleB>();
+            opts.Store<FeedEntry>();
+            opts.Store<LogEntry>();
         });
 
         ServiceProvider = services.BuildServiceProvider();
@@ -55,6 +57,8 @@ public static class TestLottaDBFactory
             opts.Store<OrderWithLines>();
             opts.Store<CycleA>();
             opts.Store<CycleB>();
+            opts.Store<FeedEntry>();
+            opts.Store<LogEntry>();
 
             configure?.Invoke(opts);
         });

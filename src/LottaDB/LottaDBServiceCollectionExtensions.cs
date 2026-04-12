@@ -15,7 +15,11 @@ public static class LottaDBServiceCollectionExtensions
         var options = new LottaDBOptions();
         configure(options);
         services.AddSingleton(options);
-        services.AddSingleton<ILottaDB>(sp => new LottaDBInstance(options));
+        services.AddSingleton<ILottaDB>(sp =>
+        {
+            var sink = sp.GetService<IBuilderFailureSink>();
+            return new LottaDBInstance(options, sink);
+        });
         return services;
     }
 }

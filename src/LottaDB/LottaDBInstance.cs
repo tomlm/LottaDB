@@ -12,6 +12,7 @@ namespace LottaDB;
 internal class LottaDBInstance : ILottaDB
 {
     private readonly LottaDBOptions _options;
+    private readonly IBuilderFailureSink? _failureSink;
     private readonly InMemoryTableStore _tableStore = new();
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, object> _luceneProviders = new();
@@ -22,9 +23,10 @@ internal class LottaDBInstance : ILottaDB
 
     private const LuceneVersion AppLuceneVersion = LuceneVersion.LUCENE_48;
 
-    public LottaDBInstance(LottaDBOptions options)
+    public LottaDBInstance(LottaDBOptions options, IBuilderFailureSink? failureSink = null)
     {
         _options = options;
+        _failureSink = failureSink;
         InitializeMetadata();
         InitializeObservers();
     }
@@ -360,6 +362,12 @@ internal class LottaDBInstance : ILottaDB
 
     private static string ETagKey(Type type, string pk, string rk) => $"{type.FullName}||{pk}||{rk}";
 
+    private void ReportBuilderError(List<BuilderError> errors, BuilderError error)
+    {
+        errors.Add(error);
+        _failureSink?.ReportAsync(error).ConfigureAwait(false).GetAwaiter().GetResult();
+    }
+
     // RowKey tracking for time-keyed objects
     private void TrackRowKey(Type type, object entity, string pk, string rk)
     {
@@ -426,7 +434,7 @@ internal class LottaDBInstance : ILottaDB
             }
             catch (Exception ex)
             {
-                errors.Add(new BuilderError
+                ReportBuilderError(errors, new BuilderError
                 {
                     BuilderName = reg.BuilderType.Name,
                     TriggerTypeName = triggerType.Name,
@@ -445,7 +453,7 @@ internal class LottaDBInstance : ILottaDB
             }
             catch (Exception ex)
             {
-                errors.Add(new BuilderError
+                ReportBuilderError(errors, new BuilderError
                 {
                     BuilderName = $"CreateView<{viewReg.ViewType.Name}>",
                     TriggerTypeName = triggerType.Name,
@@ -583,7 +591,7 @@ internal class LottaDBInstance : ILottaDB
         }
         catch (Exception ex)
         {
-            errors.Add(new BuilderError
+            ReportBuilderError(errors, new BuilderError
             {
                 BuilderName = $"CreateView<{viewReg.ViewType.Name}>",
                 TriggerTypeName = triggerType.Name,

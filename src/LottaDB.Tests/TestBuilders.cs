@@ -98,3 +98,15 @@ public class CycleBBuilder : IBuilder<CycleB, CycleA>
         };
     }
 }
+
+// For IBuilderFailureSink testing
+public class TestBuilderFailureSink : IBuilderFailureSink
+{
+    public List<BuilderError> ReportedErrors { get; } = new();
+
+    public Task ReportAsync(BuilderError error, CancellationToken ct = default)
+    {
+        ReportedErrors.Add(error);
+        return Task.CompletedTask;
+    }
+}

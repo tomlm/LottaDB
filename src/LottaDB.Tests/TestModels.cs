@@ -98,6 +98,34 @@ public class CycleB
     public string Value { get; set; } = "";
 }
 
+// For cascading CreateView tests
+public class FeedEntry
+{
+    [PartitionKey]
+    public string Domain { get; set; } = "";
+
+    [RowKey]
+    public string FeedEntryId { get; set; } = "";
+
+    [Field]
+    public string Title { get; set; } = "";
+
+    public DateTimeOffset Published { get; set; }
+}
+
+// For ascending time tests
+public class LogEntry
+{
+    [PartitionKey]
+    public string Source { get; set; } = "";
+
+    [RowKey(Strategy = RowKeyStrategy.AscendingTime)]
+    public DateTimeOffset Timestamp { get; set; }
+
+    public string Message { get; set; } = "";
+    public string LogId { get; set; } = "";
+}
+
 // A complex object for JSON roundtrip testing
 public class OrderWithLines
 {
