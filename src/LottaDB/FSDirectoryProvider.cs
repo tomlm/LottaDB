@@ -1,5 +1,9 @@
 namespace LottaDB;
 
+/// <summary>
+/// Filesystem-backed Lucene directory provider. Each type gets its own subdirectory.
+/// Use for production deployments.
+/// </summary>
 public class FSDirectoryProvider : IDirectoryProvider
 {
     private readonly string _basePath;

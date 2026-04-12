@@ -1,5 +1,9 @@
 namespace LottaDB;
 
+/// <summary>
+/// In-memory Lucene directory provider. Each type gets its own RAMDirectory.
+/// Use for unit tests alongside Spotflow in-memory table storage.
+/// </summary>
 public class RAMDirectoryProvider : IDirectoryProvider
 {
     private readonly Dictionary<string, Lucene.Net.Store.RAMDirectory> _directories = new();
