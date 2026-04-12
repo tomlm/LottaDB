@@ -30,7 +30,7 @@ public class CycleDetectionTests
         await db.SaveAsync(new CycleA { Id = "c2", Value = "start" });
 
         // CycleA should produce CycleB
-        var b = await db.GetAsync<CycleB>("default", "c2");
+        var b = await db.GetAsync<CycleB>("c2");
         Assert.NotNull(b);
     }
 
@@ -48,8 +48,8 @@ public class CycleDetectionTests
         await db.SaveAsync(new CycleA { Id = "x2", Value = "two" });
 
         // Both should produce CycleB objects
-        Assert.NotNull(await db.GetAsync<CycleB>("default", "x1"));
-        Assert.NotNull(await db.GetAsync<CycleB>("default", "x2"));
+        Assert.NotNull(await db.GetAsync<CycleB>("x1"));
+        Assert.NotNull(await db.GetAsync<CycleB>("x2"));
     }
 
     [Fact]

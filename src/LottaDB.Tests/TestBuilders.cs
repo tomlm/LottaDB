@@ -12,7 +12,7 @@ public class NoteViewExplicitBuilder : IBuilder<Note, NoteView>
         if (trigger == TriggerKind.Deleted)
             yield break;
 
-        var author = await db.GetAsync<Actor>(note.Domain, note.AuthorId, ct);
+        var author = await db.GetAsync<Actor>(note.AuthorId, ct);
 
         yield return new BuildResult<NoteView>
         {

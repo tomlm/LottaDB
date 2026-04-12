@@ -151,11 +151,36 @@ internal class TableStorageAdapter
         return results;
     }
 
+    public List<T> QueryAll<T>(string tableName, string partitionKey) where T : class, new()
+    {
+        var table = GetTable(tableName);
+        var results = new List<T>();
+        foreach (var entity in table.Query<TableEntity>(e => e.PartitionKey == partitionKey))
+        {
+            var json = entity.GetString("_json");
+            if (json != null)
+            {
+                var obj = JsonSerializer.Deserialize<T>(json);
+                if (obj != null)
+                    results.Add(obj);
+            }
+        }
+        return results;
+    }
+
     public void ClearTable(string tableName)
     {
         var table = GetTable(tableName);
-        // Delete all entities
         foreach (var entity in table.Query<TableEntity>())
+        {
+            table.DeleteEntity(entity.PartitionKey, entity.RowKey);
+        }
+    }
+
+    public void ClearTable(string tableName, string partitionKey)
+    {
+        var table = GetTable(tableName);
+        foreach (var entity in table.Query<TableEntity>(e => e.PartitionKey == partitionKey))
         {
             table.DeleteEntity(entity.PartitionKey, entity.RowKey);
         }

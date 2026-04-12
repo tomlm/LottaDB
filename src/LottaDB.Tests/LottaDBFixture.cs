@@ -9,34 +9,13 @@ namespace LottaDB.Tests;
 public class LottaDBFixture : IDisposable
 {
     public ILottaDB Db { get; }
-    public ServiceProvider ServiceProvider { get; }
 
     public LottaDBFixture()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<TableServiceClient>(CreateInMemoryTableServiceClient());
-        services.AddLottaDB(opts =>
-        {
-            opts.UseLuceneDirectory(new RAMDirectoryProvider());
-            opts.Store<Actor>();
-            opts.Store<Note>();
-            opts.Store<NoteView>();
-            opts.Store<ModerationView>();
-            opts.Store<OrderWithLines>();
-            opts.Store<CycleA>();
-            opts.Store<CycleB>();
-            opts.Store<FeedEntry>();
-            opts.Store<LogEntry>();
-        });
-
-        ServiceProvider = services.BuildServiceProvider();
-        Db = ServiceProvider.GetRequiredService<ILottaDB>();
+        Db = CreateDb();
     }
 
-    public void Dispose()
-    {
-        ServiceProvider.Dispose();
-    }
+    public void Dispose() { }
 
     public static TableServiceClient CreateInMemoryTableServiceClient()
     {
@@ -44,34 +23,37 @@ public class LottaDBFixture : IDisposable
         var account = provider.AddAccount($"test{Guid.NewGuid():N}");
         return InMemoryTableServiceClient.FromAccount(account);
     }
+
+    public static ILottaDB CreateDb(Action<ILottaDBOptions>? configure = null)
+    {
+        var tableClient = CreateInMemoryTableServiceClient();
+        var directory = new Lucene.Net.Store.RAMDirectory();
+        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+
+        var options = new LottaDBOptions();
+        options.Store<Actor>();
+        options.Store<Note>();
+        options.Store<NoteView>();
+        options.Store<ModerationView>();
+        options.Store<OrderWithLines>();
+        options.Store<CycleA>();
+        options.Store<CycleB>();
+        options.Store<FeedEntry>();
+        options.Store<LogEntry>();
+
+        configure?.Invoke(options);
+
+        return new LottaDBInstance($"test{Guid.NewGuid():N}", tableClient, directory, options);
+    }
 }
 
 /// <summary>
-/// Creates a fresh LottaDB instance with explicit builders registered.
+/// Creates a fresh LottaDB instance per test.
 /// </summary>
 public static class TestLottaDBFactory
 {
     public static ILottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
-        services.AddLottaDB(opts =>
-        {
-            opts.UseLuceneDirectory(new RAMDirectoryProvider());
-            opts.Store<Actor>();
-            opts.Store<Note>();
-            opts.Store<NoteView>();
-            opts.Store<ModerationView>();
-            opts.Store<OrderWithLines>();
-            opts.Store<CycleA>();
-            opts.Store<CycleB>();
-            opts.Store<FeedEntry>();
-            opts.Store<LogEntry>();
-
-            configure?.Invoke(opts);
-        });
-
-        var sp = services.BuildServiceProvider();
-        return sp.GetRequiredService<ILottaDB>();
+        return LottaDBFixture.CreateDb(configure);
     }
 }

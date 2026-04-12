@@ -191,32 +191,19 @@ internal class ViewDefinition
         return CompiledQuery(db);
     }
 
-    public List<(string pk, string rk)> FindAffectedViewKeys(object entity, Type triggerType, LottaDBInstance db)
+    public List<string> FindAffectedViewKeys(object entity, Type triggerType, LottaDBInstance db)
     {
-        // Execute the full query and find views that match
-        // This is a brute-force approach — execute the query, collect all results,
-        // then return their keys. For the per-tenant scaling model this is fine.
-        var results = new List<(string pk, string rk)>();
-
+        var results = new List<string>();
         try
         {
             var allViews = Execute(db);
             foreach (var view in allViews)
             {
-                // Extract PK/RK from the view object
                 if (db._metadata.TryGetValue(ViewType, out var meta))
-                {
-                    var pk = meta.GetPartitionKey(view);
-                    var rk = meta.GetRowKey(view);
-                    results.Add((pk, rk));
-                }
+                    results.Add(meta.GetKey(view));
             }
         }
-        catch
-        {
-            // If execution fails (e.g., missing data), return empty
-        }
-
+        catch { }
         return results;
     }
 }

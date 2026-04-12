@@ -94,22 +94,16 @@ public class ObserveTests
     public async Task Observe_RegisteredInConfig_Works()
     {
         ObjectChange<Actor>? received = null;
-        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
-        services.AddSingleton<Azure.Data.Tables.TableServiceClient>(LottaDBFixture.CreateInMemoryTableServiceClient());
-        services.AddLottaDB(opts =>
+        var db = LottaDBFixture.CreateDb(opts =>
         {
-            opts.UseLuceneDirectory(new RAMDirectoryProvider());
-            opts.Store<Actor>();
             opts.Observe<Actor>(change =>
             {
                 received = change;
                 return Task.CompletedTask;
             });
         });
-        var sp = services.BuildServiceProvider();
-        var db = sp.GetRequiredService<ILottaDB>();
 
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "config", DisplayName = "Config" });
+        await db.SaveAsync(new Actor { Username = "config", DisplayName = "Config" });
 
         Assert.NotNull(received);
     }

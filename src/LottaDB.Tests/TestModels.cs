@@ -5,24 +5,21 @@ namespace LottaDB.Tests;
 
 public class Actor
 {
-    [PartitionKey]
-    public string Domain { get; set; } = "";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true, IndexMode = IndexMode.NotAnalyzed)]
     public string Username { get; set; } = "";
 
+    [Tag]
     [Field(IndexMode.NotAnalyzed)]
     public string DisplayName { get; set; } = "";
 
+    public string Domain { get; set; } = "";
     public string AvatarUrl { get; set; } = "";
 }
 
 public class Note
 {
-    [PartitionKey]
-    public string Domain { get; set; } = "";
-
-    [RowKey(Strategy = RowKeyStrategy.DescendingTime)]
+    [Key(Strategy = KeyStrategy.DescendingTime)]
     public DateTimeOffset Published { get; set; }
 
     [Field(Key = true)]
@@ -35,15 +32,14 @@ public class Note
     [Field]
     public string Content { get; set; } = "";
 
+    public string Domain { get; set; } = "";
     public IList<string> Tags { get; set; } = new List<string>();
 }
 
 public class NoteView
 {
-    [PartitionKey]
-    public string Domain { get; set; } = "";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true)]
     public string NoteId { get; set; } = "";
 
     [Field(IndexMode.NotAnalyzed)]
@@ -53,88 +49,72 @@ public class NoteView
     public string AuthorDisplay { get; set; } = "";
 
     public string AvatarUrl { get; set; } = "";
+    public string Domain { get; set; } = "";
 
     [Field]
     public string Content { get; set; } = "";
 
     public DateTimeOffset Published { get; set; }
-
     public IList<string> Tags { get; set; } = new List<string>();
 }
 
 public class ModerationView
 {
-    [PartitionKey]
-    public string Domain { get; set; } = "";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true)]
     public string NoteId { get; set; } = "";
 
+    public string Domain { get; set; } = "";
     public string AuthorName { get; set; } = "";
     public string Content { get; set; } = "";
     public DateTimeOffset FlaggedAt { get; set; }
 }
 
-// For cycle detection tests
 public class CycleA
 {
-    [PartitionKey]
-    public string Partition { get; set; } = "default";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true)]
     public string Id { get; set; } = "";
-
     public string Value { get; set; } = "";
 }
 
 public class CycleB
 {
-    [PartitionKey]
-    public string Partition { get; set; } = "default";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true)]
     public string Id { get; set; } = "";
-
     public string Value { get; set; } = "";
 }
 
-// For cascading CreateView tests
 public class FeedEntry
 {
-    [PartitionKey]
-    public string Domain { get; set; } = "";
-
-    [RowKey]
+    [Key]
+    [Field(Key = true)]
     public string FeedEntryId { get; set; } = "";
 
     [Field]
     public string Title { get; set; } = "";
 
+    public string Domain { get; set; } = "";
     public DateTimeOffset Published { get; set; }
 }
 
-// For ascending time tests
 public class LogEntry
 {
-    [PartitionKey]
-    public string Source { get; set; } = "";
-
-    [RowKey(Strategy = RowKeyStrategy.AscendingTime)]
+    [Key(Strategy = KeyStrategy.AscendingTime)]
     public DateTimeOffset Timestamp { get; set; }
 
+    public string Source { get; set; } = "";
     public string Message { get; set; } = "";
     public string LogId { get; set; } = "";
 }
 
-// A complex object for JSON roundtrip testing
 public class OrderWithLines
 {
-    [PartitionKey]
-    public string TenantId { get; set; } = "";
-
-    [RowKey]
+    [Key]
     public string OrderId { get; set; } = "";
 
+    public string TenantId { get; set; } = "";
     public decimal Total { get; set; }
     public List<OrderLine> Lines { get; set; } = new();
     public Dictionary<string, string> Metadata { get; set; } = new();

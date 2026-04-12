@@ -4,17 +4,10 @@ namespace LottaDB;
 
 public class LottaDBOptions : ILottaDBOptions
 {
-    internal IDirectoryProvider? DirectoryProvider { get; private set; }
     internal Dictionary<Type, object> StoreConfigurations { get; } = new();
     internal List<ViewRegistration> ViewRegistrations { get; } = new();
     internal List<BuilderRegistration> BuilderRegistrations { get; } = new();
     internal List<ObserverRegistration> ObserverRegistrations { get; } = new();
-
-    public ILottaDBOptions UseLuceneDirectory(IDirectoryProvider provider)
-    {
-        DirectoryProvider = provider;
-        return this;
-    }
 
     public ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new()
     {

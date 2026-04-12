@@ -46,12 +46,12 @@ public class CascadingViewTests
         await db.SaveAsync(new Note { Domain = "cascade.test", NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow });
 
         // NoteView should exist
-        var noteView = await db.GetAsync<NoteView>("cascade.test", "c1");
+        var noteView = await db.GetAsync<NoteView>("c1");
         Assert.NotNull(noteView);
         Assert.Equal("Alice", noteView.AuthorDisplay);
 
         // FeedEntry should also exist (cascaded from NoteView)
-        var feedEntry = await db.GetAsync<FeedEntry>("cascade.test", "c1");
+        var feedEntry = await db.GetAsync<FeedEntry>("c1");
         Assert.NotNull(feedEntry);
         Assert.Contains("Alice", feedEntry.Title);
     }
@@ -67,12 +67,12 @@ public class CascadingViewTests
         await db.SaveAsync(new Actor { Domain = "cascade.test", Username = "updater", DisplayName = "After" });
 
         // NoteView should reflect new display name
-        var noteView = await db.GetAsync<NoteView>("cascade.test", "c2");
+        var noteView = await db.GetAsync<NoteView>("c2");
         Assert.NotNull(noteView);
         Assert.Equal("After", noteView.AuthorDisplay);
 
         // FeedEntry should also update (cascaded)
-        var feedEntry = await db.GetAsync<FeedEntry>("cascade.test", "c2");
+        var feedEntry = await db.GetAsync<FeedEntry>("c2");
         Assert.NotNull(feedEntry);
         Assert.Contains("After", feedEntry.Title);
     }

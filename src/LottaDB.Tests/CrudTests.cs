@@ -14,7 +14,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         var actor = new Actor { Domain = "crud.test", Username = "save-get", DisplayName = "Test" };
         await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "save-get");
+        var loaded = await _db.GetAsync<Actor>("save-get");
         Assert.NotNull(loaded);
         Assert.Equal("Test", loaded.DisplayName);
     }
@@ -23,8 +23,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_WithExplicitKeys_Works()
     {
         var actor = new Actor { Domain = "crud.test", Username = "explicit-keys", DisplayName = "Explicit" };
-        await _db.SaveAsync("crud.test", "explicit-keys", actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "explicit-keys");
+        await _db.SaveAsync("explicit-keys", actor);
+        var loaded = await _db.GetAsync<Actor>("explicit-keys");
         Assert.NotNull(loaded);
         Assert.Equal("Explicit", loaded.DisplayName);
     }
@@ -38,7 +38,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         actor.DisplayName = "V2";
         await _db.SaveAsync(actor);
 
-        var loaded = await _db.GetAsync<Actor>("crud.test", "overwrite");
+        var loaded = await _db.GetAsync<Actor>("overwrite");
         Assert.NotNull(loaded);
         Assert.Equal("V2", loaded.DisplayName);
     }
@@ -58,7 +58,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         var actor = new Actor { Domain = "crud.test", Username = "get-by-keys", DisplayName = "Found" };
         await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "get-by-keys");
+        var loaded = await _db.GetAsync<Actor>("get-by-keys");
         Assert.NotNull(loaded);
         Assert.Equal("Found", loaded.DisplayName);
     }
@@ -66,7 +66,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task GetAsync_NonExistent_ReturnsNull()
     {
-        var loaded = await _db.GetAsync<Actor>("crud.test", "does-not-exist");
+        var loaded = await _db.GetAsync<Actor>("does-not-exist");
         Assert.Null(loaded);
     }
 
@@ -75,8 +75,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         var actor = new Actor { Domain = "crud.test", Username = "delete-me", DisplayName = "Gone" };
         await _db.SaveAsync(actor);
-        await _db.DeleteAsync<Actor>("crud.test", "delete-me");
-        var loaded = await _db.GetAsync<Actor>("crud.test", "delete-me");
+        await _db.DeleteAsync<Actor>("delete-me");
+        var loaded = await _db.GetAsync<Actor>("delete-me");
         Assert.Null(loaded);
     }
 
@@ -86,7 +86,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         var actor = new Actor { Domain = "crud.test", Username = "delete-obj", DisplayName = "Gone" };
         await _db.SaveAsync(actor);
         await _db.DeleteAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "delete-obj");
+        var loaded = await _db.GetAsync<Actor>("delete-obj");
         Assert.Null(loaded);
     }
 
@@ -103,7 +103,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_NonExistent_NoError()
     {
         // Should not throw
-        var result = await _db.DeleteAsync<Actor>("crud.test", "never-existed");
+        var result = await _db.DeleteAsync<Actor>("never-existed");
         Assert.NotNull(result);
     }
 
@@ -128,7 +128,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         };
         await _db.SaveAsync(order);
 
-        var loaded = await _db.GetAsync<OrderWithLines>("crud.test", "order-1");
+        var loaded = await _db.GetAsync<OrderWithLines>("order-1");
         Assert.NotNull(loaded);
         Assert.Equal(150.50m, loaded.Total);
         Assert.Equal(2, loaded.Lines.Count);
@@ -142,7 +142,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         var actor = new Actor { Domain = "crud.test", Username = "etag-cond", DisplayName = "Stable" };
         await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "etag-cond");
+        var loaded = await _db.GetAsync<Actor>("etag-cond");
         Assert.NotNull(loaded);
 
         // Conditional get: object hasn't changed, should return null
@@ -155,7 +155,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         var actor = new Actor { Domain = "crud.test", Username = "etag-force", DisplayName = "Forced" };
         await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("crud.test", "etag-force");
+        var loaded = await _db.GetAsync<Actor>("etag-force");
         Assert.NotNull(loaded);
 
         // Force: true should always return the object even if unchanged

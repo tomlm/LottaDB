@@ -15,13 +15,13 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         var actor = new Actor { Domain = "change.test", Username = "mutate", DisplayName = "Before" };
         await _db.SaveAsync(actor);
 
-        await _db.ChangeAsync<Actor>("change.test", "mutate", a =>
+        await _db.ChangeAsync<Actor>("mutate", a =>
         {
             a.DisplayName = "After";
             return a;
         });
 
-        var loaded = await _db.GetAsync<Actor>("change.test", "mutate");
+        var loaded = await _db.GetAsync<Actor>("mutate");
         Assert.NotNull(loaded);
         Assert.Equal("After", loaded.DisplayName);
     }
@@ -33,7 +33,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         await _db.SaveAsync(actor);
 
         // Get the object so it has tracked ETag
-        var loaded = await _db.GetAsync<Actor>("change.test", "by-obj");
+        var loaded = await _db.GetAsync<Actor>("by-obj");
 
         await _db.ChangeAsync(loaded!, a =>
         {
@@ -41,7 +41,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
             return a;
         });
 
-        var updated = await _db.GetAsync<Actor>("change.test", "by-obj");
+        var updated = await _db.GetAsync<Actor>("by-obj");
         Assert.Equal("After", updated!.DisplayName);
     }
 
@@ -51,7 +51,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         var actor = new Actor { Domain = "change.test", Username = "result", DisplayName = "Before" };
         await _db.SaveAsync(actor);
 
-        var result = await _db.ChangeAsync<Actor>("change.test", "result", a =>
+        var result = await _db.ChangeAsync<Actor>("result", a =>
         {
             a.DisplayName = "After";
             return a;
@@ -65,7 +65,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     public async Task ChangeAsync_NonExistent_Throws()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _db.ChangeAsync<Actor>("change.test", "ghost", a =>
+            _db.ChangeAsync<Actor>("ghost", a =>
             {
                 a.DisplayName = "impossible";
                 return a;
@@ -79,7 +79,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         await _db.SaveAsync(actor);
 
         int callCount = 0;
-        await _db.ChangeAsync<Actor>("change.test", "pure", a =>
+        await _db.ChangeAsync<Actor>("pure", a =>
         {
             Interlocked.Increment(ref callCount);
             a.DisplayName = "After";
@@ -98,7 +98,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         await _db.SaveAsync(actor);
 
         int callCount = 0;
-        await _db.ChangeAsync<Actor>("change.test", "concurrent", a =>
+        await _db.ChangeAsync<Actor>("concurrent", a =>
         {
             int call = Interlocked.Increment(ref callCount);
             if (call == 1)
@@ -114,7 +114,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         // Mutation should have been called at least twice (first attempt + retry)
         Assert.True(callCount >= 2, $"Expected at least 2 calls, got {callCount}");
 
-        var loaded = await _db.GetAsync<Actor>("change.test", "concurrent");
+        var loaded = await _db.GetAsync<Actor>("concurrent");
         Assert.Equal("Final", loaded!.DisplayName);
     }
 }

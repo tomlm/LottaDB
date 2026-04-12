@@ -32,7 +32,7 @@ public class CreateViewTests
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://a.com/alice.png" });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("view.test", "n1");
+        var view = await db.GetAsync<NoteView>("n1");
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);
         Assert.Equal("Hello world", view.Content);
@@ -45,13 +45,13 @@ public class CreateViewTests
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "updater", DisplayName = "Before" });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n-update", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow });
 
-        var before = await db.GetAsync<NoteView>("view.test", "n-update");
+        var before = await db.GetAsync<NoteView>("n-update");
         Assert.Equal("Before", before!.AuthorDisplay);
 
         // Update the actor
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "updater", DisplayName = "After" });
 
-        var after = await db.GetAsync<NoteView>("view.test", "n-update");
+        var after = await db.GetAsync<NoteView>("n-update");
         Assert.Equal("After", after!.AuthorDisplay);
     }
 
@@ -62,10 +62,10 @@ public class CreateViewTests
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "deleter", DisplayName = "D" });
         var note = new Note { Domain = "view.test", NoteId = "n-del", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note);
-        Assert.NotNull(await db.GetAsync<NoteView>("view.test", "n-del"));
+        Assert.NotNull(await db.GetAsync<NoteView>("n-del"));
 
         await db.DeleteAsync(note);
-        Assert.Null(await db.GetAsync<NoteView>("view.test", "n-del"));
+        Assert.Null(await db.GetAsync<NoteView>("n-del"));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class CreateViewTests
         // Save a note without a matching actor
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("view.test", "n-orphan");
+        var view = await db.GetAsync<NoteView>("n-orphan");
         Assert.Null(view); // No matching actor, so no NoteView produced
     }
 
@@ -102,7 +102,7 @@ public class CreateViewTests
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "dual-n", AuthorId = "dual", Content = "Both stores", Published = DateTimeOffset.UtcNow });
 
         // Table storage
-        var fromTable = await db.GetAsync<NoteView>("view.test", "dual-n");
+        var fromTable = await db.GetAsync<NoteView>("dual-n");
         Assert.NotNull(fromTable);
 
         // Lucene

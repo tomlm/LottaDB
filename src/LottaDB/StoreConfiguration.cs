@@ -4,46 +4,26 @@ namespace LottaDB;
 
 public class StoreConfiguration<T> : IStoreConfiguration<T> where T : class, new()
 {
-    internal string? TableName { get; private set; }
-    internal LambdaExpression? PartitionKeyExpression { get; private set; }
-    internal LambdaExpression? RowKeyExpression { get; private set; }
-    internal RowKeyStrategy? RowKeyStrategyValue { get; private set; }
+    internal LambdaExpression? KeyExpression { get; private set; }
+    internal KeyStrategy? KeyStrategyValue { get; private set; }
     internal List<LambdaExpression> Tags { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
 
-    public IStoreConfiguration<T> SetTableName(string tableName)
+    public IStoreConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
     {
-        TableName = tableName;
+        KeyExpression = resolver;
         return this;
     }
 
-    public IStoreConfiguration<T> SetPartitionKey(Expression<Func<T, string>> resolver)
+    public IStoreConfiguration<T> SetKey(KeyStrategy strategy)
     {
-        PartitionKeyExpression = resolver;
-        return this;
-    }
-
-    public IStoreConfiguration<T> SetRowKey(Expression<Func<T, string>> resolver)
-    {
-        RowKeyExpression = resolver;
-        return this;
-    }
-
-    public IStoreConfiguration<T> SetRowKey(RowKeyStrategy strategy)
-    {
-        RowKeyStrategyValue = strategy;
+        KeyStrategyValue = strategy;
         return this;
     }
 
     public IStoreConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property)
     {
         Tags.Add(property);
-        return this;
-    }
-
-    public IStoreConfiguration<T> AddComputedTag<TProp>(string name, Func<T, TProp> compute)
-    {
-        // Store for later use
         return this;
     }
 

@@ -17,7 +17,7 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Domain = "builder.test", Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("builder.test", "n1");
+        var view = await db.GetAsync<NoteView>("n1");
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);
     }
@@ -55,12 +55,12 @@ public class BuilderTests
         await db.SaveAsync(note);
 
         // Verify view exists
-        Assert.NotNull(await db.GetAsync<NoteView>("builder.test", "n4"));
+        Assert.NotNull(await db.GetAsync<NoteView>("n4"));
 
         // Delete the note — builder yields nothing for Deleted, so auto-delete kicks in
         await db.DeleteAsync(note);
 
-        Assert.Null(await db.GetAsync<NoteView>("builder.test", "n4"));
+        Assert.Null(await db.GetAsync<NoteView>("n4"));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class BuilderTests
         // Save a note without a matching actor — builder will still yield (with empty author)
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n5", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("builder.test", "n5");
+        var view = await db.GetAsync<NoteView>("n5");
         Assert.NotNull(view);
         Assert.Equal("", view.AuthorDisplay);
     }
@@ -86,8 +86,8 @@ public class BuilderTests
 
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "multi", AuthorId = "alice", Content = "Multi", Published = DateTimeOffset.UtcNow });
 
-        var v1 = await db.GetAsync<NoteView>("builder.test", "multi-view1");
-        var v2 = await db.GetAsync<NoteView>("builder.test", "multi-view2");
+        var v1 = await db.GetAsync<NoteView>("multi-view1");
+        var v2 = await db.GetAsync<NoteView>("multi-view2");
         Assert.NotNull(v1);
         Assert.NotNull(v2);
     }
@@ -104,7 +104,7 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Domain = "builder.test", Username = "trigger-s", DisplayName = "T" });
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "ts1", AuthorId = "trigger-s", Content = "Test", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("builder.test", "ts1");
+        var view = await db.GetAsync<NoteView>("ts1");
         Assert.NotNull(view); // Builder ran, meaning it got TriggerKind.Saved
     }
 
@@ -117,11 +117,11 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Domain = "builder.test", Username = "trigger-d", DisplayName = "T" });
         var note = new Note { Domain = "builder.test", NoteId = "td1", AuthorId = "trigger-d", Content = "Test", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note);
-        Assert.NotNull(await db.GetAsync<NoteView>("builder.test", "td1"));
+        Assert.NotNull(await db.GetAsync<NoteView>("td1"));
 
         // Delete: builder receives Deleted, yields nothing, auto-delete removes view
         await db.DeleteAsync(note);
-        Assert.Null(await db.GetAsync<NoteView>("builder.test", "td1"));
+        Assert.Null(await db.GetAsync<NoteView>("td1"));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Domain = "builder.test", Username = "access", DisplayName = "Accessible" });
         await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "access-n", AuthorId = "access", Content = "Test", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("builder.test", "access-n");
+        var view = await db.GetAsync<NoteView>("access-n");
         Assert.NotNull(view);
         Assert.Equal("Accessible", view.AuthorDisplay); // Proves builder read the Actor
     }
