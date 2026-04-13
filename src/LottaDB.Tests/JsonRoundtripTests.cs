@@ -84,7 +84,7 @@ public class JsonRoundtripTests
     }
 
     [Fact]
-    public async Task Search_ReturnsOnlyIndexedFields()
+    public async Task Search_ComplexObject_PreservesAllProperties()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
 
@@ -100,17 +100,26 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string>
             {
                 ["channel"] = "mobile",
+                ["promo"] = "SAVE10"
             }
         };
         await db.SaveAsync(order);
 
-        // Search returns objects from Lucene — only [Field]-annotated properties are populated.
-        // Complex types (List<OrderLine>, Dictionary) and non-indexable types (decimal) are lost.
-        // Use Query<T>() for full POCO fidelity.
+        // Search deserializes from _json stored in Lucene — full POCO fidelity
         var results = db.Search<OrderWithLines>().ToList();
         Assert.Single(results);
-        Assert.Equal("s-order-1", results[0].OrderId); // [Key][Field(Key=true)] — preserved
-        Assert.Equal("tenant-1", results[0].TenantId);  // string property — preserved by convention
+
+        var loaded = results[0];
+        Assert.Equal("s-order-1", loaded.OrderId);
+        Assert.Equal("tenant-1", loaded.TenantId);
+        Assert.Equal(499.00m, loaded.Total);
+        Assert.Single(loaded.Lines);
+        Assert.Equal("alpha", loaded.Lines[0].ProductId);
+        Assert.Equal(5, loaded.Lines[0].Quantity);
+        Assert.Equal(99.80m, loaded.Lines[0].Price);
+        Assert.Equal(2, loaded.Metadata.Count);
+        Assert.Equal("mobile", loaded.Metadata["channel"]);
+        Assert.Equal("SAVE10", loaded.Metadata["promo"]);
     }
 
     [Fact]

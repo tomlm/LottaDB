@@ -91,7 +91,8 @@ public class LottaDB
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             var meta = GetMeta<T>();
-            return LottaClassMap.Build<T>(meta.TypeHierarchy);
+            var classMapMapper = LottaClassMap.Build<T>(meta.TypeHierarchy);
+            return new LottaDocumentMapper<T>(classMapMapper);
         });
     }
 
@@ -220,8 +221,9 @@ public class LottaDB
     }
 
     /// <summary>
-    /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> backed by
-    /// <c>Iciclecreek.Lucene.Net.Linq</c>. Always reflects the last committed state.
+    /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity.
+    /// Lucene handles filtering/sorting via indexed fields. Objects are deserialized from
+    /// the stored _json field for complete roundtrip (nested objects, decimals, etc).
     /// </summary>
     /// <typeparam name="T">The object type to search for.</typeparam>
     /// <param name="query">Optional Lucene query string to pre-filter results.</param>
