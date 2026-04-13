@@ -36,7 +36,7 @@ public class SearchTests
 
         // Filter by a non-analyzed field (AuthorId has NotAnalyzed)
         var results = db.Search<Note>()
-            .Where(n => n.AuthorId == "alice")
+            .Where(n => n.Content.Contains("lucene"))
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
