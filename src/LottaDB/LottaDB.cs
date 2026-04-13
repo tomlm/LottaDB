@@ -80,10 +80,20 @@ public class LottaDB
 
     private static string PK<T>() => typeof(T).Name;
 
-    // TODO: Add Lucene type discrimination via TypeDiscriminatingMapper
-    // once Iciclecreek.Lucene.Net.Linq supports custom field injection.
-    // For now, Search<T>() returns exact-type matches only.
-    // Use Query<T>() for polymorphic queries (table storage, works today).
+    private readonly ConcurrentDictionary<Type, object> _mappers = new();
+
+    /// <summary>
+    /// Get or create a ClassMap-based IDocumentMapper for type T.
+    /// Includes _type DocumentKey entries for polymorphic search filtering.
+    /// </summary>
+    private Lucene.Net.Linq.Mapping.IDocumentMapper<T> GetMapper<T>() where T : class, new()
+    {
+        return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
+        {
+            var meta = GetMeta<T>();
+            return LottaClassMap.Build<T>(meta.TypeHierarchy);
+        });
+    }
 
     // === Write ===
 
@@ -107,7 +117,7 @@ public class LottaDB
         // Lucene: open session, add, session disposes → commit → searcher refreshes
         try
         {
-            using var session = _lucene.OpenSession<T>();
+            using var session = _lucene.OpenSession<T>(GetMapper<T>());
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
         catch { /* skip types Lucene can't index */ }
@@ -143,7 +153,7 @@ public class LottaDB
         {
             try
             {
-                using var session = _lucene.OpenSession<T>();
+                using var session = _lucene.OpenSession<T>(GetMapper<T>());
                 session.Delete(existing);
             }
             catch { }
@@ -224,7 +234,7 @@ public class LottaDB
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
         GetMeta<T>();
-        return _lucene.AsQueryable<T>();
+        return _lucene.AsQueryable<T>(GetMapper<T>());
     }
 
     // === Observe ===
@@ -283,7 +293,7 @@ public class LottaDB
 
     private void RebuildType<T>() where T : class, new()
     {
-        using var session = _lucene.OpenSession<T>();
+        using var session = _lucene.OpenSession<T>(GetMapper<T>());
         foreach (var item in _tableStore.QueryAll<T>(_name, PK<T>()))
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, item);
     }
@@ -417,7 +427,7 @@ public class LottaDB
         TrackKey(typeof(T), entity, key);
         try
         {
-            using var session = _lucene.OpenSession<T>();
+            using var session = _lucene.OpenSession<T>(GetMapper<T>());
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
         catch { }
