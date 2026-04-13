@@ -126,3 +126,26 @@ public class OrderLine
     public int Quantity { get; set; }
     public decimal Price { get; set; }
 }
+
+// Polymorphism test hierarchy
+public class BaseEntity
+{
+    [Key]
+    [Field(Key = true)]
+    public string Id { get; set; } = "";
+
+    [Field]
+    public string Name { get; set; } = "";
+}
+
+public class Person : BaseEntity
+{
+    [Field]
+    public string Email { get; set; } = "";
+}
+
+public class Employee : Person
+{
+    [Field]
+    public string Department { get; set; } = "";
+}

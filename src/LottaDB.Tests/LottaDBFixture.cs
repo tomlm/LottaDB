@@ -40,6 +40,9 @@ public class LottaDBFixture : IDisposable
         options.Store<CycleB>();
         options.Store<FeedEntry>();
         options.Store<LogEntry>();
+        options.Store<BaseEntity>();
+        options.Store<Person>();
+        options.Store<Employee>();
 
         configure?.Invoke(options);
 

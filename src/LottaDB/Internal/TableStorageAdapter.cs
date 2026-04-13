@@ -171,7 +171,7 @@ internal class TableStorageAdapter
 
     /// <summary>
     /// Query all objects whose _type hierarchy contains the given type name.
-    /// Scans all partitions — used for polymorphic queries.
+    /// Deserializes using the concrete type from _type so derived properties are preserved.
     /// </summary>
     public List<T> QueryByType<T>(string tableName, string typeName) where T : class, new()
     {
@@ -185,13 +185,39 @@ internal class TableStorageAdapter
                 var json = entity.GetString("_json");
                 if (json != null)
                 {
-                    var obj = JsonSerializer.Deserialize<T>(json);
+                    var obj = DeserializePolymorphic<T>(json, typeField);
                     if (obj != null)
                         results.Add(obj);
                 }
             }
         }
         return results;
+    }
+
+    /// <summary>
+    /// Deserialize JSON using the concrete type from _type field.
+    /// Falls back to T if the concrete type can't be resolved.
+    /// </summary>
+    private static T? DeserializePolymorphic<T>(string json, string typeField) where T : class
+    {
+        // The first entry in _type is the concrete type name
+        var concreteTypeName = typeField.Split(',').FirstOrDefault();
+        if (!string.IsNullOrEmpty(concreteTypeName))
+        {
+            // Try to find the concrete type in loaded assemblies
+            var concreteType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+                .FirstOrDefault(t => t.Name == concreteTypeName && typeof(T).IsAssignableFrom(t));
+
+            if (concreteType != null)
+            {
+                var obj = JsonSerializer.Deserialize(json, concreteType);
+                return obj as T;
+            }
+        }
+
+        // Fallback: deserialize as T directly
+        return JsonSerializer.Deserialize<T>(json);
     }
 
     public void ClearTable(string tableName)
