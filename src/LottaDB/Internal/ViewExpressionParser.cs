@@ -194,16 +194,12 @@ internal class ViewDefinition
     public List<string> FindAffectedViewKeys(object entity, Type triggerType, LottaDB db)
     {
         var results = new List<string>();
-        try
+        var allViews = Execute(db);
+        foreach (var view in allViews)
         {
-            var allViews = Execute(db);
-            foreach (var view in allViews)
-            {
-                if (db._metadata.TryGetValue(ViewType, out var meta))
-                    results.Add(meta.GetKey(view));
-            }
+            if (db._metadata.TryGetValue(ViewType, out var meta))
+                results.Add(meta.GetKey(view));
         }
-        catch { }
         return results;
     }
 }

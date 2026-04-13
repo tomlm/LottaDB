@@ -115,12 +115,10 @@ public class LottaDB
         TrackKey(typeof(T), entity, key);
 
         // Lucene: open session, add, session disposes → commit → searcher refreshes
-        try
+        using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
         {
-            using var session = _lucene.OpenSession<T>(GetMapper<T>());
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
-        catch { /* skip types Lucene can't index */ }
 
         var changes = new List<ObjectChange>
         {
@@ -151,12 +149,8 @@ public class LottaDB
 
         if (existing != null)
         {
-            try
-            {
-                using var session = _lucene.OpenSession<T>(GetMapper<T>());
-                session.Delete(existing);
-            }
-            catch { }
+            using var session = _lucene.OpenSession<T>(GetMapper<T>());
+            session.Delete(existing);
         }
 
         var changes = new List<ObjectChange>
@@ -264,7 +258,7 @@ public class LottaDB
         foreach (var h in snapshot)
         {
             if (h is Func<ObjectChange<T>, Task> typed)
-                try { await typed(change); } catch { }
+                await typed(change); 
         }
     }
 
@@ -279,14 +273,10 @@ public class LottaDB
     {
         foreach (var (type, _) in _metadata)
         {
-            try
-            {
-                typeof(LottaDB)
-                    .GetMethod(nameof(RebuildType), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .MakeGenericMethod(type)
-                    .Invoke(this, Array.Empty<object>());
-            }
-            catch { }
+            typeof(LottaDB)
+                .GetMethod(nameof(RebuildType), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .MakeGenericMethod(type)
+                .Invoke(this, Array.Empty<object>());
         }
         return Task.CompletedTask;
     }
@@ -371,12 +361,10 @@ public class LottaDB
         {
             var derivedMeta = _metadata[typeof(TDerived)];
             var keys = new List<string>();
-            try
+            await foreach (var result in builder.BuildAsync((TTrigger)entity, TriggerKind.Saved, this, ct))
             {
-                await foreach (var result in builder.BuildAsync((TTrigger)entity, TriggerKind.Saved, this, ct))
-                    if (result.Object != null) keys.Add(derivedMeta.GetKey(result.Object));
+                if (result.Object != null) keys.Add(derivedMeta.GetKey(result.Object));
             }
-            catch { }
             foreach (var k in keys)
             {
                 var r = await DeleteAsync<TDerived>(k, ct);

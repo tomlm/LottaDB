@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Azure;
 using Azure.Data.Tables;
@@ -206,7 +207,17 @@ internal class TableStorageAdapter
         {
             // Try to find the concrete type in loaded assemblies
             var concreteType = AppDomain.CurrentDomain.GetAssemblies()
-                .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+                .SelectMany(a =>
+                {
+                    try
+                    {
+                        return a.GetTypes();
+                    }
+                    catch (ReflectionTypeLoadException)
+                    {
+                        return Array.Empty<Type>();
+                    }
+                })
                 .FirstOrDefault(t => t.Name == concreteTypeName && typeof(T).IsAssignableFrom(t));
 
             if (concreteType != null)

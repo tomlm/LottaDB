@@ -70,10 +70,11 @@ internal static class LottaClassMap
             }
         }
 
-        // Add _type document keys for polymorphic filtering
-        foreach (var typeName in typeHierarchy)
+        // Add _type document key with the concrete type name for filtering
+        // DocumentKey only supports one value per field name
+        if (typeHierarchy.Length > 0)
         {
-            map.DocumentKey("_type").WithFixedValue(typeName);
+            map.DocumentKey("_type").WithFixedValue(typeHierarchy[0]);
         }
 
         return map.ToDocumentMapper();
