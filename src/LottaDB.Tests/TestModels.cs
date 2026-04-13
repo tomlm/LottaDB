@@ -6,7 +6,7 @@ namespace LottaDB.Tests;
 public class Actor
 {
     [Key]
-    [Field(Key = true, IndexMode = IndexMode.NotAnalyzed)]
+    [Field(IndexMode.NotAnalyzed, Key = true)]
     public string Username { get; set; } = "";
 
     [Tag]

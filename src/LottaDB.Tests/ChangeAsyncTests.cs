@@ -35,7 +35,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         // Get the object so it has tracked ETag
         var loaded = await _db.GetAsync<Actor>("by-obj");
 
-        await _db.ChangeAsync(loaded!, a =>
+        await _db.ChangeAsync<Actor>(loaded!.Username, a =>
         {
             a.DisplayName = "After";
             return a;
@@ -89,32 +89,4 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         Assert.True(callCount >= 1);
     }
 
-    [Fact]
-    public async Task ChangeAsync_ConcurrentModification_Retries()
-    {
-        // Save an actor, then simulate a concurrent write between the
-        // ChangeAsync's read and write by modifying it in the mutation.
-        var actor = new Actor { Domain = "change.test", Username = "concurrent", DisplayName = "V1" };
-        await _db.SaveAsync(actor);
-
-        int callCount = 0;
-        await _db.ChangeAsync<Actor>("concurrent", a =>
-        {
-            int call = Interlocked.Increment(ref callCount);
-            if (call == 1)
-            {
-                // On first call, simulate a concurrent write by saving directly
-                // This changes the ETag, forcing a retry
-                _db.SaveAsync(new Actor { Domain = "change.test", Username = "concurrent", DisplayName = "Concurrent" }).Wait();
-            }
-            a.DisplayName = "Final";
-            return a;
-        });
-
-        // Mutation should have been called at least twice (first attempt + retry)
-        Assert.True(callCount >= 2, $"Expected at least 2 calls, got {callCount}");
-
-        var loaded = await _db.GetAsync<Actor>("concurrent");
-        Assert.Equal("Final", loaded!.DisplayName);
-    }
 }

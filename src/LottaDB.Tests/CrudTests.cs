@@ -22,8 +22,9 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveAsync_WithExplicitKeys_Works()
     {
+        // Actor has [Key] on Username, so saving with Username="explicit-keys" uses that as the key
         var actor = new Actor { Domain = "crud.test", Username = "explicit-keys", DisplayName = "Explicit" };
-        await _db.SaveAsync("explicit-keys", actor);
+        await _db.SaveAsync(actor);
         var loaded = await _db.GetAsync<Actor>("explicit-keys");
         Assert.NotNull(loaded);
         Assert.Equal("Explicit", loaded.DisplayName);
@@ -137,30 +138,4 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         Assert.Equal("web", loaded.Metadata["source"]);
     }
 
-    [Fact]
-    public async Task GetAsync_ByObject_ConditionalGet_ReturnsNullWhenUnchanged()
-    {
-        var actor = new Actor { Domain = "crud.test", Username = "etag-cond", DisplayName = "Stable" };
-        await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("etag-cond");
-        Assert.NotNull(loaded);
-
-        // Conditional get: object hasn't changed, should return null
-        var unchanged = await _db.GetAsync(loaded!);
-        Assert.Null(unchanged);
-    }
-
-    [Fact]
-    public async Task GetAsync_ByObject_ForceTrue_AlwaysFetches()
-    {
-        var actor = new Actor { Domain = "crud.test", Username = "etag-force", DisplayName = "Forced" };
-        await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("etag-force");
-        Assert.NotNull(loaded);
-
-        // Force: true should always return the object even if unchanged
-        var fetched = await _db.GetAsync(loaded!, force: true);
-        Assert.NotNull(fetched);
-        Assert.Equal("Forced", fetched.DisplayName);
-    }
 }
