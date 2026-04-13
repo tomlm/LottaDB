@@ -3,12 +3,13 @@ namespace Lotta;
 /// <summary>
 /// The result of a <see cref="LottaDB.SaveAsync{T}"/>, <see cref="LottaDB.ChangeAsync{T}"/>,
 /// or <see cref="LottaDB.DeleteAsync{T}"/> operation. Contains all object changes (including
-/// derived objects produced by builders) and any builder errors.
+/// changes made by On&lt;T&gt; handlers) and any handler errors.
 /// </summary>
 public record ObjectResult
 {
-    /// <summary>All objects that were saved or deleted, including derived objects from builders.</summary>
+    /// <summary>All objects that were saved or deleted, including side effects from On&lt;T&gt; handlers.</summary>
     public IReadOnlyList<ObjectChange> Changes { get; init; } = [];
-    /// <summary>Builder failures, if any. Empty on success. The source save is never affected by builder errors.</summary>
-    public IReadOnlyList<BuilderError> Errors { get; init; } = [];
+
+    /// <summary>Exceptions from On&lt;T&gt; handlers. The source save/delete is never affected by handler errors.</summary>
+    public IReadOnlyList<Exception> Errors { get; init; } = [];
 }

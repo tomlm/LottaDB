@@ -10,7 +10,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_ComplexObject_PreservesNestedCollections()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         var order = new OrderWithLines
         {
@@ -50,7 +50,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_MultipleComplexObjects_AllPreserved()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -86,7 +86,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_ComplexObject_PreservesAllProperties()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         var order = new OrderWithLines
         {
@@ -125,7 +125,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_And_Search_DeserializeIdentically()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         var order = new OrderWithLines
         {
@@ -152,7 +152,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_ComplexObject_PreservesNestedCollections()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -179,7 +179,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_Note_PreservesIndexedFields()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Note
         {
@@ -201,7 +201,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_EmptyCollections_PreservedAsEmpty()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -220,7 +220,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_NoteWithTags_PreservesListProperty()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Note
         {
@@ -242,7 +242,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_NoteWithTags_PreservesListProperty()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Note
         {
@@ -263,7 +263,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task RebuildIndex_PreservesComplexObjectFidelity()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -288,8 +288,20 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Builder_DerivedObject_SearchPreservesJsonFidelity()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                await db.SaveAsync(new NoteView
+                {
+                    NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "",
+                    AuthorUsername = actor?.Username ?? "", Content = note.Content,
+                    Published = note.Published, Tags = note.Tags.ToArray(),
+                });
+            });
+        });
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Note

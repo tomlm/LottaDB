@@ -5,7 +5,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_MaterializeThenJoinInMemory()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "bob", DisplayName = "Bob" });
@@ -31,7 +31,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_WithWhereClause()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "carol", DisplayName = "Carol" });
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow });
@@ -54,7 +54,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task SearchAsync_WithQueryString_FiltersResults()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" });

@@ -1,34 +1,64 @@
 namespace Lotta.Tests;
 
+/// <summary>
+/// Tests for On&lt;T&gt; handlers that create materialized views (NoteView from Note+Actor).
+/// Replaces the old CreateView LINQ expression tests.
+/// </summary>
 public class CreateViewTests
 {
-    private LottaDB CreateDbWithNoteView()
+    private LottaDB CreateDbWithNoteViewHandler()
     {
-        return TestLottaDBFactory.CreateWithBuilders(opts =>
+        return LottaDBFixture.CreateDb(opts =>
         {
-            opts.CreateView<NoteView>(db =>
-                from note in db.Query<Note>()
-                join actor in db.Query<Actor>()
-                    on note.AuthorId equals actor.Username
-                select new NoteView
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted)
                 {
-                    Domain = note.Domain,
-                    NoteId = note.NoteId,
-                    AuthorUsername = actor.Username,
-                    AuthorDisplay = actor.DisplayName,
-                    AvatarUrl = actor.AvatarUrl,
-                    Content = note.Content,
-                    Published = note.Published,
-                    Tags = note.Tags.ToArray(),
+                    await db.DeleteAsync<NoteView>(note.NoteId);
+                    return;
                 }
-            );
+                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                if (actor == null) return; // no matching actor, no view
+                await db.SaveAsync(new NoteView
+                {
+                    Domain = note.Domain, NoteId = note.NoteId,
+                    AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
+                    AvatarUrl = actor.AvatarUrl, Content = note.Content,
+                    Published = note.Published, Tags = note.Tags.ToArray(),
+                });
+            });
+
+            opts.On<Actor>(async (actor, kind, db) =>
+            {
+                // Find all NoteViews for this actor and rebuild or delete
+                var affected = db.Search<NoteView>()
+                    .Where(v => v.AuthorUsername == actor.Username).ToList();
+
+                foreach (var view in affected)
+                {
+                    if (kind == TriggerKind.Deleted)
+                    {
+                        await db.DeleteAsync<NoteView>(view.NoteId);
+                        continue;
+                    }
+                    var note = await db.GetAsync<Note>(view.NoteId);
+                    if (note == null) continue;
+                    await db.SaveAsync(new NoteView
+                    {
+                        Domain = note.Domain, NoteId = note.NoteId,
+                        AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
+                        AvatarUrl = actor.AvatarUrl, Content = note.Content,
+                        Published = note.Published, Tags = note.Tags.ToArray(),
+                    });
+                }
+            });
         });
     }
 
     [Fact]
-    public async Task CreateView_NoteAndActor_ProducesNoteView()
+    public async Task NoteAndActor_ProducesNoteView()
     {
-        var db = CreateDbWithNoteView();
+        var db = CreateDbWithNoteViewHandler();
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://a.com/alice.png" });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow });
 
@@ -39,26 +69,23 @@ public class CreateViewTests
     }
 
     [Fact]
-    public async Task CreateView_ActorChange_UpdatesNoteView()
+    public async Task ActorChange_UpdatesNoteView()
     {
-        var db = CreateDbWithNoteView();
+        var db = CreateDbWithNoteViewHandler();
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "updater", DisplayName = "Before" });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n-update", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow });
 
-        var before = await db.GetAsync<NoteView>("n-update");
-        Assert.Equal("Before", before!.AuthorDisplay);
+        Assert.Equal("Before", (await db.GetAsync<NoteView>("n-update"))!.AuthorDisplay);
 
-        // Update the actor
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "updater", DisplayName = "After" });
 
-        var after = await db.GetAsync<NoteView>("n-update");
-        Assert.Equal("After", after!.AuthorDisplay);
+        Assert.Equal("After", (await db.GetAsync<NoteView>("n-update"))!.AuthorDisplay);
     }
 
     [Fact]
-    public async Task CreateView_NoteDeleted_DeletesNoteView()
+    public async Task NoteDeleted_DeletesNoteView()
     {
-        var db = CreateDbWithNoteView();
+        var db = CreateDbWithNoteViewHandler();
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "deleter", DisplayName = "D" });
         var note = new Note { Domain = "view.test", NoteId = "n-del", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note);
@@ -69,87 +96,52 @@ public class CreateViewTests
     }
 
     [Fact]
-    public async Task CreateView_NoMatchingJoin_NoViewCreated()
+    public async Task ActorDeleted_DeletesRelatedNoteViews()
     {
-        var db = CreateDbWithNoteView();
-        // Save a note without a matching actor
-        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow });
+        var db = CreateDbWithNoteViewHandler();
+        await db.SaveAsync(new Actor { Domain = "view.test", Username = "gone", DisplayName = "Gone" });
+        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "orphan1", AuthorId = "gone", Content = "A", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "orphan2", AuthorId = "gone", Content = "B", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("n-orphan");
-        Assert.Null(view); // No matching actor, so no NoteView produced
+        Assert.NotNull(await db.GetAsync<NoteView>("orphan1"));
+        Assert.NotNull(await db.GetAsync<NoteView>("orphan2"));
+
+        await db.DeleteAsync<Actor>("gone");
+
+        Assert.Null(await db.GetAsync<NoteView>("orphan1"));
+        Assert.Null(await db.GetAsync<NoteView>("orphan2"));
     }
 
     [Fact]
-    public async Task CreateView_MultipleNotes_SameActor_AllViews()
+    public async Task NoMatchingActor_NoViewCreated()
     {
-        var db = CreateDbWithNoteView();
+        var db = CreateDbWithNoteViewHandler();
+        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow });
+
+        Assert.Null(await db.GetAsync<NoteView>("n-orphan"));
+    }
+
+    [Fact]
+    public async Task MultipleNotes_SameActor_AllViews()
+    {
+        var db = CreateDbWithNoteViewHandler();
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "prolific", DisplayName = "Prolific" });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "p1", AuthorId = "prolific", Content = "One", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "p2", AuthorId = "prolific", Content = "Two", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "view.test", NoteId = "p3", AuthorId = "prolific", Content = "Three", Published = DateTimeOffset.UtcNow });
 
         var views = db.Search<NoteView>()
-            .Where(v => v.AuthorUsername == "prolific")
-            .ToList();
+            .Where(v => v.AuthorUsername == "prolific").ToList();
         Assert.Equal(3, views.Count);
     }
 
     [Fact]
-    public async Task CreateView_DerivedObjectInTableAndLucene()
+    public async Task SaveResult_ContainsDerivedChanges()
     {
-        var db = CreateDbWithNoteView();
-        await db.SaveAsync(new Actor { Domain = "view.test", Username = "dual", DisplayName = "Dual" });
-        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "dual-n", AuthorId = "dual", Content = "Both stores", Published = DateTimeOffset.UtcNow });
-
-        // Table storage
-        var fromTable = await db.GetAsync<NoteView>("dual-n");
-        Assert.NotNull(fromTable);
-
-        // Lucene
-        var fromLucene = db.Search<NoteView>()
-            .Where(v => v.NoteId == "dual-n")
-            .ToList();
-        Assert.Single(fromLucene);
-    }
-
-    public async Task CreateView_WhereClause_FiltersBeforeJoin()
-    {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-        {
-            // Only create views for notes with content containing "important"
-            opts.CreateView<NoteView>(d =>
-                from note in d.Query<Note>().Where(n => n.Content.Contains("important"))
-                join actor in d.Query<Actor>()
-                    on note.AuthorId equals actor.Username
-                select new NoteView
-                {
-                    Domain = note.Domain,
-                    NoteId = note.NoteId,
-                    AuthorUsername = actor.Username,
-                    AuthorDisplay = actor.DisplayName,
-                    Content = note.Content,
-                    Published = note.Published,
-                }
-            );
-        });
-
-        await db.SaveAsync(new Actor { Domain = "view.test", Username = "filter", DisplayName = "Filter" });
-        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "imp", AuthorId = "filter", Content = "This is important", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { Domain = "view.test", NoteId = "boring", AuthorId = "filter", Content = "This is boring", Published = DateTimeOffset.UtcNow });
-
-        var views = db.Search<NoteView>().ToList();
-        Assert.Single(views);
-        Assert.Equal("imp", views[0].NoteId);
-    }
-
-    [Fact]
-    public async Task CreateView_SaveResult_ContainsDerivedChanges()
-    {
-        var db = CreateDbWithNoteView();
+        var db = CreateDbWithNoteViewHandler();
         await db.SaveAsync(new Actor { Domain = "view.test", Username = "result", DisplayName = "R" });
         var result = await db.SaveAsync(new Note { Domain = "view.test", NoteId = "result-n", AuthorId = "result", Content = "Check result", Published = DateTimeOffset.UtcNow });
 
-        // Should contain both the Note save and the NoteView save
         Assert.Contains(result.Changes, c => c.TypeName == nameof(Note));
         Assert.Contains(result.Changes, c => c.TypeName == nameof(NoteView));
     }

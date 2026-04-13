@@ -5,7 +5,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Query_BaseClass_ReturnsAllDerivedTypes()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new BaseEntity { Id = "base1", Name = "Base" });
         await db.SaveAsync(new Person { Id = "person1", Name = "Alice", Email = "alice@test.com" });
@@ -19,7 +19,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Query_MiddleClass_ReturnsMiddleAndDerived()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new BaseEntity { Id = "base2", Name = "Base" });
         await db.SaveAsync(new Person { Id = "person2", Name = "Alice", Email = "alice@test.com" });
@@ -33,7 +33,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Query_LeafClass_ReturnsOnlyExactType()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new BaseEntity { Id = "base3", Name = "Base" });
         await db.SaveAsync(new Person { Id = "person3", Name = "Alice", Email = "alice@test.com" });
@@ -48,7 +48,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Query_BaseClass_DeserializesToConcreteType()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Employee { Id = "emp4", Name = "Carol", Email = "carol@test.com", Department = "Sales" });
 
@@ -68,7 +68,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Query_MiddleClass_PreservesDerivedProperties()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Employee { Id = "emp5", Name = "Dave", Email = "dave@test.com", Department = "HR" });
 
@@ -82,7 +82,7 @@ public class PolymorphismTests
     [Fact]
     public async Task GetAsync_ReturnsConcreteType()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new Employee { Id = "emp6", Name = "Eve", Email = "eve@test.com", Department = "Legal" });
 
@@ -97,7 +97,7 @@ public class PolymorphismTests
     [Fact]
     public async Task Search_ExactType_ReturnsOnlyThatType()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new BaseEntity { Id = "base7", Name = "Base" });
         await db.SaveAsync(new Person { Id = "person7", Name = "Alice", Email = "alice@test.com" });

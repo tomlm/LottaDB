@@ -5,7 +5,7 @@ public class StoreRegistrationTests
     [Fact]
     public void Store_WithAttributes_ExtractsKey()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         var result = db.SaveAsync(actor).Result;
         Assert.NotNull(result);
@@ -14,7 +14,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_CanGetByKey()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor);
         var loaded = db.GetAsync<Actor>("alice").Result;
@@ -25,7 +25,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsTags()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
 
@@ -76,7 +76,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Username = "alice" });
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
 
@@ -126,7 +126,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_SetRowKey_WithAscendingTime()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
         await db.SaveAsync(new LogEntry { LogId = "L1", Message = "first", Timestamp = DateTimeOffset.UtcNow.AddHours(-1) });
         await db.SaveAsync(new LogEntry { LogId = "L2", Message = "second", Timestamp = DateTimeOffset.UtcNow });

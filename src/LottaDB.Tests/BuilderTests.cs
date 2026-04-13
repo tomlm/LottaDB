@@ -1,21 +1,31 @@
 namespace Lotta.Tests;
 
+/// <summary>
+/// Tests for On&lt;T&gt; handler behavior: creating derived objects, handling deletes,
+/// error handling, and accessing the DB from within handlers.
+/// </summary>
 public class BuilderTests
 {
-    private LottaDB CreateDbWithBuilder<TTrigger, TDerived, TBuilder>()
-        where TTrigger : class, new() where TDerived : class, new() where TBuilder : class, IBuilder<TTrigger, TDerived>, new()
-    {
-        return TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<TTrigger, TDerived, TBuilder>());
-    }
-
     [Fact]
-    public async Task Builder_OnSave_ProducesDerivedObject()
+    public async Task OnHandler_OnSave_CreatesDerivedObject()
     {
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                await db.SaveAsync(new NoteView
+                {
+                    Domain = note.Domain, NoteId = note.NoteId,
+                    AuthorUsername = actor?.Username ?? "", AuthorDisplay = actor?.DisplayName ?? "",
+                    Content = note.Content, Published = note.Published,
+                });
+            });
+        });
 
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
 
         var view = await db.GetAsync<NoteView>("n1");
         Assert.NotNull(view);
@@ -23,142 +33,181 @@ public class BuilderTests
     }
 
     [Fact]
-    public async Task Builder_OnSave_DerivedObjectInTableStorage()
+    public async Task OnHandler_OnSave_DerivedObjectInTableStorage()
     {
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n2", AuthorId = "alice", Content = "Stored", Published = DateTimeOffset.UtcNow });
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+            });
+        });
 
-        // Should be in table storage (QueryAsync hits table storage)
+        await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow });
+
         var views = db.Query<NoteView>().ToList();
         Assert.Contains(views, v => v.NoteId == "n2");
     }
 
     [Fact]
-    public async Task Builder_OnSave_DerivedObjectInLuceneIndex()
+    public async Task OnHandler_OnSave_DerivedObjectInLuceneIndex()
     {
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n3", AuthorId = "alice", Content = "Indexed", Published = DateTimeOffset.UtcNow });
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+            });
+        });
 
-        // Should be in Lucene (SearchAsync hits Lucene)
+        await db.SaveAsync(new Note { NoteId = "n3", Content = "Indexed", Published = DateTimeOffset.UtcNow });
+
         var views = db.Search<NoteView>().ToList();
         Assert.Contains(views, v => v.NoteId == "n3");
     }
 
     [Fact]
-    public async Task Builder_OnDelete_AutoDeletesDerivedObjects()
+    public async Task OnHandler_OnDelete_DeletesDerivedObject()
     {
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "alice", DisplayName = "Alice" });
-        var note = new Note { Domain = "builder.test", NoteId = "n4", AuthorId = "alice", Content = "Delete me", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note);
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted)
+                {
+                    await db.DeleteAsync<NoteView>(note.NoteId);
+                    return;
+                }
+                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+            });
+        });
 
-        // Verify view exists
+        var note = new Note { NoteId = "n4", Content = "Delete me", Published = DateTimeOffset.UtcNow };
+        await db.SaveAsync(note);
         Assert.NotNull(await db.GetAsync<NoteView>("n4"));
 
-        // Delete the note — builder yields nothing for Deleted, so auto-delete kicks in
         await db.DeleteAsync(note);
-
         Assert.Null(await db.GetAsync<NoteView>("n4"));
     }
 
     [Fact]
-    public async Task Builder_OnSave_EmptyYield_SkipsQuietly()
+    public async Task OnHandler_ReceivesTriggerKind_Saved()
     {
-        // NoteViewExplicitBuilder yields nothing for Deleted trigger.
-        // But for a Save trigger with a valid note, it should produce a view.
-        // This test verifies that an empty yield on Save is a no-op.
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
-        // Save a note without a matching actor — builder will still yield (with empty author)
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "n5", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow });
+        TriggerKind? received = null;
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) => { received = kind; });
+        });
 
-        var view = await db.GetAsync<NoteView>("n5");
-        Assert.NotNull(view);
-        Assert.Equal("", view.AuthorDisplay);
+        await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow });
+        Assert.Equal(TriggerKind.Saved, received);
     }
 
     [Fact]
-    public async Task Builder_OnSave_MultipleResults_CreatesAll()
+    public async Task OnHandler_ReceivesTriggerKind_Deleted()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, NoteView, MultiResultBuilder>());
+        TriggerKind? received = null;
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) => { received = kind; });
+        });
 
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "multi", AuthorId = "alice", Content = "Multi", Published = DateTimeOffset.UtcNow });
-
-        var v1 = await db.GetAsync<NoteView>("multi-view1");
-        var v2 = await db.GetAsync<NoteView>("multi-view2");
-        Assert.NotNull(v1);
-        Assert.NotNull(v2);
-    }
-
-    [Fact]
-    public async Task Builder_ReceivesTriggerKind_Saved()
-    {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
-
-        // The NoteViewExplicitBuilder checks trigger == Deleted and yields break.
-        // If we save, it should produce a view (meaning it received Saved).
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "trigger-s", DisplayName = "T" });
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "ts1", AuthorId = "trigger-s", Content = "Test", Published = DateTimeOffset.UtcNow });
-
-        var view = await db.GetAsync<NoteView>("ts1");
-        Assert.NotNull(view); // Builder ran, meaning it got TriggerKind.Saved
-    }
-
-    [Fact]
-    public async Task Builder_ReceivesTriggerKind_Deleted()
-    {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
-
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "trigger-d", DisplayName = "T" });
-        var note = new Note { Domain = "builder.test", NoteId = "td1", AuthorId = "trigger-d", Content = "Test", Published = DateTimeOffset.UtcNow };
+        var note = new Note { NoteId = "td1", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note);
-        Assert.NotNull(await db.GetAsync<NoteView>("td1"));
-
-        // Delete: builder receives Deleted, yields nothing, auto-delete removes view
         await db.DeleteAsync(note);
-        Assert.Null(await db.GetAsync<NoteView>("td1"));
+        Assert.Equal(TriggerKind.Deleted, received);
     }
 
     [Fact]
-    public async Task Builder_HasAccessToLottaDB()
+    public async Task OnHandler_HasAccessToDb()
     {
-        // NoteViewExplicitBuilder calls db.GetAsync<Actor> — verifying it has access
-        var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();
-        await db.SaveAsync(new Actor { Domain = "builder.test", Username = "access", DisplayName = "Accessible" });
-        await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "access-n", AuthorId = "access", Content = "Test", Published = DateTimeOffset.UtcNow });
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                await db.SaveAsync(new NoteView
+                {
+                    NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "unknown",
+                });
+            });
+        });
+
+        await db.SaveAsync(new Actor { Username = "access", DisplayName = "Accessible" });
+        await db.SaveAsync(new Note { NoteId = "access-n", AuthorId = "access", Published = DateTimeOffset.UtcNow });
 
         var view = await db.GetAsync<NoteView>("access-n");
         Assert.NotNull(view);
-        Assert.Equal("Accessible", view.AuthorDisplay); // Proves builder read the Actor
+        Assert.Equal("Accessible", view.AuthorDisplay);
     }
 
     [Fact]
-    public async Task Builder_Failure_CapturedInObjectResult()
+    public async Task OnHandler_Error_DoesNotBlockSourceSave()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, ModerationView, FailingBuilder>());
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                throw new InvalidOperationException("Handler failed");
+            });
+        });
 
-        var result = await db.SaveAsync(new Note { Domain = "builder.test", NoteId = "fail1", AuthorId = "alice", Content = "Fail", Published = DateTimeOffset.UtcNow });
+        var result = await db.SaveAsync(new Note { NoteId = "fail1", Published = DateTimeOffset.UtcNow });
 
+        // Source object saved despite handler failure
+        Assert.NotNull(await db.GetAsync<Note>("fail1"));
         Assert.NotEmpty(result.Errors);
-        Assert.Contains(result.Errors, e => e.BuilderName.Contains("FailingBuilder"));
     }
 
     [Fact]
-    public async Task Builder_Failure_DoesNotBlockSourceSave()
+    public async Task OnHandler_Error_CapturedInObjectResult()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, ModerationView, FailingBuilder>());
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                throw new InvalidOperationException("Handler failed intentionally");
+            });
+        });
 
-        var note = new Note { Domain = "builder.test", NoteId = "fail2", AuthorId = "alice", Content = "Still saved", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note);
+        var result = await db.SaveAsync(new Note { NoteId = "fail2", Published = DateTimeOffset.UtcNow });
 
-        // Note should still be in table storage despite builder failure
-        var notes = db.Query<Note>().Where(n => n.NoteId == "fail2").ToList();
-        Assert.Single(notes);
+        Assert.Single(result.Errors);
+        Assert.IsType<InvalidOperationException>(result.Errors[0]);
+    }
+
+    [Fact]
+    public async Task OnHandler_MultipleHandlers_AllRun()
+    {
+        int count = 0;
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
+            opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
+        });
+
+        await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow });
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public async Task OnHandler_SaveResult_ContainsDerivedChanges()
+    {
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, db) =>
+            {
+                if (kind == TriggerKind.Deleted) return;
+                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+            });
+        });
+
+        var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "alice", Content = "Test", Published = DateTimeOffset.UtcNow });
+
+        Assert.Contains(result.Changes, c => c.TypeName == nameof(Note));
+        Assert.Contains(result.Changes, c => c.TypeName == nameof(NoteView));
     }
 }

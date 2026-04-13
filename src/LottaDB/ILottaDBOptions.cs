@@ -13,27 +13,13 @@ public interface ILottaDBOptions
     ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new();
 
     /// <summary>
-    /// Declare a materialized view as a LINQ join expression.
-    /// Use <c>db.Query&lt;T&gt;()</c> in the expression for table storage sources.
-    /// LottaDB parses the expression tree to extract dependencies and join keys.
+    /// Register a handler that runs inline after every save or delete of type <typeparamref name="T"/>.
+    /// The handler has full DB access — it can save, delete, query, or search any type.
+    /// Multiple handlers per type are allowed and run in registration order.
     /// </summary>
-    /// <typeparam name="TView">The materialized view type. Must also be registered via <c>Store&lt;TView&gt;()</c>.</typeparam>
-    /// <param name="viewExpression">A LINQ expression that produces view objects from source objects via joins.</param>
-    ILottaDBOptions CreateView<TView>(Expression<Func<LottaDB, IQueryable<TView>>> viewExpression) where TView : class, new();
-
-    /// <summary>Register an explicit builder for custom derivation logic that can't be expressed as a LINQ join.</summary>
-    /// <typeparam name="TTrigger">The type that triggers the builder when saved or deleted.</typeparam>
-    /// <typeparam name="TDerived">The type of derived object the builder produces.</typeparam>
-    /// <typeparam name="TBuilder">The builder implementation class.</typeparam>
-    ILottaDBOptions AddBuilder<TTrigger, TDerived, TBuilder>()
-        where TTrigger : class, new()
-        where TDerived : class, new()
-        where TBuilder : class, IBuilder<TTrigger, TDerived>, new();
-
-    /// <summary>Register an observer that fires for the lifetime of the database instance.</summary>
-    /// <typeparam name="T">The object type to observe.</typeparam>
-    /// <param name="handler">Async callback receiving an <see cref="ObjectChange{T}"/> for each change.</param>
-    ILottaDBOptions Observe<T>(Func<ObjectChange<T>, Task> handler) where T : class, new();
+    /// <typeparam name="T">The object type to react to.</typeparam>
+    /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
+    ILottaDBOptions On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
 }
 
 /// <summary>

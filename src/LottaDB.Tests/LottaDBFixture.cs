@@ -49,14 +49,3 @@ public class LottaDBFixture : IDisposable
         return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
     }
 }
-
-/// <summary>
-/// Creates a fresh LottaDB instance per test.
-/// </summary>
-public static class TestLottaDBFactory
-{
-    public static LottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
-    {
-        return LottaDBFixture.CreateDb(configure);
-    }
-}

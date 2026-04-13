@@ -1,13 +1,9 @@
-using System.Linq.Expressions;
-
 namespace Lotta;
 
 public class LottaDBOptions : ILottaDBOptions
 {
     internal Dictionary<Type, object> StoreConfigurations { get; } = new();
-    internal List<ViewRegistration> ViewRegistrations { get; } = new();
-    internal List<BuilderRegistration> BuilderRegistrations { get; } = new();
-    internal List<ObserverRegistration> ObserverRegistrations { get; } = new();
+    internal List<OnRegistration> OnRegistrations { get; } = new();
 
     public ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new()
     {
@@ -17,28 +13,11 @@ public class LottaDBOptions : ILottaDBOptions
         return this;
     }
 
-    public ILottaDBOptions CreateView<TView>(Expression<Func<LottaDB, IQueryable<TView>>> viewExpression) where TView : class, new()
+    public ILottaDBOptions On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new()
     {
-        ViewRegistrations.Add(new ViewRegistration(typeof(TView), viewExpression));
-        return this;
-    }
-
-    public ILottaDBOptions AddBuilder<TTrigger, TDerived, TBuilder>()
-        where TTrigger : class, new()
-        where TDerived : class, new()
-        where TBuilder : class, IBuilder<TTrigger, TDerived>, new()
-    {
-        BuilderRegistrations.Add(new BuilderRegistration(typeof(TTrigger), typeof(TDerived), typeof(TBuilder)));
-        return this;
-    }
-
-    public ILottaDBOptions Observe<T>(Func<ObjectChange<T>, Task> handler) where T : class, new()
-    {
-        ObserverRegistrations.Add(new ObserverRegistration(typeof(T), handler));
+        OnRegistrations.Add(new OnRegistration(typeof(T), handler));
         return this;
     }
 }
 
-internal record ViewRegistration(Type ViewType, object Expression);
-internal record BuilderRegistration(Type TriggerType, Type DerivedType, Type BuilderType);
-internal record ObserverRegistration(Type ObjectType, object Handler);
+internal record OnRegistration(Type ObjectType, object Handler);
