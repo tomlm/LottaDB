@@ -6,7 +6,7 @@ namespace LottaDB.Tests;
 public class NoteViewExplicitBuilder : IBuilder<Note, NoteView>
 {
     public async IAsyncEnumerable<BuildResult<NoteView>> BuildAsync(
-        Note note, TriggerKind trigger, ILottaDB db,
+        Note note, TriggerKind trigger, LottaDB db,
         [EnumeratorCancellation] CancellationToken ct)
     {
         if (trigger == TriggerKind.Deleted)
@@ -34,7 +34,7 @@ public class NoteViewExplicitBuilder : IBuilder<Note, NoteView>
 public class FailingBuilder : IBuilder<Note, ModerationView>
 {
     public async IAsyncEnumerable<BuildResult<ModerationView>> BuildAsync(
-        Note note, TriggerKind trigger, ILottaDB db,
+        Note note, TriggerKind trigger, LottaDB db,
         [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.CompletedTask;
@@ -48,7 +48,7 @@ public class FailingBuilder : IBuilder<Note, ModerationView>
 public class MultiResultBuilder : IBuilder<Note, NoteView>
 {
     public async IAsyncEnumerable<BuildResult<NoteView>> BuildAsync(
-        Note note, TriggerKind trigger, ILottaDB db,
+        Note note, TriggerKind trigger, LottaDB db,
         [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.CompletedTask;
@@ -70,7 +70,7 @@ public class MultiResultBuilder : IBuilder<Note, NoteView>
 public class CycleABuilder : IBuilder<CycleA, CycleB>
 {
     public async IAsyncEnumerable<BuildResult<CycleB>> BuildAsync(
-        CycleA entity, TriggerKind trigger, ILottaDB db,
+        CycleA entity, TriggerKind trigger, LottaDB db,
         [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.CompletedTask;
@@ -86,7 +86,7 @@ public class CycleABuilder : IBuilder<CycleA, CycleB>
 public class CycleBBuilder : IBuilder<CycleB, CycleA>
 {
     public async IAsyncEnumerable<BuildResult<CycleA>> BuildAsync(
-        CycleB entity, TriggerKind trigger, ILottaDB db,
+        CycleB entity, TriggerKind trigger, LottaDB db,
         [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.CompletedTask;

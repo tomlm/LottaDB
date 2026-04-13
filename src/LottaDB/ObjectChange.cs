@@ -17,7 +17,7 @@ public record ObjectChange
 
 /// <summary>
 /// Describes a change to an object of type <typeparamref name="T"/>.
-/// Passed to <see cref="ILottaDB.Observe{T}"/> callbacks.
+/// Passed to <see cref="LottaDB.Observe{T}"/> callbacks.
 /// </summary>
 public record ObjectChange<T>
 {

@@ -8,7 +8,7 @@ namespace LottaDB.Tests;
 
 public class LottaDBFixture : IDisposable
 {
-    public ILottaDB Db { get; }
+    public LottaDB Db { get; }
 
     public LottaDBFixture()
     {
@@ -24,7 +24,7 @@ public class LottaDBFixture : IDisposable
         return InMemoryTableServiceClient.FromAccount(account);
     }
 
-    public static ILottaDB CreateDb(Action<ILottaDBOptions>? configure = null)
+    public static LottaDB CreateDb(Action<ILottaDBOptions>? configure = null)
     {
         var tableClient = CreateInMemoryTableServiceClient();
         var directory = new Lucene.Net.Store.RAMDirectory();
@@ -52,7 +52,7 @@ public class LottaDBFixture : IDisposable
 /// </summary>
 public static class TestLottaDBFactory
 {
-    public static ILottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
+    public static LottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
     {
         return LottaDBFixture.CreateDb(configure);
     }

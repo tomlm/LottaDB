@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class CycleDetectionTests
 {
-    private ILottaDB CreateDbWithCycles()
+    private LottaDB CreateDbWithCycles()
     {
         return TestLottaDBFactory.CreateWithBuilders(opts =>
         {

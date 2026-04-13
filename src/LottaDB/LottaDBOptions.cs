@@ -17,7 +17,7 @@ public class LottaDBOptions : ILottaDBOptions
         return this;
     }
 
-    public ILottaDBOptions CreateView<TView>(Expression<Func<ILottaDB, IQueryable<TView>>> viewExpression) where TView : class, new()
+    public ILottaDBOptions CreateView<TView>(Expression<Func<LottaDB, IQueryable<TView>>> viewExpression) where TView : class, new()
     {
         ViewRegistrations.Add(new ViewRegistration(typeof(TView), viewExpression));
         return this;

@@ -11,7 +11,7 @@ public interface IBuilder<TTrigger, TDerived>
     /// <summary>
     /// Called when a <typeparamref name="TTrigger"/> object is saved or deleted.
     /// Yield <see cref="BuildResult{T}"/> items to save or delete derived objects.
-    /// The builder has full access to <see cref="ILottaDB"/> for reading related objects.
+    /// The builder has full access to <see cref="LottaDB"/> for reading related objects.
     /// </summary>
     /// <param name="entity">The trigger object that was saved or deleted.</param>
     /// <param name="trigger">Whether the trigger object was saved or deleted.</param>
@@ -21,6 +21,6 @@ public interface IBuilder<TTrigger, TDerived>
     IAsyncEnumerable<BuildResult<TDerived>> BuildAsync(
         TTrigger entity,
         TriggerKind trigger,
-        ILottaDB db,
+        LottaDB db,
         CancellationToken ct);
 }

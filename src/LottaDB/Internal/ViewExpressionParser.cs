@@ -28,9 +28,9 @@ internal class ViewExpressionParser
         };
     }
 
-    private Func<ILottaDB, IEnumerable<object>> CompileQuery(LambdaExpression lambda)
+    private Func<LottaDB, IEnumerable<object>> CompileQuery(LambdaExpression lambda)
     {
-        // Compile the expression: Func<ILottaDB, IQueryable<TView>> → execute and return as IEnumerable<object>
+        // Compile the expression: Func<LottaDB, IQueryable<TView>> → execute and return as IEnumerable<object>
         var compiled = lambda.Compile();
         return db =>
         {
@@ -184,9 +184,9 @@ internal class ViewDefinition
     public required Type ViewType { get; init; }
     public required HashSet<Type> DependsOn { get; init; }
     public required List<JoinKeyInfo> JoinKeys { get; init; }
-    public required Func<ILottaDB, IEnumerable<object>> CompiledQuery { get; init; }
+    public required Func<LottaDB, IEnumerable<object>> CompiledQuery { get; init; }
 
-    public IEnumerable<object> Execute(ILottaDB db)
+    public IEnumerable<object> Execute(LottaDB db)
     {
         return CompiledQuery(db);
     }

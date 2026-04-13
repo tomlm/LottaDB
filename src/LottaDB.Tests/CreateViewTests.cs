@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class CreateViewTests
 {
-    private ILottaDB CreateDbWithNoteView()
+    private LottaDB CreateDbWithNoteView()
     {
         return TestLottaDBFactory.CreateWithBuilders(opts =>
         {

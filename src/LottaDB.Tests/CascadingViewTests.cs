@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class CascadingViewTests
 {
-    private ILottaDB CreateDbWithCascadingViews()
+    private LottaDB CreateDbWithCascadingViews()
     {
         return TestLottaDBFactory.CreateWithBuilders(opts =>
         {

@@ -19,7 +19,7 @@ public static class LottaDBServiceCollectionExtensions
         var options = new LottaDBOptions();
         configure(options);
         var instance = new LottaDB(name, tableServiceClient, directory, options);
-        services.AddSingleton<ILottaDB>(instance);
+        services.AddSingleton(instance);
         return services;
     }
 }

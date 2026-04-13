@@ -19,7 +19,7 @@ public interface ILottaDBOptions
     /// </summary>
     /// <typeparam name="TView">The materialized view type. Must also be registered via <c>Store&lt;TView&gt;()</c>.</typeparam>
     /// <param name="viewExpression">A LINQ expression that produces view objects from source objects via joins.</param>
-    ILottaDBOptions CreateView<TView>(Expression<Func<ILottaDB, IQueryable<TView>>> viewExpression) where TView : class, new();
+    ILottaDBOptions CreateView<TView>(Expression<Func<LottaDB, IQueryable<TView>>> viewExpression) where TView : class, new();
 
     /// <summary>Register an explicit builder for custom derivation logic that can't be expressed as a LINQ join.</summary>
     /// <typeparam name="TTrigger">The type that triggers the builder when saved or deleted.</typeparam>

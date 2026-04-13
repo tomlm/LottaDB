@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class BuilderTests
 {
-    private ILottaDB CreateDbWithBuilder<TTrigger, TDerived, TBuilder>()
+    private LottaDB CreateDbWithBuilder<TTrigger, TDerived, TBuilder>()
         where TTrigger : class, new() where TDerived : class, new() where TBuilder : class, IBuilder<TTrigger, TDerived>, new()
     {
         return TestLottaDBFactory.CreateWithBuilders(opts =>
@@ -125,7 +125,7 @@ public class BuilderTests
     }
 
     [Fact]
-    public async Task Builder_HasAccessToILottaDB()
+    public async Task Builder_HasAccessToLottaDB()
     {
         // NoteViewExplicitBuilder calls db.GetAsync<Actor> — verifying it has access
         var db = CreateDbWithBuilder<Note, NoteView, NoteViewExplicitBuilder>();

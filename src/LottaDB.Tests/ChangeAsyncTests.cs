@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 {
-    private readonly ILottaDB _db;
+    private readonly LottaDB _db;
 
     public ChangeAsyncTests(LottaDBFixture fixture)
     {

@@ -15,7 +15,7 @@ namespace LottaDB;
 /// (triggering commit and IndexSearcher refresh). Reads via <see cref="Search{T}()"/>
 /// always reflect the last committed state.
 /// </summary>
-public class LottaDB : ILottaDB
+public class LottaDB
 {
     private readonly string _name;
     private readonly LottaDBOptions _options;

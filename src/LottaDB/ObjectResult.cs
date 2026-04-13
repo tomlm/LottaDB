@@ -1,8 +1,8 @@
 namespace LottaDB;
 
 /// <summary>
-/// The result of a <see cref="ILottaDB.SaveAsync{T}"/>, <see cref="ILottaDB.ChangeAsync{T}"/>,
-/// or <see cref="ILottaDB.DeleteAsync{T}"/> operation. Contains all object changes (including
+/// The result of a <see cref="LottaDB.SaveAsync{T}"/>, <see cref="LottaDB.ChangeAsync{T}"/>,
+/// or <see cref="LottaDB.DeleteAsync{T}"/> operation. Contains all object changes (including
 /// derived objects produced by builders) and any builder errors.
 /// </summary>
 public record ObjectResult

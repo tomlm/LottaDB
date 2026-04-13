@@ -2,7 +2,7 @@ namespace LottaDB.Tests;
 
 public class BuilderFailureSinkTests
 {
-    private (ILottaDB db, TestBuilderFailureSink sink) CreateDbWithFailingSink()
+    private (LottaDB db, TestBuilderFailureSink sink) CreateDbWithFailingSink()
     {
         var sink = new TestBuilderFailureSink();
         var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
