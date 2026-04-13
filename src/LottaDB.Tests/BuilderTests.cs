@@ -95,7 +95,6 @@ public class BuilderTests
     [Fact]
     public async Task Builder_ReceivesTriggerKind_Saved()
     {
-        TriggerKind? receivedTrigger = null;
         var db = TestLottaDBFactory.CreateWithBuilders(opts =>
             opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
 

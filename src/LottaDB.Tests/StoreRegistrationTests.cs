@@ -12,22 +12,22 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public void Store_WithAttributes_CanGetByKey()
+    public async Task Store_WithAttributes_CanGetByKey()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
-        db.SaveAsync(actor).Wait();
+        await db.SaveAsync(actor);
         var loaded = db.GetAsync<Actor>("alice").Result;
         Assert.NotNull(loaded);
         Assert.Equal("alice", loaded.Username);
     }
 
     [Fact]
-    public void Store_WithAttributes_ExtractsTags()
+    public async Task Store_WithAttributes_ExtractsTags()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
-        db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }).Wait();
-        db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }).Wait();
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
 
         var aliceOnly = db.Query<Actor>()
             .Where(a => a.DisplayName == "Alice")
@@ -74,11 +74,11 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public void Store_DefaultTableName_WorksForMultipleTypes()
+    public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
-        db.SaveAsync(new Actor { Username = "alice" }).Wait();
-        db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }).Wait();
+        await db.SaveAsync(new Actor { Username = "alice" });
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
 
         var actor = db.GetAsync<Actor>("alice").Result;
         Assert.NotNull(actor);

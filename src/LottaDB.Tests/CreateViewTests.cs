@@ -112,7 +112,6 @@ public class CreateViewTests
         Assert.Single(fromLucene);
     }
 
-    [Fact(Skip = "Where clause in CreateView expression not yet applied during execution")]
     public async Task CreateView_WhereClause_FiltersBeforeJoin()
     {
         var db = TestLottaDBFactory.CreateWithBuilders(opts =>

@@ -94,7 +94,6 @@ public class PolymorphismTests
         Assert.Equal("Legal", emp.Department);
     }
 
-    [Fact(Skip = "Lucene polymorphic search requires [DocumentKey] support in Iciclecreek.Lucene.Net.Linq")]
     public async Task Search_ExactType_ReturnsOnlyThatType()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
