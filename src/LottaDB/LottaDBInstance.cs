@@ -7,8 +7,10 @@ using LuceneDirectory = Lucene.Net.Store.Directory;
 namespace LottaDB;
 
 /// <summary>
-/// Core LottaDB: one table, one Lucene index.
-/// Each write opens a Lucene session → add/delete → session disposes → commit → searcher refreshes.
+/// Core LottaDB implementation: one Azure table, one Lucene index.
+/// Each write opens a Lucene session, adds/deletes, and the session disposes
+/// (triggering commit and IndexSearcher refresh). Reads via <see cref="Search{T}()"/>
+/// always reflect the last committed state.
 /// </summary>
 public class LottaDBInstance : ILottaDB
 {
@@ -21,6 +23,14 @@ public class LottaDBInstance : ILottaDB
     private readonly ConcurrentDictionary<string, string> _keyTracker = new();
     private readonly ConcurrentDictionary<Type, List<object>> _observers = new();
 
+    /// <summary>
+    /// Create a LottaDB database instance.
+    /// </summary>
+    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
+    /// <param name="tableServiceClient">Azure Table Storage client (real Azure or Spotflow in-memory for tests).</param>
+    /// <param name="directory">Lucene Directory (FSDirectory for production, RAMDirectory for tests).</param>
+    /// <param name="options">Configuration options (registered types, views, builders, observers).</param>
+    /// <param name="failureSink">Optional sink for builder failure reporting.</param>
     public LottaDBInstance(string name, TableServiceClient tableServiceClient,
         LuceneDirectory directory, LottaDBOptions options, IBuilderFailureSink? failureSink = null)
     {
