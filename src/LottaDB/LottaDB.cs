@@ -80,6 +80,11 @@ public class LottaDB
 
     private static string PK<T>() => typeof(T).Name;
 
+    // TODO: Add Lucene type discrimination via TypeDiscriminatingMapper
+    // once Iciclecreek.Lucene.Net.Linq supports custom field injection.
+    // For now, Search<T>() returns exact-type matches only.
+    // Use Query<T>() for polymorphic queries (table storage, works today).
+
     // === Write ===
 
     /// <summary>
