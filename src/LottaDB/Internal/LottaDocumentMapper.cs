@@ -72,6 +72,6 @@ internal class LottaDocumentMapper<T> : IDocumentMapper<T>, IDocumentModificatio
         if (String.IsNullOrEmpty(json1))
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());
-        return json1 == json2;
+        return json1 != json2;
     }
 }

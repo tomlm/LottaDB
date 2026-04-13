@@ -123,6 +123,60 @@ public class JsonRoundtripTests
     }
 
     [Fact]
+    public async Task Query_And_Search_DeserializeIdentically()
+    {
+        var db = TestLottaDBFactory.CreateWithBuilders();
+
+        var order = new OrderWithLines
+        {
+            OrderId = "sync-1",
+            TenantId = "sync-tenant",
+            Total = 199.99m,
+            Lines = new List<OrderLine>
+            {
+                new() { ProductId = "a", Quantity = 5, Price = 39.998m }
+            },
+            Metadata = new Dictionary<string, string> { ["key"] = "val" }
+        };
+        await db.SaveAsync(order);
+
+        var fromQuery = db.Query<OrderWithLines>().First();
+        var fromSearch = db.Search<OrderWithLines>().First();
+
+        // Deep equality: both paths should produce identical objects
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(fromQuery),
+            System.Text.Json.JsonSerializer.Serialize(fromSearch));
+    }
+
+    [Fact]
+    public async Task Search_ComplexObject_PreservesNestedCollections()
+    {
+        var db = TestLottaDBFactory.CreateWithBuilders();
+
+        await db.SaveAsync(new OrderWithLines
+        {
+            OrderId = "search-nested",
+            Total = 350m,
+            Lines = new List<OrderLine>
+            {
+                new() { ProductId = "x", Quantity = 2, Price = 100m },
+                new() { ProductId = "y", Quantity = 3, Price = 50m }
+            },
+            Metadata = new Dictionary<string, string>
+            {
+                ["a"] = "1", ["b"] = "2"
+            }
+        });
+
+        var result = db.Search<OrderWithLines>().First();
+        Assert.Equal(350m, result.Total);
+        Assert.Equal(2, result.Lines.Count);
+        Assert.Equal("x", result.Lines[0].ProductId);
+        Assert.Equal(2, result.Metadata.Count);
+    }
+
+    [Fact]
     public async Task Search_Note_PreservesIndexedFields()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
@@ -204,5 +258,56 @@ public class JsonRoundtripTests
         Assert.Equal(2, results[0].Tags.Count);
         Assert.Contains("azure", results[0].Tags);
         Assert.Contains("tables", results[0].Tags);
+    }
+
+    [Fact]
+    public async Task RebuildIndex_PreservesComplexObjectFidelity()
+    {
+        var db = TestLottaDBFactory.CreateWithBuilders();
+
+        await db.SaveAsync(new OrderWithLines
+        {
+            OrderId = "rebuild-complex",
+            Total = 599.99m,
+            Lines = new List<OrderLine>
+            {
+                new() { ProductId = "x", Quantity = 3, Price = 199.997m }
+            },
+            Metadata = new Dictionary<string, string> { ["k"] = "v" }
+        });
+
+        await db.RebuildIndex();
+
+        var result = db.Search<OrderWithLines>().First();
+        Assert.Equal("rebuild-complex", result.OrderId);
+        Assert.Equal(599.99m, result.Total);
+        Assert.Single(result.Lines);
+        Assert.Equal("x", result.Lines[0].ProductId);
+    }
+
+    [Fact]
+    public async Task Builder_DerivedObject_SearchPreservesJsonFidelity()
+    {
+        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
+            opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
+
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Note
+        {
+            NoteId = "builder-json",
+            AuthorId = "alice",
+            Content = "Test",
+            Published = DateTimeOffset.UtcNow,
+            Tags = new List<string> { "a", "b" }
+        });
+
+        // NoteView produced by builder should have Tags preserved through Search
+        var view = db.Search<NoteView>()
+            .FirstOrDefault(v => v.NoteId == "builder-json");
+
+        Assert.NotNull(view);
+        Assert.Equal("Alice", view.AuthorDisplay);
+        Assert.Equal(2, view.Tags.Count);
+        Assert.Contains("a", view.Tags);
     }
 }

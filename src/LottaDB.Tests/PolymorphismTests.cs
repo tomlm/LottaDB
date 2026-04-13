@@ -94,6 +94,7 @@ public class PolymorphismTests
         Assert.Equal("Legal", emp.Department);
     }
 
+    [Fact]
     public async Task Search_ExactType_ReturnsOnlyThatType()
     {
         var db = TestLottaDBFactory.CreateWithBuilders();
