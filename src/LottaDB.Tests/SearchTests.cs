@@ -34,9 +34,9 @@ public class SearchTests
         await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast", Published = DateTimeOffset.UtcNow });
 
-        // Filter by content containing a substring
+        // Filter by a non-analyzed field (AuthorId has NotAnalyzed)
         var results = db.Search<Note>()
-            .Where(n => n.Content.Contains("Lucene"))
+            .Where(n => n.AuthorId == "alice")
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);

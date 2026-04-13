@@ -19,10 +19,11 @@ public class Actor
 
 public class Note
 {
-    [Key(Strategy = KeyStrategy.DescendingTime)]
-    public DateTimeOffset Published { get; set; }
-
+    [Key]
+    [Field(Key = true)]
     public string NoteId { get; set; } = "";
+
+    public DateTimeOffset Published { get; set; }
 
     [Tag]
     [Field(IndexMode.NotAnalyzed)]
