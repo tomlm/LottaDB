@@ -5,12 +5,12 @@ namespace Lotta;
 /// <summary>
 /// Configuration options for a LottaDB database instance.
 /// </summary>
-public interface ILottaDBOptions
+public interface ILottaConfiguration
 {
     /// <summary>Register an object type. Config from [Key]/[Tag] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, tags, and index fields.</param>
-    ILottaDBOptions Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new();
+    ILottaConfiguration Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new();
 
     /// <summary>
     /// Register a handler that runs inline after every save or delete of type <typeparamref name="T"/>.
@@ -19,7 +19,7 @@ public interface ILottaDBOptions
     /// </summary>
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
-    ILottaDBOptions On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
+    ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
 }
 
 /// <summary>

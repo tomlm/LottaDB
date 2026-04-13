@@ -6,7 +6,10 @@ namespace Lotta.Internal;
 
 internal static class ObjectCopier<T> where T : class
 {
-    public static readonly Action<T, T> Copy = CreateCopyAction();
+    /// <summary>
+    /// ShallowCopy(source, target) copies all public properties from source to target.
+    /// </summary>
+    public static readonly Action<T, T> ShallowCopy = CreateCopyAction();
 
     private static Action<T, T> CreateCopyAction()
     {

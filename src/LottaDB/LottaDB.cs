@@ -17,7 +17,7 @@ namespace Lotta;
 public class LottaDB
 {
     private readonly string _name;
-    private readonly LottaDBOptions _options;
+    private readonly LottaConfiguration _options;
     private readonly TableStorageAdapter _tableStore;
     private readonly Lucene.Net.Linq.LuceneDataProvider _lucene;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
@@ -39,7 +39,7 @@ public class LottaDB
     /// <param name="directory">Lucene Directory.</param>
     /// <param name="options">Configuration (registered types, On&lt;T&gt; handlers).</param>
     public LottaDB(string name, TableServiceClient tableServiceClient,
-        LuceneDirectory directory, LottaDBOptions options)
+        LuceneDirectory directory, LottaConfiguration options)
     {
         _name = name;
         _options = options;

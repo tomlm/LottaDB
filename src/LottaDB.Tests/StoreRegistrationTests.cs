@@ -94,7 +94,7 @@ public class StoreRegistrationTests
         var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
         var directory = new Lucene.Net.Store.RAMDirectory();
         directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
-        var options = new LottaDBOptions();
+        var options = new LottaConfiguration();
         // deliberately NOT registering Actor
         var db = new LottaDB("test", tableClient, directory, options);
 

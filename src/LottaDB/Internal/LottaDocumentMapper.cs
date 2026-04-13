@@ -44,7 +44,7 @@ internal class LottaDocumentMapper<T> : IDocumentMapper<T>, IDocumentModificatio
             var deserialized = JsonSerializer.Deserialize<T>(json);
             if (deserialized != null)
             {
-                ObjectCopier<T>.Copy(deserialized, target);
+                ObjectCopier<T>.ShallowCopy(deserialized, target);
                 return;
             }
         }
