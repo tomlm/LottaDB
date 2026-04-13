@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 
-namespace LottaDB;
+namespace Lotta;
 
 public class LottaDBOptions : ILottaDBOptions
 {

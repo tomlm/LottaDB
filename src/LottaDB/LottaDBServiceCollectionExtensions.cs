@@ -2,7 +2,7 @@ using Azure.Data.Tables;
 using Microsoft.Extensions.DependencyInjection;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Optional DI convenience extension. LottaDB can also be constructed directly.

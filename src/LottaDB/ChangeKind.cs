@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Indicates the kind of change that occurred to an object.

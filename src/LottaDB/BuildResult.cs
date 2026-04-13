@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// A result yielded by an <see cref="IBuilder{TTrigger, TDerived}"/>.

@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Determines how the object key is generated.

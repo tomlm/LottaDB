@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// A builder that produces derived objects when a trigger object is saved or deleted.

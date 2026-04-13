@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// The result of a <see cref="LottaDB.SaveAsync{T}"/>, <see cref="LottaDB.ChangeAsync{T}"/>,

@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Promotes a property to a native Azure Table Storage column (tag).

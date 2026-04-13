@@ -1,7 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 
-namespace LottaDB.Internal;
+namespace Lotta.Internal;
 
 /// <summary>
 /// Parses a CreateView LINQ expression to extract dependencies, join keys, and the compiled projection.

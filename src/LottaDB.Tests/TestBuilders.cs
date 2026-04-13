@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
-using LottaDB;
+using Lotta;
 
-namespace LottaDB.Tests;
+namespace Lotta.Tests;
 
 public class NoteViewExplicitBuilder : IBuilder<Note, NoteView>
 {

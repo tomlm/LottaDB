@@ -1,10 +1,10 @@
 using Azure.Data.Tables;
-using LottaDB;
+using Lotta;
 using Microsoft.Extensions.DependencyInjection;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
 
-namespace LottaDB.Tests;
+namespace Lotta.Tests;
 
 public class LottaDBFixture : IDisposable
 {

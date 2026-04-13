@@ -2,7 +2,7 @@ using System.Text.Json;
 using Azure;
 using Azure.Data.Tables;
 
-namespace LottaDB.Internal;
+namespace Lotta.Internal;
 
 /// <summary>
 /// Adapter over Azure.Data.Tables TableClient for storing POCOs as JSON + tags.

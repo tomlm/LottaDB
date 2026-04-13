@@ -1,7 +1,7 @@
-using LottaDB;
+using Lotta;
 using Lucene.Net.Linq.Mapping;
 
-namespace LottaDB.Tests;
+namespace Lotta.Tests;
 
 public class Actor
 {

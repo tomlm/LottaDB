@@ -1,4 +1,4 @@
-namespace LottaDB.Tests;
+namespace Lotta.Tests;
 
 public class AdHocJoinTests
 {

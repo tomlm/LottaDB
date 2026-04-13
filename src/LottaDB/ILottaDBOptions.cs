@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Configuration options for a LottaDB database instance.

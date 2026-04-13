@@ -1,7 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 
-namespace LottaDB.Internal;
+namespace Lotta.Internal;
 
 /// <summary>
 /// Parsed metadata for a registered type. Key, tags, type hierarchy.

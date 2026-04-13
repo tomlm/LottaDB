@@ -1,4 +1,4 @@
-namespace LottaDB;
+namespace Lotta;
 
 /// <summary>
 /// Describes a change to an object (non-generic). Contained in <see cref="ObjectResult.Changes"/>.
