@@ -22,7 +22,6 @@ public class Note
     [Key(Strategy = KeyStrategy.DescendingTime)]
     public DateTimeOffset Published { get; set; }
 
-    [Field(Key = true)]
     public string NoteId { get; set; } = "";
 
     [Tag]
@@ -112,6 +111,7 @@ public class LogEntry
 public class OrderWithLines
 {
     [Key]
+    [Field(Key = true)]
     public string OrderId { get; set; } = "";
 
     public string TenantId { get; set; } = "";

@@ -34,8 +34,9 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         var entity = new TableEntity(pk, rk);
 
-        // Store full POCO as JSON
+        // System fields
         entity["_json"] = JsonSerializer.Serialize(obj, obj.GetType());
+        entity["_type"] = string.Join(",", meta.TypeHierarchy);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -163,6 +164,31 @@ internal class TableStorageAdapter
                 var obj = JsonSerializer.Deserialize<T>(json);
                 if (obj != null)
                     results.Add(obj);
+            }
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Query all objects whose _type hierarchy contains the given type name.
+    /// Scans all partitions — used for polymorphic queries.
+    /// </summary>
+    public List<T> QueryByType<T>(string tableName, string typeName) where T : class, new()
+    {
+        var table = GetTable(tableName);
+        var results = new List<T>();
+        foreach (var entity in table.Query<TableEntity>())
+        {
+            var typeField = entity.GetString("_type") ?? "";
+            if (typeField.Split(',').Contains(typeName))
+            {
+                var json = entity.GetString("_json");
+                if (json != null)
+                {
+                    var obj = JsonSerializer.Deserialize<T>(json);
+                    if (obj != null)
+                        results.Add(obj);
+                }
             }
         }
         return results;

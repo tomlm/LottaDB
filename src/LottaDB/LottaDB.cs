@@ -200,13 +200,14 @@ public class LottaDB
 
     /// <summary>
     /// Query Azure Table Storage. Returns an <see cref="IQueryable{T}"/> filtered by type.
+    /// Supports polymorphic queries — <c>Query&lt;BaseClass&gt;()</c> returns all derived types.
     /// Supports LINQ joins (used by <c>CreateView</c> expressions).
     /// </summary>
-    /// <typeparam name="T">The object type. Returns only objects of this type.</typeparam>
+    /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
     public IQueryable<T> Query<T>() where T : class, new()
     {
         GetMeta<T>();
-        return _tableStore.QueryAll<T>(_name, PK<T>()).AsQueryable();
+        return _tableStore.QueryByType<T>(_name, typeof(T).Name).AsQueryable();
     }
 
     /// <summary>
