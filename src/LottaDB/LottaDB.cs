@@ -425,12 +425,8 @@ public class LottaDB
         var key = meta.GetKey(entity);
         await _tableStore.UpsertAsync(_name, PK<T>(), key, entity, meta);
         TrackKey(typeof(T), entity, key);
-        try
-        {
-            using var session = _lucene.OpenSession<T>(GetMapper<T>());
-            session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
-        }
-        catch { }
+        using var session = _lucene.OpenSession<T>(GetMapper<T>());
+        session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
 
         var changes = new List<ObjectChange>
         {
