@@ -224,7 +224,7 @@ public class LottaDB
     /// <c>Iciclecreek.Lucene.Net.Linq</c>. Always reflects the last committed state.
     /// </summary>
     /// <typeparam name="T">The object type to search for.</typeparam>
-    /// <param name="query">Optional Lucene query string to pre-filter results (e.g. <c>"content:lucene* AND authorId:alice"</c>).</param>
+    /// <param name="query">Optional Lucene query string to pre-filter results.</param>
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
         GetMeta<T>();
