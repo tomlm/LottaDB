@@ -23,7 +23,7 @@ internal class TypeMetadata
         TypeHierarchy = BuildTypeHierarchy(type);
     }
 
-    public static TypeMetadata Build<T>(StoreConfiguration<T>? fluentConfig) where T : class, new()
+    public static TypeMetadata Build<T>(StorageConfiguration<T>? fluentConfig) where T : class, new()
     {
         var type = typeof(T);
         var meta = new TypeMetadata(type);
@@ -38,7 +38,7 @@ internal class TypeMetadata
         return meta;
     }
 
-    private static (Func<object, string> getter, KeyStrategy strategy, PropertyInfo? prop) ResolveKey<T>(StoreConfiguration<T>? fluent) where T : class, new()
+    private static (Func<object, string> getter, KeyStrategy strategy, PropertyInfo? prop) ResolveKey<T>(StorageConfiguration<T>? fluent) where T : class, new()
     {
         // Fluent override with expression
         if (fluent?.KeyExpression is Expression<Func<T, string>> keyExpr)
@@ -102,7 +102,7 @@ internal class TypeMetadata
         };
     }
 
-    private static void ResolveTags<T>(TypeMetadata meta, StoreConfiguration<T>? fluent) where T : class, new()
+    private static void ResolveTags<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()
     {
         foreach (var prop in typeof(T).GetProperties())
         {

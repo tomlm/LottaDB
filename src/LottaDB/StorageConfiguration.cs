@@ -2,26 +2,26 @@ using System.Linq.Expressions;
 
 namespace Lotta;
 
-public class StoreConfiguration<T> : IStoreConfiguration<T> where T : class, new()
+public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class, new()
 {
     internal LambdaExpression? KeyExpression { get; private set; }
     internal KeyStrategy? KeyStrategyValue { get; private set; }
     internal List<LambdaExpression> Tags { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
 
-    public IStoreConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
+    public IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
     {
         KeyExpression = resolver;
         return this;
     }
 
-    public IStoreConfiguration<T> SetKey(KeyStrategy strategy)
+    public IStorageConfiguration<T> SetKey(KeyStrategy strategy)
     {
         KeyStrategyValue = strategy;
         return this;
     }
 
-    public IStoreConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property)
+    public IStorageConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property)
     {
         Tags.Add(property);
         return this;
@@ -32,7 +32,7 @@ public class StoreConfiguration<T> : IStoreConfiguration<T> where T : class, new
         return new IndexPropertyConfiguration();
     }
 
-    public IStoreConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property)
+    public IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property)
     {
         IgnoredProperties.Add(property);
         return this;

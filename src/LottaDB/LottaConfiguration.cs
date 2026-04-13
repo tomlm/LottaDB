@@ -2,14 +2,14 @@ namespace Lotta;
 
 public class LottaConfiguration : ILottaConfiguration
 {
-    internal Dictionary<Type, object> StoreConfigurations { get; } = new();
+    internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
 
-    public ILottaConfiguration Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new()
+    public ILottaConfiguration Store<T>(Action<IStorageConfiguration<T>>? configure = null) where T : class, new()
     {
-        var config = new StoreConfiguration<T>();
+        var config = new StorageConfiguration<T>();
         configure?.Invoke(config);
-        StoreConfigurations[typeof(T)] = config;
+        StorageConfigurations[typeof(T)] = config;
         return this;
     }
 

@@ -10,7 +10,7 @@ public interface ILottaConfiguration
     /// <summary>Register an object type. Config from [Key]/[Tag] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, tags, and index fields.</param>
-    ILottaConfiguration Store<T>(Action<IStoreConfiguration<T>>? configure = null) where T : class, new();
+    ILottaConfiguration Store<T>(Action<IStorageConfiguration<T>>? configure = null) where T : class, new();
 
     /// <summary>
     /// Register a handler that runs inline after every save or delete of type <typeparamref name="T"/>.
@@ -27,20 +27,20 @@ public interface ILottaConfiguration
 /// Used inside <c>opts.Store&lt;T&gt;(s =&gt; ...)</c>.
 /// </summary>
 /// <typeparam name="T">The object type being configured.</typeparam>
-public interface IStoreConfiguration<T> where T : class, new()
+public interface IStorageConfiguration<T> where T : class, new()
 {
     /// <summary>Set the key using a custom expression. For composite keys (e.g. <c>s.SetKey(x =&gt; $"{x.Domain}/{x.Id}")</c>).</summary>
     /// <param name="resolver">Expression that computes the key string from the object.</param>
-    IStoreConfiguration<T> SetKey(Expression<Func<T, string>> resolver);
+    IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver);
 
     /// <summary>Set the key strategy for time-ordered objects.</summary>
     /// <param name="strategy">The key generation strategy (Natural, DescendingTime, AscendingTime).</param>
-    IStoreConfiguration<T> SetKey(KeyStrategy strategy);
+    IStorageConfiguration<T> SetKey(KeyStrategy strategy);
 
     /// <summary>Promote a property to a native Azure Table Storage column (tag) for server-side filtering.</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
     /// <param name="property">Expression selecting the property to promote.</param>
-    IStoreConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property);
+    IStorageConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property);
 
     /// <summary>Configure how a property is indexed in Lucene. Returns a builder for field options.</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
@@ -50,7 +50,7 @@ public interface IStoreConfiguration<T> where T : class, new()
     /// <summary>Exclude a property from both table storage tags and Lucene indexing.</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
     /// <param name="property">Expression selecting the property to exclude.</param>
-    IStoreConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property);
+    IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property);
 }
 
 /// <summary>

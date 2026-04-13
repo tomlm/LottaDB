@@ -59,7 +59,7 @@ public class LottaDB
 
     private void InitializeMetadata()
     {
-        foreach (var (type, configObj) in _options.StoreConfigurations)
+        foreach (var (type, configObj) in _options.StorageConfigurations)
         {
             var m = typeof(TypeMetadata).GetMethod(nameof(TypeMetadata.Build))!.MakeGenericMethod(type);
             _metadata[type] = (TypeMetadata)m.Invoke(null, new[] { configObj })!;
