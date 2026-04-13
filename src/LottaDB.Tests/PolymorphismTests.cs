@@ -109,4 +109,43 @@ public class PolymorphismTests
         Assert.Single(employees);
         Assert.Equal("emp7", employees[0].Id);
     }
+
+    [Fact]
+    public async Task Search_BaseClass_ReturnsAllDerivedTypes()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        await db.SaveAsync(new BaseEntity { Id = "sbase1", Name = "Base" });
+        await db.SaveAsync(new Person { Id = "sperson1", Name = "Alice", Email = "alice@test.com" });
+        await db.SaveAsync(new Employee { Id = "semp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+
+        var all = db.Search<BaseEntity>().ToList();
+        Assert.Equal(3, all.Count);
+    }
+
+    [Fact]
+    public async Task Search_MiddleClass_ReturnsMiddleAndDerived()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        await db.SaveAsync(new BaseEntity { Id = "sbase2", Name = "Base" });
+        await db.SaveAsync(new Person { Id = "sperson2", Name = "Alice", Email = "alice@test.com" });
+        await db.SaveAsync(new Employee { Id = "semp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+
+        var people = db.Search<Person>().ToList();
+        Assert.Equal(2, people.Count);
+    }
+
+    [Fact]
+    public async Task Search_BaseClass_DeserializesToConcreteType()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        await db.SaveAsync(new Employee { Id = "semp3", Name = "Carol", Email = "carol@test.com", Department = "Sales" });
+
+        var all = db.Search<BaseEntity>().ToList();
+        Assert.Single(all);
+        Assert.IsType<Employee>(all[0]);
+        Assert.Equal("Sales", ((Employee)all[0]).Department);
+    }
 }

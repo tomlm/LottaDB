@@ -6,6 +6,7 @@ using Lucene.Net.Index;
 using Lucene.Net.Util;
 using Lotta.Internal;
 using LuceneDirectory = Lucene.Net.Store.Directory;
+using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta;
 
@@ -52,6 +53,11 @@ public class LottaDB
             writer.Commit();
         }
         _lucene = new Lucene.Net.Linq.LuceneDataProvider(directory, LuceneVersion.LUCENE_48);
+        _lucene.MapperFactory = (type, version, analyzer) => // instantiate LottaDocumentMapper for type
+        {
+            var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
+            return Activator.CreateInstance(mapperType, version)!;
+        };
 
         InitializeMetadata();
         InitializeHandlers();
@@ -87,9 +93,7 @@ public class LottaDB
     {
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
-            var meta = GetMeta<T>();
-            var classMapMapper = LottaClassMap.Build<T>(meta.TypeHierarchy);
-            return new LottaDocumentMapper<T>(classMapMapper);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48);
         });
     }
 

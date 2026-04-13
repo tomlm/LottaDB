@@ -3,11 +3,11 @@ namespace Lotta.Tests;
 public class StoreRegistrationTests
 {
     [Fact]
-    public void Store_WithAttributes_ExtractsKey()
+    public async Task Store_WithAttributes_ExtractsKey()
     {
         var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
-        var result = db.SaveAsync(actor).Result;
+        var result = await db.SaveAsync(actor);
         Assert.NotNull(result);
     }
 
@@ -17,7 +17,7 @@ public class StoreRegistrationTests
         var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor);
-        var loaded = db.GetAsync<Actor>("alice").Result;
+        var loaded = await db.GetAsync<Actor>("alice");
         Assert.NotNull(loaded);
         Assert.Equal("alice", loaded.Username);
     }
@@ -80,7 +80,7 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice" });
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
 
-        var actor = db.GetAsync<Actor>("alice").Result;
+        var actor = await db.GetAsync<Actor>("alice");
         Assert.NotNull(actor);
 
         var notes = db.Query<Note>().ToList();

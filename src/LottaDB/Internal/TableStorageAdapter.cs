@@ -36,8 +36,8 @@ internal class TableStorageAdapter
         var entity = new TableEntity(pk, rk);
 
         // System fields
-        entity["_json"] = JsonSerializer.Serialize(obj, obj.GetType());
-        entity["_type"] = string.Join(",", meta.TypeHierarchy);
+        entity["_json_"] = JsonSerializer.Serialize(obj, obj.GetType());
+        entity["_type_"] = string.Join(",", meta.TypeHierarchy);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -54,7 +54,7 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         var entity = new TableEntity(pk, rk);
-        entity["_json"] = JsonSerializer.Serialize(obj, obj.GetType());
+        entity["_json_"] = JsonSerializer.Serialize(obj, obj.GetType());
 
         foreach (var tag in meta.Tags)
         {
@@ -81,7 +81,7 @@ internal class TableStorageAdapter
         {
             var response = await table.GetEntityAsync<TableEntity>(pk, rk);
             var entity = response.Value;
-            var json = entity.GetString("_json");
+            var json = entity.GetString("_json_");
             if (json == null) return (null, null);
 
             var obj = JsonSerializer.Deserialize<T>(json);
@@ -126,7 +126,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         await foreach (var entity in table.QueryAsync<TableEntity>())
         {
-            var json = entity.GetString("_json");
+            var json = entity.GetString("_json_");
             if (json != null)
             {
                 var obj = JsonSerializer.Deserialize<T>(json);
@@ -142,7 +142,7 @@ internal class TableStorageAdapter
         var results = new List<T>();
         foreach (var entity in table.Query<TableEntity>())
         {
-            var json = entity.GetString("_json");
+            var json = entity.GetString("_json_");
             if (json != null)
             {
                 var obj = JsonSerializer.Deserialize<T>(json);
@@ -159,7 +159,7 @@ internal class TableStorageAdapter
         var results = new List<T>();
         foreach (var entity in table.Query<TableEntity>(e => e.PartitionKey == partitionKey))
         {
-            var json = entity.GetString("_json");
+            var json = entity.GetString("_json_");
             if (json != null)
             {
                 var obj = JsonSerializer.Deserialize<T>(json);
@@ -180,10 +180,10 @@ internal class TableStorageAdapter
         var results = new List<T>();
         foreach (var entity in table.Query<TableEntity>())
         {
-            var typeField = entity.GetString("_type") ?? "";
+            var typeField = entity.GetString("_type_") ?? "";
             if (typeField.Split(',').Contains(typeName))
             {
-                var json = entity.GetString("_json");
+                var json = entity.GetString("_json_");
                 if (json != null)
                 {
                     var obj = DeserializePolymorphic<T>(json, typeField);

@@ -1,8 +1,10 @@
-using System.Text.Json;
+using Lucene.Net.Analysis;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Search;
+using System.Text.Json;
+using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;
 
@@ -12,63 +14,47 @@ namespace Lotta.Internal;
 /// - ToObject: deserializes from _json (full roundtrip) instead of field-by-field
 /// - PrepareSearchSettings: filters by _type DocumentKey
 /// </summary>
-internal class LottaDocumentMapper<T> : IDocumentMapper<T>, IDocumentModificationDetector<T> where T : class, new()
+internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
+    where T : class, new()
 {
-    private readonly IDocumentMapper<T> _inner;
+    private const string JSON = "_json_";
 
-    public LottaDocumentMapper(IDocumentMapper<T> inner)
+    public LottaDocumentMapper() : base(Version.LUCENE_48)
     {
-        _inner = inner;
     }
 
-    public Lucene.Net.Linq.Analysis.PerFieldAnalyzer Analyzer => _inner.Analyzer;
-
-    public void ToDocument(T source, Document target)
+    public LottaDocumentMapper(Version version) : base(version)
     {
-        // Index all [Field] properties via the ClassMap mapper (for search/filter/sort)
-        _inner.ToDocument(source, target);
-
-        // Store _json for full POCO deserialization on read
-        target.RemoveField("_json");
-        target.Add(new StringField("_json",
-            JsonSerializer.Serialize(source, source.GetType()),
-            Field.Store.YES));
     }
 
-    public void ToObject(Document source, IQueryExecutionContext context, T target)
+    protected LottaDocumentMapper(Version version, Analyzer externalAnalyzer)
+        : base(version, externalAnalyzer)
     {
-        // Deserialize from _json for full POCO fidelity
-        var json = source.Get("_json");
+    }
+
+    public override void MapFieldsToDocument(T source, Document target)
+    {
+        base.MapFieldsToDocument(source, target);
+        target.Add(new StoredField(JSON, JsonSerializer.Serialize(source, source.GetType())));
+    }
+       
+
+    public override T CreateFromDocument(Document source, IQueryExecutionContext context,
+          Type actualType, ObjectLookup<T> factory)
+    {
+        var json = source.Get(JSON);
         if (json != null)
         {
-            var deserialized = JsonSerializer.Deserialize<T>(json);
-            if (deserialized != null)
-            {
-                ObjectCopier<T>.ShallowCopy(deserialized, target);
-                return;
-            }
+            return (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
         }
 
-        // Fallback to field-by-field hydration
-        _inner.ToObject(source, context, target);
+        // Fall back to field-by-field for documents without _json_
+        return base.CreateFromDocument(source, context, actualType, factory); 
     }
 
-    public IDocumentKey ToKey(T source) => _inner.ToKey(source);
-
-    public void PrepareSearchSettings(IQueryExecutionContext context)
-        => _inner.PrepareSearchSettings(context);
-
-    public bool Equals(T item1, T item2) => _inner.Equals(item1, item2);
-
-    public IFieldMappingInfo GetMappingInfo(string propertyName) => _inner.GetMappingInfo(propertyName);
-    public Query CreateMultiFieldQuery(string query) => _inner.CreateMultiFieldQuery(query);
-    public IEnumerable<string> AllProperties => _inner.AllProperties;
-    public IEnumerable<string> KeyProperties => _inner.KeyProperties;
-    public IEnumerable<string> IndexedProperties => _inner.IndexedProperties;
-
-    public bool IsModified(T item, Document document)
+    public override bool IsModified(T item, Document document)
     {
-        var json1 = document.Get("_json");
+        var json1 = document.Get(JSON);
         if (String.IsNullOrEmpty(json1))
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());

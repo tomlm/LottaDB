@@ -115,9 +115,13 @@ public class OrderWithLines
     [Field(Key = true)]
     public string OrderId { get; set; } = "";
 
+    [IgnoreField]
     public string TenantId { get; set; } = "";
+    [IgnoreField]
     public decimal Total { get; set; }
+    [IgnoreField]
     public List<OrderLine> Lines { get; set; } = new();
+    [IgnoreField]
     public Dictionary<string, string> Metadata { get; set; } = new();
 }
 
