@@ -257,6 +257,12 @@ public class LottaDB
         return _tableStore.QueryByType<T>(_name, typeof(T).Name).AsQueryable();
     }
 
+    /// <summary>Query Azure Table Storage with a predicate filter.</summary>
+    /// <typeparam name="T">The object type.</typeparam>
+    /// <param name="predicate">Filter expression.</param>
+    public IQueryable<T> Query<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate) where T : class, new()
+        => Query<T>().Where(predicate);
+
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
     /// (deserialized from stored _json field). Always reflects the last committed state.
@@ -268,6 +274,12 @@ public class LottaDB
         GetMeta<T>();
         return _lucene.AsQueryable<T>(GetMapper<T>());
     }
+
+    /// <summary>Search the Lucene index with a predicate filter.</summary>
+    /// <typeparam name="T">The object type.</typeparam>
+    /// <param name="predicate">Filter expression applied to Lucene results.</param>
+    public IQueryable<T> Search<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate) where T : class, new()
+        => Search<T>().Where(predicate);
 
     // === On<T> (runtime registration) ===
 
