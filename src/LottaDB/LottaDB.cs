@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Azure.Data.Tables;
+using Lucene.Net.Analysis.Standard;
+using Lucene.Net.Index;
+using Lucene.Net.Util;
 using LottaDB.Internal;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 
@@ -12,13 +15,13 @@ namespace LottaDB;
 /// (triggering commit and IndexSearcher refresh). Reads via <see cref="Search{T}()"/>
 /// always reflect the last committed state.
 /// </summary>
-public class LottaDBInstance : ILottaDB
+public class LottaDB : ILottaDB
 {
     private readonly string _name;
     private readonly LottaDBOptions _options;
     private readonly IBuilderFailureSink? _failureSink;
     private readonly TableStorageAdapter _tableStore;
-    private readonly LuceneIndex _luceneIndex;
+    private readonly Lucene.Net.Linq.LuceneDataProvider _lucene;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<string, string> _keyTracker = new();
     private readonly ConcurrentDictionary<Type, List<object>> _observers = new();
@@ -31,14 +34,22 @@ public class LottaDBInstance : ILottaDB
     /// <param name="directory">Lucene Directory (FSDirectory for production, RAMDirectory for tests).</param>
     /// <param name="options">Configuration options (registered types, views, builders, observers).</param>
     /// <param name="failureSink">Optional sink for builder failure reporting.</param>
-    public LottaDBInstance(string name, TableServiceClient tableServiceClient,
+    public LottaDB(string name, TableServiceClient tableServiceClient,
         LuceneDirectory directory, LottaDBOptions options, IBuilderFailureSink? failureSink = null)
     {
         _name = name;
         _options = options;
         _failureSink = failureSink;
         _tableStore = new TableStorageAdapter(tableServiceClient);
-        _luceneIndex = new LuceneIndex(directory);
+
+        // Ensure the Lucene index exists, then create the provider
+        using (var writer = new IndexWriter(directory,
+            new IndexWriterConfig(LuceneVersion.LUCENE_48, new StandardAnalyzer(LuceneVersion.LUCENE_48))
+            { OpenMode = OpenMode.CREATE_OR_APPEND }))
+        {
+            writer.Commit();
+        }
+        _lucene = new Lucene.Net.Linq.LuceneDataProvider(directory, LuceneVersion.LUCENE_48);
         InitializeMetadata();
         InitializeObservers();
     }
@@ -83,7 +94,7 @@ public class LottaDBInstance : ILottaDB
         // Lucene: open session, add, session disposes → commit → searcher refreshes
         try
         {
-            using var session = _luceneIndex.OpenSession<T>();
+            using var session = _lucene.OpenSession<T>();
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
         catch { /* skip types Lucene can't index */ }
@@ -111,7 +122,7 @@ public class LottaDBInstance : ILottaDB
         {
             try
             {
-                using var session = _luceneIndex.OpenSession<T>();
+                using var session = _lucene.OpenSession<T>();
                 session.Delete(existing);
             }
             catch { }
@@ -161,13 +172,13 @@ public class LottaDBInstance : ILottaDB
     public IQueryable<T> Search<T>() where T : class, new()
     {
         GetMeta<T>();
-        return _luceneIndex.AsQueryable<T>();
+        return _lucene.AsQueryable<T>();
     }
 
-    public IQueryable<T> Search<T>(string query) where T : class, new()
+    public IQueryable<T> Search<T>(string? query) where T : class, new()
     {
-        // TODO: Lucene query string pre-filter
-        return Search<T>();
+        GetMeta<T>();
+        return _lucene.AsQueryable<T>();
     }
 
     // === Observe ===
@@ -201,7 +212,7 @@ public class LottaDBInstance : ILottaDB
         {
             try
             {
-                typeof(LottaDBInstance)
+                typeof(LottaDB)
                     .GetMethod(nameof(RebuildType), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                     .MakeGenericMethod(type)
                     .Invoke(this, Array.Empty<object>());
@@ -213,7 +224,7 @@ public class LottaDBInstance : ILottaDB
 
     private void RebuildType<T>() where T : class, new()
     {
-        using var session = _luceneIndex.OpenSession<T>();
+        using var session = _lucene.OpenSession<T>();
         foreach (var item in _tableStore.QueryAll<T>(_name, PK<T>()))
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, item);
     }
@@ -239,7 +250,7 @@ public class LottaDBInstance : ILottaDB
         {
             try
             {
-                var m = typeof(LottaDBInstance)
+                var m = typeof(LottaDB)
                     .GetMethod(nameof(RunBuilder), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                     .MakeGenericMethod(reg.TriggerType, reg.DerivedType);
                 await (Task)m.Invoke(this, new[] { Activator.CreateInstance(reg.BuilderType)!, entity, trigger, changes, errors, cycleGuard, ct })!;
@@ -327,7 +338,7 @@ public class LottaDBInstance : ILottaDB
         // Clear existing views of this type
         _tableStore.ClearTable(_name, viewReg.ViewType.Name);
 
-        var saveMethod = typeof(LottaDBInstance)
+        var saveMethod = typeof(LottaDB)
             .GetMethod(nameof(SaveDerived), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .MakeGenericMethod(viewReg.ViewType);
         foreach (var v in newViews)
@@ -347,7 +358,7 @@ public class LottaDBInstance : ILottaDB
         TrackKey(typeof(T), entity, key);
         try
         {
-            using var session = _luceneIndex.OpenSession<T>();
+            using var session = _lucene.OpenSession<T>();
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
         catch { }

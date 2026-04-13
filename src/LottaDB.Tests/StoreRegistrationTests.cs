@@ -96,7 +96,7 @@ public class StoreRegistrationTests
         directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
         var options = new LottaDBOptions();
         // deliberately NOT registering Actor
-        var db = new LottaDBInstance("test", tableClient, directory, options);
+        var db = new LottaDB("test", tableClient, directory, options);
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
             db.SaveAsync(new Actor { Username = "alice" }));

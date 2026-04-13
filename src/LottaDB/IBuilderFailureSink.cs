@@ -8,5 +8,7 @@ namespace LottaDB;
 public interface IBuilderFailureSink
 {
     /// <summary>Called when a builder fails during a write operation.</summary>
+    /// <param name="error">Details about the failure including builder name, trigger info, and exception.</param>
+    /// <param name="ct">Cancellation token.</param>
     Task ReportAsync(BuilderError error, CancellationToken ct = default);
 }

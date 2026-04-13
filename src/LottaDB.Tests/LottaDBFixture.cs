@@ -43,7 +43,7 @@ public class LottaDBFixture : IDisposable
 
         configure?.Invoke(options);
 
-        return new LottaDBInstance($"test{Guid.NewGuid():N}", tableClient, directory, options);
+        return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
     }
 }
 

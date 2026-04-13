@@ -191,7 +191,7 @@ internal class ViewDefinition
         return CompiledQuery(db);
     }
 
-    public List<string> FindAffectedViewKeys(object entity, Type triggerType, LottaDBInstance db)
+    public List<string> FindAffectedViewKeys(object entity, Type triggerType, LottaDB db)
     {
         var results = new List<string>();
         try

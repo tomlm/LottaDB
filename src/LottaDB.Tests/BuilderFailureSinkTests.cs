@@ -14,7 +14,7 @@ public class BuilderFailureSinkTests
         options.Store<ModerationView>();
         options.AddBuilder<Note, ModerationView, FailingBuilder>();
 
-        var db = new LottaDBInstance($"test{Guid.NewGuid():N}", tableClient, directory, options, sink);
+        var db = new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options, sink);
         return (db, sink);
     }
 
