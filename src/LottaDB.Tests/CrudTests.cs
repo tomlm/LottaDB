@@ -138,4 +138,43 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         Assert.Equal("web", loaded.Metadata["source"]);
     }
 
+    [Fact]
+    public async Task DeleteAsync_WithPredicate_DeletesMatchingObjects()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Note { NoteId = "pred1", AuthorId = "alice", Content = "A", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "pred2", AuthorId = "alice", Content = "B", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "pred3", AuthorId = "bob", Content = "C", Published = DateTimeOffset.UtcNow });
+
+        var result = await db.DeleteAsync<Note>(n => n.AuthorId == "alice");
+
+        // Alice's notes gone
+        Assert.Null(await db.GetAsync<Note>("pred1"));
+        Assert.Null(await db.GetAsync<Note>("pred2"));
+        // Bob's note still there
+        Assert.NotNull(await db.GetAsync<Note>("pred3"));
+        // Result contains 2 deletions
+        Assert.Equal(2, result.Changes.Count(c => c.Kind == ChangeKind.Deleted));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_WithPredicate_RunsOnHandlers()
+    {
+        int deleteCount = 0;
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Note>(async (note, kind, d) =>
+            {
+                if (kind == TriggerKind.Deleted)
+                    Interlocked.Increment(ref deleteCount);
+            });
+        });
+
+        await db.SaveAsync(new Note { NoteId = "h1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "h2", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
+
+        await db.DeleteAsync<Note>(n => n.AuthorId == "alice");
+
+        Assert.Equal(2, deleteCount);
+    }
 }

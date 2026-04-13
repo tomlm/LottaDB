@@ -186,6 +186,39 @@ public class LottaDB
     }
 
     /// <summary>
+    /// Delete all objects matching a predicate. Queries table storage, deletes each match,
+    /// removes from Lucene, and runs On&lt;T&gt; handlers for each deletion.
+    /// </summary>
+    /// <typeparam name="T">The object type.</typeparam>
+    /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
+    public async Task<ObjectResult> DeleteAsync<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken ct = default) where T : class, new()
+    {
+        var matches = Query<T>().Where(predicate).ToList();
+        if (matches.Count == 0)
+            return new ObjectResult();
+
+        // Initialize the chain so inner deletes add to our collection
+        var wasRoot = _chainChanges.Value == null;
+        _chainChanges.Value ??= new List<ObjectChange>();
+        _chainErrors.Value ??= new List<Exception>();
+
+        foreach (var entity in matches)
+            await DeleteAsync(entity, ct);
+
+        if (wasRoot)
+        {
+            var result = new ObjectResult { Changes = _chainChanges.Value!, Errors = _chainErrors.Value! };
+            _chainChanges.Value = null;
+            _chainErrors.Value = null;
+            return result;
+        }
+
+        return new ObjectResult { Changes = _chainChanges.Value!, Errors = _chainErrors.Value! };
+    }
+
+    /// <summary>
     /// Read-modify-write. Fetches the object by key, applies the mutation function, and saves.
     /// Throws if the object does not exist.
     /// </summary>
