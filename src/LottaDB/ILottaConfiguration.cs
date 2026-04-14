@@ -35,7 +35,7 @@ public interface IStorageConfiguration<T> where T : class, new()
 
     /// <summary>Set the key strategy for time-ordered objects.</summary>
     /// <param name="strategy">The key generation strategy (Natural, DescendingTime, AscendingTime).</param>
-    IStorageConfiguration<T> SetKey(KeyStrategy strategy);
+    IStorageConfiguration<T> SetKey(KeyMode strategy);
 
     /// <summary>Promote a property to a native Azure Table Storage column (tag) for server-side filtering.</summary>
     /// <typeparam name="TProp">The property type.</typeparam>

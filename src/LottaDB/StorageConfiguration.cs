@@ -5,7 +5,7 @@ namespace Lotta;
 public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class, new()
 {
     internal LambdaExpression? KeyExpression { get; private set; }
-    internal KeyStrategy? KeyStrategyValue { get; private set; }
+    internal KeyMode? KeyModeValue { get; private set; }
     internal List<LambdaExpression> Tags { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
 
@@ -15,9 +15,9 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
         return this;
     }
 
-    public IStorageConfiguration<T> SetKey(KeyStrategy strategy)
+    public IStorageConfiguration<T> SetKey(KeyMode strategy)
     {
-        KeyStrategyValue = strategy;
+        KeyModeValue = strategy;
         return this;
     }
 

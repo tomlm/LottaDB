@@ -109,7 +109,7 @@ public class StoreRegistrationTests
         {
             opts.Store<Note>(s =>
             {
-                s.SetKey(KeyStrategy.DescendingTime);
+                s.SetKey(KeyMode.DescendingTime);
                 s.AddTag(n => n.AuthorId);
             });
         });

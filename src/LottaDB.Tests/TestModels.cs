@@ -107,7 +107,7 @@ public class FeedEntry
 
 public class LogEntry
 {
-    [Key(Strategy = KeyStrategy.AscendingTime)]
+    [Key(Mode = KeyMode.AscendingTime)]
     public DateTimeOffset Timestamp { get; set; }
 
     public string Source { get; set; } = "";

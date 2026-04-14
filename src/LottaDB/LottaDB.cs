@@ -118,6 +118,11 @@ public class LottaDB
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
+        // For Auto keys, set the generated key back on the entity
+        // so subsequent GetKey calls return the same value
+        if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
+            meta.SetKey(entity, key);
+
         await _tableAdapter.UpsertAsync(_name, key, entity, meta);
         TrackKey(typeof(T), entity, key);
 
@@ -338,12 +343,12 @@ public class LottaDB
     private async Task RunHandlersAsync<T>(T entity, TriggerKind kind,
         List<Exception> errors, CancellationToken ct) where T : class, new()
     {
-        // Cycle detection via AsyncLocal
+        // Cycle detection: if this type is already being processed in the current chain, stop.
+        // This prevents A→B→A infinite loops regardless of key values.
         var visited = _processing.Value ??= new HashSet<string>();
-        var meta = GetMeta<T>();
-        var cycleKey = $"{typeof(T).Name}||{meta.GetKey(entity)}";
+        var cycleKey = typeof(T).Name;
         if (!visited.Add(cycleKey))
-            return; // cycle detected, skip handlers
+            return; // cycle detected — this type is already in the handler chain
 
         try
         {
