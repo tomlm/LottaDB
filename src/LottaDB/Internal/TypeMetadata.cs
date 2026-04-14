@@ -9,18 +9,14 @@ namespace Lotta.Internal;
 internal class TypeMetadata
 {
     public Type Type { get; }
-    public string TypeName { get; }
     public Func<object, string> GetKey { get; set; } = null!;
     public KeyStrategy KeyStrategy { get; set; } = KeyStrategy.Natural;
     public PropertyInfo? KeyProperty { get; set; }
     public List<TagInfo> Tags { get; } = new();
-    public string[] TypeHierarchy { get; set; } = Array.Empty<string>();
 
     public TypeMetadata(Type type)
     {
         Type = type;
-        TypeName = type.Name;
-        TypeHierarchy = BuildTypeHierarchy(type);
     }
 
     public static TypeMetadata Build<T>(StorageConfiguration<T>? fluentConfig) where T : class, new()
@@ -144,18 +140,6 @@ internal class TypeMetadata
         if (body is MemberExpression member && member.Member is PropertyInfo prop)
             return prop;
         return null;
-    }
-
-    private static string[] BuildTypeHierarchy(Type type)
-    {
-        var hierarchy = new List<string>();
-        var current = type;
-        while (current != null && current != typeof(object))
-        {
-            hierarchy.Add(current.Name);
-            current = current.BaseType;
-        }
-        return hierarchy.ToArray();
     }
 }
 

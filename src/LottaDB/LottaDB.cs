@@ -1,10 +1,11 @@
-using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using Azure.Data.Tables;
+using Lotta.Internal;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Index;
 using Lucene.Net.Util;
-using Lotta.Internal;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using static Lucene.Net.Search.FieldValueHitQueue;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
 
@@ -19,7 +20,7 @@ public class LottaDB
 {
     private readonly string _name;
     private readonly LottaConfiguration _options;
-    private readonly TableStorageAdapter _tableStore;
+    private readonly TableStorageAdapter _tableAdapter;
     private readonly Lucene.Net.Linq.LuceneDataProvider _lucene;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, object> _mappers = new();
@@ -44,7 +45,7 @@ public class LottaDB
     {
         _name = name;
         _options = options;
-        _tableStore = new TableStorageAdapter(tableServiceClient);
+        _tableAdapter = new TableStorageAdapter(tableServiceClient);
 
         using (var writer = new IndexWriter(directory,
             new IndexWriterConfig(LuceneVersion.LUCENE_48, new StandardAnalyzer(LuceneVersion.LUCENE_48))
@@ -81,13 +82,19 @@ public class LottaDB
         }
     }
 
-    internal TypeMetadata GetMeta<T>() where T : class, new()
+    internal TypeMetadata GetMeta(Type type)
     {
-        if (_metadata.TryGetValue(typeof(T), out var meta)) return meta;
-        throw new InvalidOperationException($"Type {typeof(T).Name} not registered. Call opts.Store<{typeof(T).Name}>().");
+        if (_metadata.TryGetValue(type, out var meta)) return meta;
+            throw new InvalidOperationException($"Type {type.Name} not registered. Call opts.Store<{type.Name}>().");
+
     }
 
-    private static string PK<T>() => typeof(T).Name;
+    internal TypeMetadata GetMeta<T>() where T : class, new()
+    {
+        return GetMeta(typeof(T));
+    }
+
+    private static string PartitionKey<T>() => TableStorageAdapter.PK;
 
     private Lucene.Net.Linq.Mapping.IDocumentMapper<T> GetMapper<T>() where T : class, new()
     {
@@ -111,7 +118,7 @@ public class LottaDB
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
-        await _tableStore.UpsertAsync(_name, PK<T>(), key, entity, meta);
+        await _tableAdapter.UpsertAsync(_name, key, entity, meta);
         TrackKey(typeof(T), entity, key);
 
         using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
@@ -119,7 +126,7 @@ public class LottaDB
             session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
         }
 
-        var change = new ObjectChange { TypeName = typeof(T).Name, Key = key, Kind = ChangeKind.Saved, Object = entity };
+        var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
         // If we're inside a handler chain, add to the chain's collection
         var isRoot = _chainChanges.Value == null;
@@ -148,9 +155,9 @@ public class LottaDB
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync<T>(string key, CancellationToken ct = default) where T : class, new()
     {
-        var (existing, _) = await _tableStore.GetAsync<T>(_name, PK<T>(), key);
+        var (existing, _) = await _tableAdapter.GetAsync<T>(_name, key);
 
-        await _tableStore.DeleteAsync(_name, PK<T>(), key);
+        await _tableAdapter.DeleteAsync(_name, key);
 
         if (existing != null)
         {
@@ -158,7 +165,7 @@ public class LottaDB
             session.Delete(existing);
         }
 
-        var change = new ObjectChange { TypeName = typeof(T).Name, Key = key, Kind = ChangeKind.Deleted, Object = existing };
+        var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = existing };
 
         var isRoot = _chainChanges.Value == null;
         var changes = _chainChanges.Value ??= new List<ObjectChange>();
@@ -246,7 +253,7 @@ public class LottaDB
     /// <returns>The object, or null if not found.</returns>
     public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default) where T : class, new()
     {
-        var (result, _) = await _tableStore.GetAsync<T>(_name, PK<T>(), key);
+        var (result, _) = await _tableAdapter.GetAsync<T>(_name, key);
         return result;
     }
 
@@ -257,8 +264,7 @@ public class LottaDB
     /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
     public IQueryable<T> Query<T>() where T : class, new()
     {
-        GetMeta<T>();
-        return _tableStore.QueryByType<T>(_name, typeof(T).Name).AsQueryable();
+        return _tableAdapter.Query<T>(_name);
     }
 
     /// <summary>Query Azure Table Storage with a predicate filter.</summary>
@@ -307,23 +313,16 @@ public class LottaDB
     /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
-    public Task RebuildIndex(CancellationToken ct = default)
+    public async Task RebuildIndex(CancellationToken ct = default)
     {
-        foreach (var (type, _) in _metadata)
+        using (var session = _lucene.OpenSession<object>(GetMapper<object>()))
         {
-            typeof(LottaDB)
-                .GetMethod(nameof(RebuildType), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .MakeGenericMethod(type)
-                .Invoke(this, Array.Empty<object>());
+            session.DeleteAll();
+            await foreach (var item in _tableAdapter.Query(_name).ToAsyncEnumerable())
+            {
+                session.Add(Lucene.Net.Linq.KeyConstraint.Unique, item);
+            }
         }
-        return Task.CompletedTask;
-    }
-
-    private void RebuildType<T>() where T : class, new()
-    {
-        using var session = _lucene.OpenSession<T>(GetMapper<T>());
-        foreach (var item in _tableStore.QueryAll<T>(_name, PK<T>()))
-            session.Add(Lucene.Net.Linq.KeyConstraint.Unique, item);
     }
 
     // === Key tracking ===

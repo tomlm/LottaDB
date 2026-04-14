@@ -1,18 +1,22 @@
-using System.Reflection;
-using System.Text.Json;
 using Azure;
 using Azure.Data.Tables;
+using Lucene.Net.Diagnostics;
+using Lucene.Net.Linq.Mapping;
+using System.Linq.Expressions;
+using System.Text.Json;
 
 namespace Lotta.Internal;
 
 /// <summary>
 /// Adapter over Azure.Data.Tables TableClient for storing POCOs as JSON + tags.
-/// Works with both real Azure Table Storage and Spotflow in-memory fakes.
+/// Wokeys with both real Azure Table Storage and Spotflow in-memory fakes.
 /// </summary>
 internal class TableStorageAdapter
 {
     private readonly TableServiceClient _serviceClient;
     private readonly Dictionary<string, TableClient> _tables = new();
+
+    public const string PK = "OBJ";
 
     public TableStorageAdapter(TableServiceClient serviceClient)
     {
@@ -30,14 +34,10 @@ internal class TableStorageAdapter
         return client;
     }
 
-    public async Task UpsertAsync(string tableName, string pk, string rk, object obj, TypeMetadata meta)
+    public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(pk, rk);
-
-        // System fields
-        entity["_json_"] = JsonSerializer.Serialize(obj, obj.GetType());
-        entity["_type_"] = string.Join(",", meta.TypeHierarchy);
+        var entity = new LottaTableEntity(key, obj);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -50,12 +50,10 @@ internal class TableStorageAdapter
         await table.UpsertEntityAsync(entity, TableUpdateMode.Replace);
     }
 
-    public async Task<bool> UpsertWithETagAsync(string tableName, string pk, string rk, object obj, TypeMetadata meta, string expectedETag)
+    public async Task<bool> UpsertWithETagAsync(string tableName, string key, object obj, TypeMetadata meta, string expectedETag)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(pk, rk);
-        entity["_json_"] = JsonSerializer.Serialize(obj, obj.GetType());
-
+        var entity = new LottaTableEntity(key, obj);
         foreach (var tag in meta.Tags)
         {
             var value = tag.GetValue(obj);
@@ -74,17 +72,17 @@ internal class TableStorageAdapter
         }
     }
 
-    public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string pk, string rk) where T : class, new()
+    public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key) where T : class, new()
     {
         var table = GetTable(tableName);
         try
         {
-            var response = await table.GetEntityAsync<TableEntity>(pk, rk);
+            var response = await table.GetEntityAsync<LottaTableEntity>(PK, key);
             var entity = response.Value;
-            var json = entity.GetString("_json_");
-            if (json == null) return (null, null);
-
-            var obj = JsonSerializer.Deserialize<T>(json);
+            var entityType = TypeUtils.ResolveType(entity.Type);
+            if (!entityType.IsAssignableTo(typeof(T)))
+                return (null, null);
+            var obj = JsonSerializer.Deserialize<T>(entity.Json);
             return (obj, entity.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -93,12 +91,12 @@ internal class TableStorageAdapter
         }
     }
 
-    public string? GetETag(string tableName, string pk, string rk)
+    public string? GetETag(string tableName, string key)
     {
         var table = GetTable(tableName);
         try
         {
-            var response = table.GetEntity<TableEntity>(pk, rk);
+            var response = table.GetEntity<TableEntity>(PK, key);
             return response.Value.ETag.ToString();
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -107,12 +105,12 @@ internal class TableStorageAdapter
         }
     }
 
-    public async Task<bool> DeleteAsync(string tableName, string pk, string rk)
+    public async Task<bool> DeleteAsync(string tableName, string key)
     {
         var table = GetTable(tableName);
         try
         {
-            await table.DeleteEntityAsync(pk, rk);
+            await table.DeleteEntityAsync(PK, key);
             return true;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -121,132 +119,50 @@ internal class TableStorageAdapter
         }
     }
 
-    public async IAsyncEnumerable<T> QueryAllAsync<T>(string tableName) where T : class, new()
+    public IQueryable<object> Query(string tableName)
     {
         var table = GetTable(tableName);
-        await foreach (var entity in table.QueryAsync<TableEntity>())
-        {
-            var json = entity.GetString("_json_");
-            if (json != null)
-            {
-                var obj = JsonSerializer.Deserialize<T>(json);
-                if (obj != null)
-                    yield return obj;
-            }
-        }
-    }
-
-    public List<T> QueryAll<T>(string tableName) where T : class, new()
-    {
-        var table = GetTable(tableName);
-        var results = new List<T>();
-        foreach (var entity in table.Query<TableEntity>())
-        {
-            var json = entity.GetString("_json_");
-            if (json != null)
-            {
-                var obj = JsonSerializer.Deserialize<T>(json);
-                if (obj != null)
-                    results.Add(obj);
-            }
-        }
-        return results;
-    }
-
-    public List<T> QueryAll<T>(string tableName, string partitionKey) where T : class, new()
-    {
-        var table = GetTable(tableName);
-        var results = new List<T>();
-        foreach (var entity in table.Query<TableEntity>(e => e.PartitionKey == partitionKey))
-        {
-            var json = entity.GetString("_json_");
-            if (json != null)
-            {
-                var obj = JsonSerializer.Deserialize<T>(json);
-                if (obj != null)
-                    results.Add(obj);
-            }
-        }
-        return results;
+        return table.Query<LottaTableEntity>()
+            .Where(entity => entity.PartitionKey == PK)
+            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type))
+            .AsQueryable()!;
     }
 
     /// <summary>
     /// Query all objects whose _type hierarchy contains the given type name.
     /// Deserializes using the concrete type from _type so derived properties are preserved.
     /// </summary>
-    public List<T> QueryByType<T>(string tableName, string typeName) where T : class, new()
+    public IQueryable<T> Query<T>(string tableName) where T : class, new()
     {
         var table = GetTable(tableName);
-        var results = new List<T>();
-        foreach (var entity in table.Query<TableEntity>())
-        {
-            var typeField = entity.GetString("_type_") ?? "";
-            if (typeField.Split(',').Contains(typeName))
-            {
-                var json = entity.GetString("_json_");
-                if (json != null)
-                {
-                    var obj = DeserializePolymorphic<T>(json, typeField);
-                    if (obj != null)
-                        results.Add(obj);
-                }
-            }
-        }
-        return results;
+        return table.Query<LottaTableEntity>()
+            .Where(e => e.PartitionKey == PK && e.Types.Contains(typeof(T).FullName!))
+            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type))
+            .AsQueryable()!;
     }
 
     /// <summary>
     /// Deserialize JSON using the concrete type from _type field.
     /// Falls back to T if the concrete type can't be resolved.
     /// </summary>
-    private static T? DeserializePolymorphic<T>(string json, string typeField) where T : class
+    private static T? DeserializePolymorphic<T>(string json, string typeName) where T : class
     {
-        // The first entry in _type is the concrete type name
-        var concreteTypeName = typeField.Split(',').FirstOrDefault();
-        if (!string.IsNullOrEmpty(concreteTypeName))
+        // Try to find the concrete type in loaded assemblies
+        var concreteType = TypeUtils.ResolveType(typeName);
+        if (concreteType != null)
         {
-            // Try to find the concrete type in loaded assemblies
-            var concreteType = AppDomain.CurrentDomain.GetAssemblies()
-                .SelectMany(a =>
-                {
-                    try
-                    {
-                        return a.GetTypes();
-                    }
-                    catch (ReflectionTypeLoadException)
-                    {
-                        return Array.Empty<Type>();
-                    }
-                })
-                .FirstOrDefault(t => t.Name == concreteTypeName && typeof(T).IsAssignableFrom(t));
-
-            if (concreteType != null)
-            {
-                var obj = JsonSerializer.Deserialize(json, concreteType);
-                return obj as T;
-            }
+            var obj = JsonSerializer.Deserialize(json, concreteType);
+            return obj as T;
         }
 
         // Fallback: deserialize as T directly
         return JsonSerializer.Deserialize<T>(json);
     }
 
-    public void ClearTable(string tableName)
+    public async Task DeleteTableAsync(string tableName)
     {
         var table = GetTable(tableName);
-        foreach (var entity in table.Query<TableEntity>())
-        {
-            table.DeleteEntity(entity.PartitionKey, entity.RowKey);
-        }
-    }
-
-    public void ClearTable(string tableName, string partitionKey)
-    {
-        var table = GetTable(tableName);
-        foreach (var entity in table.Query<TableEntity>(e => e.PartitionKey == partitionKey))
-        {
-            table.DeleteEntity(entity.PartitionKey, entity.RowKey);
-        }
+        await table.DeleteAsync();
     }
 
     private static object ConvertToTableValue(object value)
