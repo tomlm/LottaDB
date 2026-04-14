@@ -14,6 +14,7 @@ internal class TypeMetadata
     public KeyMode KeyMode { get; set; } = KeyMode.Manual;
     public PropertyInfo? KeyProperty { get; set; }
     public List<TagInfo> Tags { get; } = new();
+    public List<IndexedPropertyInfo> IndexedProperties { get; } = new();
 
     public TypeMetadata(Type type)
     {
@@ -35,6 +36,7 @@ internal class TypeMetadata
             meta.SetKey = (obj, key) => keyProp.SetValue(obj, key);
 
         ResolveTags<T>(meta, fluentConfig);
+        ResolveIndexedProperties<T>(meta, fluentConfig);
 
         return meta;
     }
@@ -45,7 +47,8 @@ internal class TypeMetadata
         if (fluent?.KeyExpression is Expression<Func<T, string>> keyExpr)
         {
             var compiled = keyExpr.Compile();
-            return (obj => compiled((T)obj), KeyMode.Manual, null);
+            var keyProp = ExtractPropertyInfo(keyExpr);
+            return (obj => compiled((T)obj), KeyMode.Manual, keyProp);
         }
 
         // Fluent override with strategy
@@ -124,6 +127,28 @@ internal class TypeMetadata
         }
     }
 
+    private static void ResolveIndexedProperties<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()
+    {
+        if (fluent == null) return;
+
+        foreach (var config in fluent.IndexedProperties)
+        {
+            var propInfo = ExtractPropertyInfo(config.Expression);
+            if (propInfo != null)
+            {
+                meta.IndexedProperties.Add(new IndexedPropertyInfo
+                {
+                    Property = propInfo,
+                    IsKey = config.IsKey,
+                    IsNotAnalyzed = config.IsNotAnalyzed,
+                    IsNumeric = config.IsNumeric,
+                    HasDocValues = config.HasDocValues,
+                    AnalyzerType = config.AnalyzerType,
+                });
+            }
+        }
+    }
+
     private static PropertyInfo? ExtractPropertyInfo(LambdaExpression expr)
     {
         var body = expr.Body;
@@ -140,4 +165,14 @@ internal class TagInfo
     public required string Name { get; init; }
     public required PropertyInfo Property { get; init; }
     public required Func<object, object?> GetValue { get; init; }
+}
+
+internal class IndexedPropertyInfo
+{
+    public required PropertyInfo Property { get; init; }
+    public bool IsKey { get; init; }
+    public bool IsNotAnalyzed { get; init; }
+    public bool IsNumeric { get; init; }
+    public bool HasDocValues { get; init; }
+    public Type? AnalyzerType { get; init; }
 }

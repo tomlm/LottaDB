@@ -100,7 +100,10 @@ public class LottaDB
     {
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
-            return new LottaDocumentMapper<T>(Version.LUCENE_48);
+            var mapper = new LottaDocumentMapper<T>(Version.LUCENE_48);
+            if (_metadata.TryGetValue(typeof(T), out var meta))
+                mapper.ApplyFluentConfig(meta);
+            return mapper;
         });
     }
 

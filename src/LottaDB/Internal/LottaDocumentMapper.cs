@@ -20,6 +20,8 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
 {
     private const string JSON = "_json_";
 
+    protected override bool IndexAllProperties => false;
+
     public LottaDocumentMapper() : base(Version.LUCENE_48)
     {
     }
@@ -31,6 +33,40 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
     protected LottaDocumentMapper(Version version, Analyzer externalAnalyzer)
         : base(version, externalAnalyzer)
     {
+    }
+
+    /// <summary>
+    /// Applies fluent configuration from TypeMetadata: adds indexed fields and
+    /// ensures a key field exists for Lucene session.Delete().
+    /// </summary>
+    internal void ApplyFluentConfig(TypeMetadata meta)
+    {
+        // Add fluent-indexed properties to the Lucene field map
+        foreach (var indexed in meta.IndexedProperties)
+        {
+            if (fieldMap.ContainsKey(indexed.Property.Name))
+                continue; // already mapped via attribute
+
+            var mapper = FieldMappingInfoBuilder.Build<T>(indexed.Property, Version.LUCENE_48, null);
+            AddField(mapper);
+
+            if (indexed.IsKey && !keyFields.Contains(mapper))
+                keyFields.Add(mapper);
+        }
+
+        // Ensure key field exists for delete support
+        if (keyFields.Count == 0 && meta.KeyProperty != null)
+        {
+            if (!fieldMap.TryGetValue(meta.KeyProperty.Name, out var keyMapper))
+            {
+                keyMapper = FieldMappingInfoBuilder.Build<T>(meta.KeyProperty, Version.LUCENE_48, null);
+                AddKeyField(keyMapper);
+            }
+            else
+            {
+                keyFields.Add(keyMapper);
+            }
+        }
     }
 
     public override void MapFieldsToDocument(T source, Document target)

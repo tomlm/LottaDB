@@ -130,6 +130,24 @@ public class OrderLine
     public decimal Price { get; set; }
 }
 
+// === Bare models (no attributes at all) — configured entirely via fluent API ===
+
+public class BareActor
+{
+    public string Username { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string Domain { get; set; } = "";
+    public string AvatarUrl { get; set; } = "";
+}
+
+public class BareNote
+{
+    public string NoteId { get; set; } = "";
+    public DateTimeOffset Published { get; set; }
+    public string AuthorId { get; set; } = "";
+    public string Content { get; set; } = "";
+}
+
 // Polymorphism test hierarchy
 public class BaseEntity
 {
