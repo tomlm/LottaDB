@@ -103,38 +103,54 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public async Task Store_Fluent_SetKey_WithDescendingTime()
-    {
-        var db = LottaDBFixture.CreateDb(opts =>
-        {
-            opts.Store<Note>(s =>
-            {
-                s.SetKey(KeyMode.DescendingTime);
-                s.AddTag(n => n.AuthorId);
-            });
-        });
-
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "first", Published = DateTimeOffset.UtcNow.AddHours(-1) });
-        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "alice", Content = "second", Published = DateTimeOffset.UtcNow });
-
-        var notes = db.Query<Note>().ToList();
-        Assert.Equal(2, notes.Count);
-        Assert.Contains(notes, n => n.NoteId == "n1");
-        Assert.Contains(notes, n => n.NoteId == "n2");
-    }
-
-    [Fact]
-    public async Task Store_Fluent_SetRowKey_WithAscendingTime()
+    public async Task Store_AutoKey_GeneratesUlid()
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new LogEntry { LogId = "L1", Message = "first", Timestamp = DateTimeOffset.UtcNow.AddHours(-1) });
-        await db.SaveAsync(new LogEntry { LogId = "L2", Message = "second", Timestamp = DateTimeOffset.UtcNow });
+        // LogEntry has [Key(Mode = KeyMode.Auto)] — Id is generated on save
+        var entry = new LogEntry { Message = "auto key test", Timestamp = DateTimeOffset.UtcNow };
+        Assert.Equal("", entry.Id);
 
-        var logs = db.Query<LogEntry>().ToList();
-        Assert.Equal(2, logs.Count);
-        Assert.Contains(logs, l => l.LogId == "L1");
-        Assert.Contains(logs, l => l.LogId == "L2");
+        await db.SaveAsync(entry);
+
+        // Id should now be populated with a ULID
+        Assert.NotEmpty(entry.Id);
+
+        // Should be retrievable by the generated key
+        var loaded = await db.GetAsync<LogEntry>(entry.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("auto key test", loaded.Message);
+    }
+
+    [Fact]
+    public async Task Store_AutoKey_MultipleObjects_UniqueKeys()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        var entry1 = new LogEntry { Message = "first" };
+        var entry2 = new LogEntry { Message = "second" };
+        await db.SaveAsync(entry1);
+        await db.SaveAsync(entry2);
+
+        Assert.NotEqual(entry1.Id, entry2.Id);
+
+        var all = db.Query<LogEntry>().ToList();
+        Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public async Task Store_AutoKey_ExistingValue_NotOverwritten()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        // If Id is already set, Auto mode should use it (upsert)
+        var entry = new LogEntry { Id = "my-custom-id", Message = "explicit" };
+        await db.SaveAsync(entry);
+        Assert.Equal("my-custom-id", entry.Id);
+
+        var loaded = await db.GetAsync<LogEntry>("my-custom-id");
+        Assert.NotNull(loaded);
+        Assert.Equal("explicit", loaded.Message);
     }
 
     [Fact]

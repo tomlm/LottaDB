@@ -30,6 +30,10 @@ internal class TypeMetadata
         meta.KeyMode = keymode;
         meta.KeyProperty = keyProp;
 
+        // Provide a setter for Auto key mode
+        if (keyProp != null && keyProp.CanWrite)
+            meta.SetKey = (obj, key) => keyProp.SetValue(obj, key);
+
         ResolveTags<T>(meta, fluentConfig);
 
         return meta;
@@ -64,26 +68,15 @@ internal class TypeMetadata
         return (obj => GenerateKey(obj, attrStrategy, prop), attrStrategy, prop);
     }
 
-    internal static string GenerateKey(object obj, KeyMode strategy, PropertyInfo? prop)
+    internal static string GenerateKey(object obj, KeyMode mode, PropertyInfo? prop)
     {
-        switch (strategy)
+        switch (mode)
         {
             case KeyMode.Manual:
-                if (prop == null) throw new InvalidOperationException("Natural key strategy requires a property.");
+                if (prop == null) throw new InvalidOperationException("Manual key mode requires a property.");
                 return prop.GetValue(obj)?.ToString() ?? "";
 
-            case KeyMode.DescendingTime:
-                var descTs = GetTimestamp(obj, prop);
-                var descTicks = (DateTimeOffset.MaxValue.Ticks - descTs.Ticks).ToString("D19");
-                return $"{descTicks}_{Guid.NewGuid():N}";
-
-            case KeyMode.AscendingTime:
-                var ascTs = GetTimestamp(obj, prop);
-                var ascTicks = ascTs.Ticks.ToString("D19");
-                return $"{ascTicks}_{Guid.NewGuid():N}";
-
             case KeyMode.Auto:
-                // If property already has a value, use it (upsert). Otherwise generate.
                 if (prop != null)
                 {
                     var existing = prop.GetValue(obj)?.ToString();
@@ -93,20 +86,8 @@ internal class TypeMetadata
                 return Ulid.NewUlid().ToString();
 
             default:
-                throw new ArgumentOutOfRangeException(nameof(strategy));
+                throw new ArgumentOutOfRangeException(nameof(mode));
         }
-    }
-
-    private static DateTimeOffset GetTimestamp(object obj, PropertyInfo? prop)
-    {
-        if (prop == null) return DateTimeOffset.UtcNow;
-        var value = prop.GetValue(obj);
-        return value switch
-        {
-            DateTimeOffset dto => dto,
-            DateTime dt => new DateTimeOffset(dt),
-            _ => DateTimeOffset.UtcNow
-        };
     }
 
     private static void ResolveTags<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()

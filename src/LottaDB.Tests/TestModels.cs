@@ -6,7 +6,6 @@ namespace Lotta.Tests;
 public class Actor
 {
     [Key]
-    [Field(IndexMode.NotAnalyzed, Key = true)]
     public string Username { get; set; } = "";
 
     [Tag]
@@ -20,7 +19,6 @@ public class Actor
 public class Note
 {
     [Key]
-    [Field(Key = true)]
     public string NoteId { get; set; } = "";
 
     public DateTimeOffset Published { get; set; }
@@ -39,7 +37,6 @@ public class Note
 public class NoteView
 {
     [Key]
-    [Field(Key = true)]
     public string Id { get; set; } = "";
 
     [Field(IndexMode.NotAnalyzed)]
@@ -64,7 +61,6 @@ public class NoteView
 public class ModerationView
 {
     [Key]
-    [Field(Key = true)]
     public string NoteId { get; set; } = "";
 
     public string Domain { get; set; } = "";
@@ -76,7 +72,6 @@ public class ModerationView
 public class CycleA
 {
     [Key]
-    [Field(Key = true)]
     public string Id { get; set; } = "";
     public string Value { get; set; } = "";
 }
@@ -84,7 +79,6 @@ public class CycleA
 public class CycleB
 {
     [Key]
-    [Field(Key = true)]
     public string Id { get; set; } = "";
     public string Value { get; set; } = "";
 }
@@ -92,7 +86,6 @@ public class CycleB
 public class FeedEntry
 {
     [Key]
-    [Field(Key = true)]
     public string Id { get; set; } = "";
 
     [Field(IndexMode.NotAnalyzed)]
@@ -107,18 +100,17 @@ public class FeedEntry
 
 public class LogEntry
 {
-    [Key(Mode = KeyMode.AscendingTime)]
-    public DateTimeOffset Timestamp { get; set; }
+    [Key(Mode = KeyMode.Auto)]
+    public string Id { get; set; } = "";
 
+    public DateTimeOffset Timestamp { get; set; }
     public string Source { get; set; } = "";
     public string Message { get; set; } = "";
-    public string LogId { get; set; } = "";
 }
 
 public class OrderWithLines
 {
     [Key]
-    [Field(Key = true)]
     public string OrderId { get; set; } = "";
 
     [IgnoreField]
@@ -142,7 +134,6 @@ public class OrderLine
 public class BaseEntity
 {
     [Key]
-    [Field(Key = true)]
     public string Id { get; set; } = "";
 
     [Field]
