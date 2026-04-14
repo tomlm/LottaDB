@@ -3,6 +3,7 @@ namespace Lotta.Tests;
 /// <summary>
 /// Tests for On&lt;T&gt; handler behavior: creating derived objects, handling deletes,
 /// error handling, and accessing the DB from within handlers.
+/// All derived object IDs are prefixed to ensure global uniqueness (e.g. "nv-" for NoteView).
 /// </summary>
 public class BuilderTests
 {
@@ -17,7 +18,7 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Domain = note.Domain, NoteId = note.NoteId,
+                    Domain = note.Domain, Id = $"nv-{note.NoteId}", NoteId = note.NoteId,
                     AuthorUsername = actor?.Username ?? "", AuthorDisplay = actor?.DisplayName ?? "",
                     Content = note.Content, Published = note.Published,
                 });
@@ -27,7 +28,7 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("n1");
+        var view = await db.GetAsync<NoteView>("nv-n1");
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);
     }
@@ -40,14 +41,14 @@ public class BuilderTests
             opts.On<Note>(async (note, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         });
 
         await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow });
 
         var views = db.Query<NoteView>().ToList();
-        Assert.Contains(views, v => v.NoteId == "n2");
+        Assert.Contains(views, v => v.Id == "nv-n2");
     }
 
     [Fact]
@@ -58,14 +59,14 @@ public class BuilderTests
             opts.On<Note>(async (note, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         });
 
         await db.SaveAsync(new Note { NoteId = "n3", Content = "Indexed", Published = DateTimeOffset.UtcNow });
 
         var views = db.Search<NoteView>().ToList();
-        Assert.Contains(views, v => v.NoteId == "n3");
+        Assert.Contains(views, v => v.Id == "nv-n3");
     }
 
     [Fact]
@@ -77,19 +78,19 @@ public class BuilderTests
             {
                 if (kind == TriggerKind.Deleted)
                 {
-                    await db.DeleteAsync<NoteView>(note.NoteId);
+                    await db.DeleteAsync<NoteView>($"nv-{note.NoteId}");
                     return;
                 }
-                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         });
 
         var note = new Note { NoteId = "n4", Content = "Delete me", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note);
-        Assert.NotNull(await db.GetAsync<NoteView>("n4"));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-n4"));
 
         await db.DeleteAsync(note);
-        Assert.Null(await db.GetAsync<NoteView>("n4"));
+        Assert.Null(await db.GetAsync<NoteView>("nv-n4"));
     }
 
     [Fact]
@@ -131,7 +132,7 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "unknown",
+                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "unknown",
                 });
             });
         });
@@ -139,7 +140,7 @@ public class BuilderTests
         await db.SaveAsync(new Actor { Username = "access", DisplayName = "Accessible" });
         await db.SaveAsync(new Note { NoteId = "access-n", AuthorId = "access", Published = DateTimeOffset.UtcNow });
 
-        var view = await db.GetAsync<NoteView>("access-n");
+        var view = await db.GetAsync<NoteView>("nv-access-n");
         Assert.NotNull(view);
         Assert.Equal("Accessible", view.AuthorDisplay);
     }
@@ -157,7 +158,6 @@ public class BuilderTests
 
         var result = await db.SaveAsync(new Note { NoteId = "fail1", Published = DateTimeOffset.UtcNow });
 
-        // Source object saved despite handler failure
         Assert.NotNull(await db.GetAsync<Note>("fail1"));
         Assert.NotEmpty(result.Errors);
     }
@@ -201,13 +201,13 @@ public class BuilderTests
             opts.On<Note>(async (note, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new NoteView { NoteId = note.NoteId, Content = note.Content });
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         });
 
         var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "alice", Content = "Test", Published = DateTimeOffset.UtcNow });
 
-        Assert.Contains(result.Changes, c => c.TypeName == nameof(Note));
-        Assert.Contains(result.Changes, c => c.TypeName == nameof(NoteView));
+        Assert.Contains(result.Changes, c => c.Type == typeof(Note));
+        Assert.Contains(result.Changes, c => c.Type == typeof(NoteView));
     }
 }

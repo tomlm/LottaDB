@@ -40,6 +40,9 @@ public class NoteView
 {
     [Key]
     [Field(Key = true)]
+    public string Id { get; set; } = "";
+
+    [Field(IndexMode.NotAnalyzed)]
     public string NoteId { get; set; } = "";
 
     [Field(IndexMode.NotAnalyzed)]
@@ -90,7 +93,10 @@ public class FeedEntry
 {
     [Key]
     [Field(Key = true)]
-    public string FeedEntryId { get; set; } = "";
+    public string Id { get; set; } = "";
+
+    [Field(IndexMode.NotAnalyzed)]
+    public string NoteViewId { get; set; } = "";
 
     [Field]
     public string Title { get; set; } = "";

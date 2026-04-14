@@ -51,7 +51,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         var result = await _db.SaveAsync(actor);
 
         Assert.NotEmpty(result.Changes);
-        Assert.Contains(result.Changes, c => c.TypeName == nameof(Actor) && c.Kind == ChangeKind.Saved);
+        Assert.Contains(result.Changes, c => c.Type == typeof(Actor) && c.Kind == ChangeKind.Saved);
     }
 
     [Fact]

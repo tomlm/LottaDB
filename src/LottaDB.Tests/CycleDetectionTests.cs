@@ -6,18 +6,16 @@ public class CycleDetectionTests
     {
         return LottaDBFixture.CreateDb(opts =>
         {
-            // CycleA → save CycleB
             opts.On<CycleA>(async (a, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new CycleB { Id = a.Id, Value = $"from-a-{a.Value}" });
+                await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });
             });
 
-            // CycleB → save CycleA (creates cycle!)
             opts.On<CycleB>(async (b, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new CycleA { Id = b.Id, Value = $"from-b-{b.Value}" });
+                await db.SaveAsync(new CycleA { Id = $"ca-{b.Id}", Value = $"from-b-{b.Value}" });
             });
         });
     }
@@ -36,7 +34,7 @@ public class CycleDetectionTests
         var db = CreateDbWithCycles();
         await db.SaveAsync(new CycleA { Id = "c2", Value = "start" });
 
-        var b = await db.GetAsync<CycleB>("c2");
+        var b = await db.GetAsync<CycleB>("cb-c2");
         Assert.NotNull(b);
     }
 
@@ -55,8 +53,8 @@ public class CycleDetectionTests
         var db = CreateDbWithCycles();
         var result = await db.SaveAsync(new CycleA { Id = "c4", Value = "chain" });
 
-        Assert.Contains(result.Changes, c => c.TypeName == nameof(CycleA));
-        Assert.Contains(result.Changes, c => c.TypeName == nameof(CycleB));
+        Assert.Contains(result.Changes, c => c.Type == typeof(CycleA));
+        Assert.Contains(result.Changes, c => c.Type == typeof(CycleB));
     }
 
     [Fact]
@@ -67,14 +65,14 @@ public class CycleDetectionTests
             opts.On<CycleA>(async (a, kind, db) =>
             {
                 if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new CycleB { Id = a.Id, Value = $"from-a-{a.Value}" });
+                await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });
             });
         });
 
         await db.SaveAsync(new CycleA { Id = "x1", Value = "one" });
         await db.SaveAsync(new CycleA { Id = "x2", Value = "two" });
 
-        Assert.NotNull(await db.GetAsync<CycleB>("x1"));
-        Assert.NotNull(await db.GetAsync<CycleB>("x2"));
+        Assert.NotNull(await db.GetAsync<CycleB>("cb-x1"));
+        Assert.NotNull(await db.GetAsync<CycleB>("cb-x2"));
     }
 }

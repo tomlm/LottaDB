@@ -296,7 +296,7 @@ public class JsonRoundtripTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "",
+                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "",
                     AuthorUsername = actor?.Username ?? "", Content = note.Content,
                     Published = note.Published, Tags = note.Tags.ToArray(),
                 });
@@ -315,7 +315,7 @@ public class JsonRoundtripTests
 
         // NoteView produced by builder should have Tags preserved through Search
         var view = db.Search<NoteView>()
-            .FirstOrDefault(v => v.NoteId == "builder-json");
+            .FirstOrDefault(v => v.Id == "nv-builder-json");
 
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);

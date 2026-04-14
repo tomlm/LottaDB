@@ -44,7 +44,7 @@ public class RebuildIndexTests
             {
                 if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
-                await db.SaveAsync(new NoteView { NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "", Content = note.Content });
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "", Content = note.Content });
             });
         });
 
