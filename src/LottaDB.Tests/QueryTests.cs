@@ -5,7 +5,7 @@ public class QueryTests
     [Fact]
     public async Task QueryAsync_ReturnsAllOfType()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice" });
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob" });
 
@@ -16,7 +16,7 @@ public class QueryTests
     [Fact]
     public async Task QueryAsync_FilterByTag_ServerSide()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow });
 
@@ -31,7 +31,7 @@ public class QueryTests
     [Fact]
     public async Task QueryAsync_Take_LimitsResults()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         for (int i = 0; i < 10; i++)
             await db.SaveAsync(new Actor { Domain = "query.test", Username = $"user-{i}" });
 
@@ -42,7 +42,7 @@ public class QueryTests
     [Fact]
     public async Task QueryAsync_EmptyTable_ReturnsEmpty()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         var all = db.Query<Actor>().ToList();
         Assert.Empty(all);
     }
@@ -50,7 +50,7 @@ public class QueryTests
     [Fact]
     public async Task QueryAsync_WhereOnNonTag_EvaluatesClientSide()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" });
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "" });
 

@@ -1,72 +1,85 @@
 # LottaDB Analysis
 
-## What makes this different
+## What it is
 
-**`CreateView<T>(db => from...join...select)`** — declarative materialized views as LINQ joins, incrementally maintained. No other library in this space does this:
+A .NET library that stores POCOs in Azure Table Storage and indexes them in Lucene. One class (`LottaDB`), one table, one index, per-tenant instances. 98 passing tests.
 
-- Marten: imperative C# projection classes
-- RavenDB: custom map-reduce DSL
-- CosmosDB: manual Change Feed → Azure Function wiring
-- SQL Server: indexed views in SQL, don't cascade
-- EF Core: no materialized view concept
+## What makes it good
 
-A developer reads the LINQ expression and immediately understands the view. No builder classes, no trigger wiring, no "what happens when Actor changes" — LottaDB infers it from the join keys.
+**The API is tiny.** 8 methods on the main class: `SaveAsync`, `DeleteAsync`, `ChangeAsync`, `GetAsync`, `Query`, `Search`, `On`, `RebuildIndex`. That's the entire surface. Compare to CosmosDB SDK, EF Core, or Marten — orders of magnitude less surface area.
 
-The execution model is clean: `Iciclecreek.Lucene.Net.Linq` handles each Lucene query, standard LINQ does the in-memory hash join. The only custom work is walking the expression tree at registration time to extract join keys. This is bounded work, not an open-ended query translation problem.
+**`On<T>` is the right primitive.** One concept replaced three (IBuilder, CreateView, Observe). A lambda with full DB access handles everything: materialized views, cascading deletes, notifications, projections. No interfaces to implement, no expression trees to parse, no magic. The user writes the logic they want, explicitly.
 
-## Strengths
+**`_json` everywhere.** Both table storage and Lucene store the full POCO as JSON. `Query<T>()` and `Search<T>()` both return complete objects — nested collections, dictionaries, decimals all survive the roundtrip. No "Lucene returns partial objects" problem.
 
-- **9-method API.** Save, Change, Delete, Get, Query, Search, Observe, RebuildIndex, Table. Compare to Cosmos SDK or EF Core's surface area.
-- **`Store<T>` + `CreateView<T>` separation.** Storage metadata vs. derivation logic. One is about how to persist and index; the other is about relationships between objects. Clean cut.
-- **Everything is an object.** No entity/view split. Derived objects are stored and indexed like any other. Cascading views fall out naturally. Eliminates "where does this live?" questions.
-- **Cost.** Table Storage is pennies. Cosmos is dollars. For read-heavy, moderate-write workloads this is orders of magnitude cheaper.
-- **Concurrency model.** `SaveAsync` clobbers (fast path). `ChangeAsync` retries with ETags (safe path). Honest about what it offers — no fake transactions.
-- **Attributes + fluent.** `[PartitionKey]`, `[RowKey]`, `[Tag]`, `[Field]` on the POCO for the common case. `Store<T>(s => ...)` for overrides. Convention defaults fill gaps. Three tiers, one mental model.
-- **Ad-hoc joins at query time.** `SearchAsync<Note>() join SearchAsync<Actor>()` works naturally via client-side hash join since Lucene is in-process. CreateView for hot paths, ad-hoc joins for everything else.
-- **Fully in-process testing.** `Spotflow.InMemory.Azure.Storage` for Table Storage fakes + Lucene `RAMDirectory` for search. No Docker, no Azurite, no external processes. Unit tests run fast and anywhere.
+**`_type` hierarchy.** Polymorphic queries work: `Query<BaseClass>()` returns derived types with full fidelity. Deserialization resolves the concrete type from `_type` field. DocumentKey in Lucene scopes `Search<T>()` to the correct type.
 
-## Scaling model
+**DI-neutral.** Constructor takes dependencies directly. No service provider required. Optional `AddLottaDB` extension for DI users.
 
-LottaDB targets **small-to-medium workloads** — per-user, per-tenant, per-instance. Scaling is horizontal by creating **separate LottaDB instances per tenant**, not by scaling a single database.
+**Predicate-based delete.** `DeleteAsync<T>(n => n.AuthorId == "alice")` queries and deletes matching objects, running `On<T>` handlers for each. Same pattern as LINQ terminal operators.
 
-This is deliberate. Within a tenant-scoped instance:
-- Write amplification is bounded by one tenant's data
-- Single-writer Lucene is the natural model — one process per instance
-- Transaction scope is small
-- Cost scales linearly, each tenant's footprint is cheap
+**The cost story.** Azure Table Storage is pennies. Lucene is local disk. For per-tenant workloads this is orders of magnitude cheaper than CosmosDB.
 
-Fits: ActivityPub instances, per-user personal apps, per-tenant SaaS, edge/offline nodes.
+## What's honest about the limitations
 
-## Concerns
+**Lucene is local.** Single-writer, single-process. Scaling is horizontal (one LottaDB instance per tenant), not vertical. No distributed search.
 
-### 1. Expression tree walking for CreateView
+**`[Key]` + `[Field(Key=true)]` duplication.** Two attributes on the same property — one for LottaDB, one for Lucene. Needs a fix in `Iciclecreek.Lucene.Net.Linq` to unify.
 
-The execution model is simple (just LINQ), but the **registration-time expression tree walker** still needs to handle: composite join keys, multiple joins in one expression, `where` clauses that filter before the join, nullable properties, and type conversions in the `on` clause. This is a constrained problem but it has real edge cases. Good test coverage is critical — a bug here means views silently don't rebuild when they should.
+**No transactions.** Save a Note and its NoteView are two separate table operations. Crash between them = inconsistent state. `On<T>` handlers are eventually consistent — errors are captured but the source save succeeds.
 
-### 2. Fan-out on popular objects
+**Search query translation.** Lucene's LINQ provider doesn't support `string.Contains()`. Analyzed fields need `==` for term queries. Full-text search semantics differ from LINQ-to-Objects.
 
-Within the per-tenant scaling model, some objects are still "hot." An ActivityPub Actor with 5,000 Notes means an Actor display name change triggers 5,000 NoteView rebuilds inline. Even at 1ms per rebuild, that's 5 seconds blocking `SaveAsync`. The architecture mentions a background dispatcher but doesn't define it. This needs a concrete design before production use with any object that has high fan-out.
+**`IDocumentMapper` wrapping is fragile.** The `LottaDocumentMapper` wrapper works, but we discovered that wrapping breaks the provider in certain configurations. The current implementation works but needs careful testing if `Iciclecreek.Lucene.Net.Linq` is updated.
 
-### 3. Lucene index durability
+## Where it sits vs alternatives
 
-Lucene indexes are "disposable" (rebuildable from table storage), but rebuilding a large index is slow. If the Lucene directory is on ephemeral storage (containers, app restarts), frequent rebuilds degrade the experience. The architecture needs guidance on when to use persistent vs. ephemeral directories and what the cold-start story looks like.
+| Library | LottaDB advantage | LottaDB disadvantage |
+|---------|------------------|---------------------|
+| **CosmosDB** | 10-100x cheaper. `On<T>` > Change Feed plumbing. Full-text search. | No geo-distribution. No SLAs. |
+| **EF Core + SQL** | Document flexibility. No schema migrations. Simpler for denormalized data. | No SQL. No transactions. Smaller ecosystem. |
+| **Marten** | No PostgreSQL server. `On<T>` > imperative projections. Cheaper. | No transactions. Less mature. |
+| **RavenDB** | No server to operate. `On<T>` > map-reduce DSL. | No clustering, no ACID. |
 
-### 4. Builder failure retry semantics
+## Architecture summary
 
-`IBuilderFailureSink` captures failures, but the retry path isn't defined. What does a retry look like? Re-save the source object? Re-run just the failed builder? What if the source object has changed since the failure? This needs a concrete design — "retry later" is too vague for production reliability.
+```
+LottaDB instance
+├── Azure Table Storage (one table)
+│   ├── PartitionKey = type name
+│   ├── RowKey = [Key] value
+│   ├── _json = full POCO
+│   └── _type = type hierarchy
+├── Lucene Index (one directory)
+│   ├── [Field] properties indexed for search
+│   ├── _json stored for full POCO deserialization
+│   └── _type DocumentKey for type scoping
+└── On<T> handlers
+    ├── Run inline after every save/delete
+    ├── Full DB access (save, delete, query, search)
+    ├── Cycle detection via AsyncLocal
+    └── Changes aggregate into root ObjectResult
+```
 
-## Competitive positioning
+## Test coverage
 
-| Solution | LottaDB advantage | LottaDB disadvantage |
-|---|---|---|
-| **Marten** (PostgreSQL) | Declarative CreateView > imperative projections. No server to operate. Cheaper. | No transactions. No SQL. Less mature. |
-| **RavenDB** | No server. CreateView > map-reduce DSL. Cheaper. | No clustering, no replication, no ACID. |
-| **CosmosDB** | 10-100x cheaper. CreateView > Change Feed plumbing. Full-text search built in. | No geo-distribution. No SLAs. Single-region. |
-| **EF Core + SQL** | Document flexibility. Materialized views. Simpler for denormalized data. | No ad-hoc joins at query time beyond search. No transactions. Smaller ecosystem. |
-| **Firebase/Firestore** | Richer queries via Lucene. Materialized views. | Firebase is a full platform (auth, hosting, real-time sync). LottaDB is just storage. |
+98 tests across 15 test files:
+- CRUD (save, get, delete by key/entity/predicate)
+- Change (read-modify-write)
+- Query (table storage, tags, polymorphic)
+- Search (Lucene, field values, type scoping)
+- On<T> handlers (create/delete derived objects, error handling, cascading)
+- Cycle detection
+- JSON roundtrip (Query AND Search, nested collections, dictionaries, decimals)
+- Polymorphism (Query returns derived types with concrete deserialization)
+- Rebuild index
+- Ad-hoc joins
+- Store registration (attributes, fluent, custom keys)
 
-## Shipping sequence
+## What's next
 
-1. **v1:** Full API — `Store<T>`, `SaveAsync`/`ChangeAsync`/`DeleteAsync`/`GetAsync`/`QueryAsync`/`SearchAsync`, `CreateView<T>`, `IBuilder<T,U>`, `Observe<T>`, `RebuildIndex<T>`. CreateView expression tree walker scoped to single joins + where + select.
-2. **v2:** Background dispatcher for fan-out. Builder retry mechanics. Multi-join CreateView support. Cold-start / rebuild performance.
-3. **v3:** Multi-instance coordination. Distributed Lucene (or alternative search backend).
+1. **Unify `[Key]` and `[Field(Key=true)]`** — fix in Iciclecreek.Lucene.Net.Linq so one attribute handles both
+2. **Lucene query string support** — `Search<T>("content:lucene*")` parameter is accepted but not yet wired to the query
+3. **Polymorphic Search** — `Search<BaseClass>()` scopes by concrete type via DocumentKey, but doesn't yet return all derived types (needs multi-value DocumentKey support)
+4. **Batch operations** — session-based writes for bulk import performance
+5. **Background `On<T>` dispatch** — optional async handlers for high-throughput scenarios

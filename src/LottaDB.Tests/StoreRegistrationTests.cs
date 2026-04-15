@@ -3,21 +3,21 @@ namespace Lotta.Tests;
 public class StoreRegistrationTests
 {
     [Fact]
-    public void Store_WithAttributes_ExtractsKey()
+    public async Task Store_WithAttributes_ExtractsKey()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
-        var result = db.SaveAsync(actor).Result;
+        var result = await db.SaveAsync(actor);
         Assert.NotNull(result);
     }
 
     [Fact]
     public async Task Store_WithAttributes_CanGetByKey()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor);
-        var loaded = db.GetAsync<Actor>("alice").Result;
+        var loaded = await db.GetAsync<Actor>("alice");
         Assert.NotNull(loaded);
         Assert.Equal("alice", loaded.Username);
     }
@@ -25,7 +25,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsTags()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
 
@@ -53,14 +53,14 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public async Task Store_Fluent_AddTag_Works()
+    public async Task Store_Fluent_AddQueryable_Works()
     {
         var db = LottaDBFixture.CreateDb(opts =>
         {
             opts.Store<Actor>(s =>
             {
                 s.SetKey(a => a.Username);
-                s.AddTag(a => a.DisplayName);
+                s.AddQueryable(a => a.DisplayName);
             });
         });
 
@@ -76,11 +76,11 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         await db.SaveAsync(new Actor { Username = "alice" });
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
 
-        var actor = db.GetAsync<Actor>("alice").Result;
+        var actor = await db.GetAsync<Actor>("alice");
         Assert.NotNull(actor);
 
         var notes = db.Query<Note>().ToList();
@@ -94,7 +94,7 @@ public class StoreRegistrationTests
         var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
         var directory = new Lucene.Net.Store.RAMDirectory();
         directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
-        var options = new LottaDBOptions();
+        var options = new LottaConfiguration();
         // deliberately NOT registering Actor
         var db = new LottaDB("test", tableClient, directory, options);
 
@@ -103,38 +103,54 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public async Task Store_Fluent_SetKey_WithDescendingTime()
+    public async Task Store_AutoKey_GeneratesUlid()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
-        {
-            opts.Store<Note>(s =>
-            {
-                s.SetKey(KeyStrategy.DescendingTime);
-                s.AddTag(n => n.AuthorId);
-            });
-        });
+        var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "first", Published = DateTimeOffset.UtcNow.AddHours(-1) });
-        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "alice", Content = "second", Published = DateTimeOffset.UtcNow });
+        // LogEntry has [Key(Mode = KeyMode.Auto)] — Id is generated on save
+        var entry = new LogEntry { Message = "auto key test", Timestamp = DateTimeOffset.UtcNow };
+        Assert.Equal("", entry.Id);
 
-        var notes = db.Query<Note>().ToList();
-        Assert.Equal(2, notes.Count);
-        Assert.Contains(notes, n => n.NoteId == "n1");
-        Assert.Contains(notes, n => n.NoteId == "n2");
+        await db.SaveAsync(entry);
+
+        // Id should now be populated with a ULID
+        Assert.NotEmpty(entry.Id);
+
+        // Should be retrievable by the generated key
+        var loaded = await db.GetAsync<LogEntry>(entry.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("auto key test", loaded.Message);
     }
 
     [Fact]
-    public async Task Store_Fluent_SetRowKey_WithAscendingTime()
+    public async Task Store_AutoKey_MultipleObjects_UniqueKeys()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new LogEntry { LogId = "L1", Message = "first", Timestamp = DateTimeOffset.UtcNow.AddHours(-1) });
-        await db.SaveAsync(new LogEntry { LogId = "L2", Message = "second", Timestamp = DateTimeOffset.UtcNow });
+        var entry1 = new LogEntry { Message = "first" };
+        var entry2 = new LogEntry { Message = "second" };
+        await db.SaveAsync(entry1);
+        await db.SaveAsync(entry2);
 
-        var logs = db.Query<LogEntry>().ToList();
-        Assert.Equal(2, logs.Count);
-        Assert.Contains(logs, l => l.LogId == "L1");
-        Assert.Contains(logs, l => l.LogId == "L2");
+        Assert.NotEqual(entry1.Id, entry2.Id);
+
+        var all = db.Query<LogEntry>().ToList();
+        Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public async Task Store_AutoKey_ExistingValue_NotOverwritten()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        // If Id is already set, Auto mode should use it (upsert)
+        var entry = new LogEntry { Id = "my-custom-id", Message = "explicit" };
+        await db.SaveAsync(entry);
+        Assert.Equal("my-custom-id", entry.Id);
+
+        var loaded = await db.GetAsync<LogEntry>("my-custom-id");
+        Assert.NotNull(loaded);
+        Assert.Equal("explicit", loaded.Message);
     }
 
     [Fact]

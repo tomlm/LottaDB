@@ -3,108 +3,72 @@ namespace Lotta.Tests;
 public class ObserveTests
 {
     [Fact]
-    public async Task Observe_ReceivesSavedNotification()
+    public async Task On_ReceivesSavedNotification()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
-        ObjectChange<Actor>? received = null;
-        using var sub = db.Observe<Actor>(change =>
+        Actor? received = null;
+        var db = LottaDBFixture.CreateDb(opts =>
         {
-            received = change;
-            return Task.CompletedTask;
+            opts.On<Actor>(async (actor, kind, db) => { received = actor; });
         });
 
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "saved", DisplayName = "Saved" });
-
+        await db.SaveAsync(new Actor { Username = "saved", DisplayName = "Saved" });
         Assert.NotNull(received);
-        Assert.Equal(ChangeKind.Saved, received.Kind);
-        Assert.Equal("Saved", received.Object?.DisplayName);
+        Assert.Equal("Saved", received.DisplayName);
     }
 
     [Fact]
-    public async Task Observe_ReceivesDeletedNotification()
+    public async Task On_ReceivesDeletedNotification()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders();
-        ObjectChange<Actor>? received = null;
-        var actor = new Actor { Domain = "obs.test", Username = "deleted", DisplayName = "Gone" };
+        TriggerKind? receivedKind = null;
+        var db = LottaDBFixture.CreateDb(opts =>
+        {
+            opts.On<Actor>(async (actor, kind, db) => { receivedKind = kind; });
+        });
+
+        var actor = new Actor { Username = "deleted", DisplayName = "Gone" };
         await db.SaveAsync(actor);
-
-        using var sub = db.Observe<Actor>(change =>
-        {
-            if (change.Kind == ChangeKind.Deleted)
-                received = change;
-            return Task.CompletedTask;
-        });
-
         await db.DeleteAsync(actor);
+        Assert.Equal(TriggerKind.Deleted, receivedKind);
+    }
+
+    [Fact]
+    public async Task On_RuntimeRegistration_Works()
+    {
+        var db = LottaDBFixture.CreateDb();
+        Actor? received = null;
+
+        using var handle = db.On<Actor>(async (actor, kind, db) => { received = actor; });
+        await db.SaveAsync(new Actor { Username = "runtime", DisplayName = "Runtime" });
 
         Assert.NotNull(received);
-        Assert.Equal(ChangeKind.Deleted, received.Kind);
     }
 
     [Fact]
-    public async Task Observe_ReceivesDerivedObjectChanges()
+    public async Task On_Dispose_StopsNotifications()
     {
-        var db = TestLottaDBFactory.CreateWithBuilders(opts =>
-            opts.AddBuilder<Note, NoteView, NoteViewExplicitBuilder>());
-
-        ObjectChange<NoteView>? received = null;
-        using var sub = db.Observe<NoteView>(change =>
-        {
-            received = change;
-            return Task.CompletedTask;
-        });
-
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "author", DisplayName = "Author" });
-        await db.SaveAsync(new Note { Domain = "obs.test", NoteId = "obs-n", AuthorId = "author", Content = "Observable", Published = DateTimeOffset.UtcNow });
-
-        Assert.NotNull(received);
-        Assert.Equal("obs-n", received.Object?.NoteId);
-    }
-
-    [Fact]
-    public async Task Observe_MultipleObservers_AllFired()
-    {
-        var db = TestLottaDBFactory.CreateWithBuilders();
+        var db = LottaDBFixture.CreateDb();
         int count = 0;
 
-        using var sub1 = db.Observe<Actor>(_ => { Interlocked.Increment(ref count); return Task.CompletedTask; });
-        using var sub2 = db.Observe<Actor>(_ => { Interlocked.Increment(ref count); return Task.CompletedTask; });
-
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "multi", DisplayName = "Multi" });
-
-        Assert.Equal(2, count);
-    }
-
-    [Fact]
-    public async Task Observe_Dispose_StopsNotifications()
-    {
-        var db = TestLottaDBFactory.CreateWithBuilders();
-        int count = 0;
-
-        var sub = db.Observe<Actor>(_ => { Interlocked.Increment(ref count); return Task.CompletedTask; });
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "before", DisplayName = "Before" });
+        var handle = db.On<Actor>(async (actor, kind, db) => { Interlocked.Increment(ref count); });
+        await db.SaveAsync(new Actor { Username = "before" });
         Assert.Equal(1, count);
 
-        sub.Dispose();
-        await db.SaveAsync(new Actor { Domain = "obs.test", Username = "after", DisplayName = "After" });
+        handle.Dispose();
+        await db.SaveAsync(new Actor { Username = "after" });
         Assert.Equal(1, count); // Should not have incremented
     }
 
     [Fact]
-    public async Task Observe_RegisteredInConfig_Works()
+    public async Task On_MultipleHandlers_AllFired()
     {
-        ObjectChange<Actor>? received = null;
+        int count = 0;
         var db = LottaDBFixture.CreateDb(opts =>
         {
-            opts.Observe<Actor>(change =>
-            {
-                received = change;
-                return Task.CompletedTask;
-            });
+            opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
+            opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
         });
 
-        await db.SaveAsync(new Actor { Username = "config", DisplayName = "Config" });
-
-        Assert.NotNull(received);
+        await db.SaveAsync(new Actor { Username = "multi" });
+        Assert.Equal(2, count);
     }
 }

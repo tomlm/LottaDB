@@ -24,13 +24,13 @@ public class LottaDBFixture : IDisposable
         return InMemoryTableServiceClient.FromAccount(account);
     }
 
-    public static LottaDB CreateDb(Action<ILottaDBOptions>? configure = null)
+    public static LottaDB CreateDb(Action<ILottaConfiguration>? configure = null)
     {
         var tableClient = CreateInMemoryTableServiceClient();
         var directory = new Lucene.Net.Store.RAMDirectory();
         directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
 
-        var options = new LottaDBOptions();
+        var options = new LottaConfiguration();
         options.Store<Actor>();
         options.Store<Note>();
         options.Store<NoteView>();
@@ -47,16 +47,5 @@ public class LottaDBFixture : IDisposable
         configure?.Invoke(options);
 
         return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
-    }
-}
-
-/// <summary>
-/// Creates a fresh LottaDB instance per test.
-/// </summary>
-public static class TestLottaDBFactory
-{
-    public static LottaDB CreateWithBuilders(Action<ILottaDBOptions>? configure = null)
-    {
-        return LottaDBFixture.CreateDb(configure);
     }
 }

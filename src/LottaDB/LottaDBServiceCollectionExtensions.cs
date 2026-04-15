@@ -14,9 +14,9 @@ public static class LottaDBServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddLottaDB(this IServiceCollection services,
         string name, TableServiceClient tableServiceClient, LuceneDirectory directory,
-        Action<ILottaDBOptions> configure)
+        Action<ILottaConfiguration> configure)
     {
-        var options = new LottaDBOptions();
+        var options = new LottaConfiguration();
         configure(options);
         var instance = new LottaDB(name, tableServiceClient, directory, options);
         services.AddSingleton(instance);
