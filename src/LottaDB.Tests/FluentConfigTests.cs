@@ -17,15 +17,13 @@ public class FluentConfigTests
         options.Store<BareActor>(s =>
         {
             s.SetKey(a => a.Username);
-            s.AddTag(a => a.DisplayName);
-            s.Index(a => a.DisplayName).NotAnalyzed();
+            s.AddQueryable(a => a.DisplayName).NotAnalyzed();
         });
         options.Store<BareNote>(s =>
         {
             s.SetKey(n => n.NoteId);
-            s.AddTag(n => n.AuthorId);
-            s.Index(n => n.AuthorId).NotAnalyzed();
-            s.Index(n => n.Content);
+            s.AddQueryable(n => n.AuthorId).NotAnalyzed();
+            s.AddQueryable(n => n.Content);
         });
         extra?.Invoke(options);
 

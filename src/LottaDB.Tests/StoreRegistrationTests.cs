@@ -53,14 +53,14 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public async Task Store_Fluent_AddTag_Works()
+    public async Task Store_Fluent_AddQueryable_Works()
     {
         var db = LottaDBFixture.CreateDb(opts =>
         {
             opts.Store<Actor>(s =>
             {
                 s.SetKey(a => a.Username);
-                s.AddTag(a => a.DisplayName);
+                s.AddQueryable(a => a.DisplayName);
             });
         });
 

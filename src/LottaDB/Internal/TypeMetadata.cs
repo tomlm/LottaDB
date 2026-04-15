@@ -1,10 +1,11 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using Lucene.Net.Linq.Mapping;
 
 namespace Lotta.Internal;
 
 /// <summary>
-/// Parsed metadata for a registered type. Key, tags, type hierarchy.
+/// Parsed metadata for a registered type. Key, queryable properties, type hierarchy.
 /// </summary>
 internal class TypeMetadata
 {
@@ -13,7 +14,11 @@ internal class TypeMetadata
     public Action<object, string>? SetKey { get; set; }
     public KeyMode KeyMode { get; set; } = KeyMode.Manual;
     public PropertyInfo? KeyProperty { get; set; }
+
+    /// <summary>Properties promoted to Table Storage columns for server-side filtering.</summary>
     public List<TagInfo> Tags { get; } = new();
+
+    /// <summary>Properties indexed in Lucene for search.</summary>
     public List<IndexedPropertyInfo> IndexedProperties { get; } = new();
 
     public TypeMetadata(Type type)
@@ -35,8 +40,7 @@ internal class TypeMetadata
         if (keyProp != null && keyProp.CanWrite)
             meta.SetKey = (obj, key) => keyProp.SetValue(obj, key);
 
-        ResolveTags<T>(meta, fluentConfig);
-        ResolveIndexedProperties<T>(meta, fluentConfig);
+        ResolveQueryableProperties<T>(meta, fluentConfig);
 
         return meta;
     }
@@ -93,60 +97,100 @@ internal class TypeMetadata
         }
     }
 
-    private static void ResolveTags<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()
+    /// <summary>
+    /// Resolves [Queryable], [Tag], and [Field] attributes plus fluent
+    /// AddQueryable/AddTag/AddField calls into Tags and IndexedProperties.
+    /// </summary>
+    private static void ResolveQueryableProperties<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()
     {
         foreach (var prop in typeof(T).GetProperties())
         {
+            // [Queryable] → both Tag + Lucene index
+            var queryableAttr = prop.GetCustomAttribute<QueryableAttribute>();
+            if (queryableAttr != null)
+            {
+                AddQueryable(meta, prop, queryableAttr.Mode);
+                continue;
+            }
+
+            // [Tag] → Table Storage column only
             var tagAttr = prop.GetCustomAttribute<TagAttribute>();
             if (tagAttr != null)
             {
-                meta.Tags.Add(new TagInfo
-                {
-                    Name = tagAttr.Name ?? prop.Name,
-                    Property = prop,
-                    GetValue = obj => prop.GetValue(obj)
-                });
+                AddTag(meta, prop, tagAttr.Name);
             }
+
+            // [Field] from Lucene.Net.Linq → Lucene index only (handled by ReflectionDocumentMapper)
+            // No action needed here — the base mapper picks up [Field] attributes directly.
         }
 
-        if (fluent != null)
-        {
-            foreach (var tagExpr in fluent.Tags)
-            {
-                var propInfo = ExtractPropertyInfo(tagExpr);
-                if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
-                {
-                    meta.Tags.Add(new TagInfo
-                    {
-                        Name = propInfo.Name,
-                        Property = propInfo,
-                        GetValue = obj => propInfo.GetValue(obj)
-                    });
-                }
-            }
-        }
-    }
-
-    private static void ResolveIndexedProperties<T>(TypeMetadata meta, StorageConfiguration<T>? fluent) where T : class, new()
-    {
         if (fluent == null) return;
 
-        foreach (var config in fluent.IndexedProperties)
+        // Fluent AddQueryable → both Tag + Lucene index
+        foreach (var config in fluent.QueryableProperties)
         {
             var propInfo = ExtractPropertyInfo(config.Expression);
-            if (propInfo != null)
+            if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
+                AddQueryable(meta, propInfo, config.Mode);
+        }
+
+        // Fluent AddTag → Table Storage column only
+        foreach (var tagExpr in fluent.TagProperties)
+        {
+            var propInfo = ExtractPropertyInfo(tagExpr);
+            if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
+                AddTag(meta, propInfo, name: null);
+        }
+
+        // Fluent AddField → Lucene index only (added to IndexedProperties for ApplyFluentConfig)
+        foreach (var config in fluent.FieldProperties)
+        {
+            var propInfo = ExtractPropertyInfo(config.Expression);
+            if (propInfo != null && !meta.IndexedProperties.Any(i => i.Property == propInfo))
             {
                 meta.IndexedProperties.Add(new IndexedPropertyInfo
                 {
                     Property = propInfo,
-                    IsKey = config.IsKey,
                     IsNotAnalyzed = config.IsNotAnalyzed,
-                    IsNumeric = config.IsNumeric,
-                    HasDocValues = config.HasDocValues,
-                    AnalyzerType = config.AnalyzerType,
                 });
             }
         }
+    }
+
+    private static void AddTag(TypeMetadata meta, PropertyInfo prop, string? name)
+    {
+        meta.Tags.Add(new TagInfo
+        {
+            Name = name ?? prop.Name,
+            Property = prop,
+            GetValue = obj => prop.GetValue(obj)
+        });
+    }
+
+    private static void AddQueryable(TypeMetadata meta, PropertyInfo prop, QueryableMode mode)
+    {
+        // Table Storage tag
+        meta.Tags.Add(new TagInfo
+        {
+            Name = prop.Name,
+            Property = prop,
+            GetValue = obj => prop.GetValue(obj)
+        });
+
+        // Lucene index
+        var isNotAnalyzed = mode switch
+        {
+            QueryableMode.NotAnalyzed => true,
+            QueryableMode.Analyzed => false,
+            // Auto: strings are analyzed, everything else is not
+            _ => prop.PropertyType != typeof(string)
+        };
+
+        meta.IndexedProperties.Add(new IndexedPropertyInfo
+        {
+            Property = prop,
+            IsNotAnalyzed = isNotAnalyzed,
+        });
     }
 
     private static PropertyInfo? ExtractPropertyInfo(LambdaExpression expr)
@@ -170,9 +214,5 @@ internal class TagInfo
 internal class IndexedPropertyInfo
 {
     public required PropertyInfo Property { get; init; }
-    public bool IsKey { get; init; }
     public bool IsNotAnalyzed { get; init; }
-    public bool IsNumeric { get; init; }
-    public bool HasDocValues { get; init; }
-    public Type? AnalyzerType { get; init; }
 }

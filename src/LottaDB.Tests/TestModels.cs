@@ -1,5 +1,4 @@
 using Lotta;
-using Lucene.Net.Linq.Mapping;
 
 namespace Lotta.Tests;
 
@@ -8,8 +7,7 @@ public class Actor
     [Key]
     public string Username { get; set; } = "";
 
-    [Tag]
-    [Field(IndexMode.NotAnalyzed)]
+    [Queryable(QueryableMode.NotAnalyzed)]
     public string DisplayName { get; set; } = "";
 
     public string Domain { get; set; } = "";
@@ -23,11 +21,10 @@ public class Note
 
     public DateTimeOffset Published { get; set; }
 
-    [Tag]
-    [Field(IndexMode.NotAnalyzed)]
+    [Queryable(QueryableMode.NotAnalyzed)]
     public string AuthorId { get; set; } = "";
 
-    [Field]
+    [Queryable]
     public string Content { get; set; } = "";
 
     public string Domain { get; set; } = "";
@@ -39,19 +36,19 @@ public class NoteView
     [Key]
     public string Id { get; set; } = "";
 
-    [Field(IndexMode.NotAnalyzed)]
+    [Queryable(QueryableMode.NotAnalyzed)]
     public string NoteId { get; set; } = "";
 
-    [Field(IndexMode.NotAnalyzed)]
+    [Queryable(QueryableMode.NotAnalyzed)]
     public string AuthorUsername { get; set; } = "";
 
-    [Field]
+    [Queryable]
     public string AuthorDisplay { get; set; } = "";
 
     public string AvatarUrl { get; set; } = "";
     public string Domain { get; set; } = "";
 
-    [Field]
+    [Queryable]
     public string Content { get; set; } = "";
 
     public DateTimeOffset Published { get; set; }
@@ -88,10 +85,10 @@ public class FeedEntry
     [Key]
     public string Id { get; set; } = "";
 
-    [Field(IndexMode.NotAnalyzed)]
+    [Queryable(QueryableMode.NotAnalyzed)]
     public string NoteViewId { get; set; } = "";
 
-    [Field]
+    [Queryable]
     public string Title { get; set; } = "";
 
     public string Domain { get; set; } = "";
@@ -113,13 +110,9 @@ public class OrderWithLines
     [Key]
     public string OrderId { get; set; } = "";
 
-    [IgnoreField]
     public string TenantId { get; set; } = "";
-    [IgnoreField]
     public decimal Total { get; set; }
-    [IgnoreField]
     public List<OrderLine> Lines { get; set; } = new();
-    [IgnoreField]
     public Dictionary<string, string> Metadata { get; set; } = new();
 }
 
@@ -154,18 +147,18 @@ public class BaseEntity
     [Key]
     public string Id { get; set; } = "";
 
-    [Field]
+    [Queryable]
     public string Name { get; set; } = "";
 }
 
 public class Person : BaseEntity
 {
-    [Field]
+    [Queryable]
     public string Email { get; set; } = "";
 }
 
 public class Employee : Person
 {
-    [Field]
+    [Queryable]
     public string Department { get; set; } = "";
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Lucene.Net.Analysis;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
+using Lucene.Net.Linq.Fluent;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Search;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -10,10 +11,11 @@ using Version = Lucene.Net.Util.LuceneVersion;
 namespace Lotta.Internal;
 
 /// <summary>
-/// Wraps a ClassMap-built mapper to:
-/// - ToDocument: indexes [Field] properties for search + stores _json for full POCO fidelity
-/// - ToObject: deserializes from _json (full roundtrip) instead of field-by-field
-/// - PrepareSearchSettings: filters by _type DocumentKey
+/// Extends ReflectionDocumentMapper to:
+/// - Store _json for full POCO roundtrip fidelity
+/// - Deserialize from _json instead of field-by-field
+/// - Only index properties with explicit attributes (IndexAllProperties = false)
+/// - Apply [Queryable] and fluent-configured fields via PropertyMap
 /// </summary>
 internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
     where T : class, new()
@@ -36,22 +38,24 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
     }
 
     /// <summary>
-    /// Applies fluent configuration from TypeMetadata: adds indexed fields and
-    /// ensures a key field exists for Lucene session.Delete().
+    /// Applies configuration from TypeMetadata: adds indexed properties (from [Queryable]
+    /// or fluent AddQueryable/AddField) and ensures a key field exists for delete support.
+    /// Uses PropertyMap from Lucene.Net.Linq for correct type-aware field mapping.
     /// </summary>
     internal void ApplyFluentConfig(TypeMetadata meta)
     {
-        // Add fluent-indexed properties to the Lucene field map
+        var classMap = new ClassMap<T>(Version.LUCENE_48);
+
+        // Add queryable/field-indexed properties
         foreach (var indexed in meta.IndexedProperties)
         {
             if (fieldMap.ContainsKey(indexed.Property.Name))
                 continue; // already mapped via attribute
 
-            var mapper = FieldMappingInfoBuilder.Build<T>(indexed.Property, Version.LUCENE_48, null);
-            AddField(mapper);
-
-            if (indexed.IsKey && !keyFields.Contains(mapper))
-                keyFields.Add(mapper);
+            var propMap = classMap.Property(PropExpr(indexed.Property));
+            if (indexed.IsNotAnalyzed)
+                propMap.NotAnalyzed();
+            AddField(propMap.ToFieldMapper());
         }
 
         // Ensure key field exists for delete support
@@ -59,7 +63,8 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
         {
             if (!fieldMap.TryGetValue(meta.KeyProperty.Name, out var keyMapper))
             {
-                keyMapper = FieldMappingInfoBuilder.Build<T>(meta.KeyProperty, Version.LUCENE_48, null);
+                var keyPropMap = classMap.Key(PropExpr(meta.KeyProperty)).NotAnalyzed();
+                keyMapper = keyPropMap.ToFieldMapper();
                 AddKeyField(keyMapper);
             }
             else
@@ -69,12 +74,22 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
         }
     }
 
+    /// <summary>
+    /// Builds a trivial expression x => x.Property for use with ClassMap.Property().
+    /// </summary>
+    private static System.Linq.Expressions.Expression<Func<T, object>> PropExpr(PropertyInfo prop)
+    {
+        var param = System.Linq.Expressions.Expression.Parameter(typeof(T), "x");
+        var access = System.Linq.Expressions.Expression.Property(param, prop);
+        var boxed = System.Linq.Expressions.Expression.Convert(access, typeof(object));
+        return System.Linq.Expressions.Expression.Lambda<Func<T, object>>(boxed, param);
+    }
+
     public override void MapFieldsToDocument(T source, Document target)
     {
         base.MapFieldsToDocument(source, target);
         target.Add(new StoredField(JSON, JsonSerializer.Serialize(source, source.GetType())));
     }
-       
 
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
@@ -86,7 +101,7 @@ internal class LottaDocumentMapper<T> : ReflectionDocumentMapper<T>
         }
 
         // Fall back to field-by-field for documents without _json_
-        return base.CreateFromDocument(source, context, actualType, factory); 
+        return base.CreateFromDocument(source, context, actualType, factory);
     }
 
     public override bool IsModified(T item, Document document)

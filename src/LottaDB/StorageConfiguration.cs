@@ -6,8 +6,9 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
 {
     internal LambdaExpression? KeyExpression { get; private set; }
     internal KeyMode? KeyModeValue { get; private set; }
-    internal List<LambdaExpression> Tags { get; } = new();
-    internal List<IndexedPropertyConfig> IndexedProperties { get; } = new();
+    internal List<QueryablePropertyConfig> QueryableProperties { get; } = new();
+    internal List<LambdaExpression> TagProperties { get; } = new();
+    internal List<FieldPropertyConfig> FieldProperties { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
 
     public IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
@@ -22,16 +23,23 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
         return this;
     }
 
+    public IQueryableConfiguration AddQueryable<TProp>(Expression<Func<T, TProp>> property)
+    {
+        var config = new QueryablePropertyConfig(property);
+        QueryableProperties.Add(config);
+        return config;
+    }
+
     public IStorageConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property)
     {
-        Tags.Add(property);
+        TagProperties.Add(property);
         return this;
     }
 
-    public IIndexPropertyConfiguration Index<TProp>(Expression<Func<T, TProp>> property)
+    public IFieldConfiguration AddField<TProp>(Expression<Func<T, TProp>> property)
     {
-        var config = new IndexedPropertyConfig(property);
-        IndexedProperties.Add(config);
+        var config = new FieldPropertyConfig(property);
+        FieldProperties.Add(config);
         return config;
     }
 
@@ -42,23 +50,30 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
     }
 }
 
-internal class IndexedPropertyConfig : IIndexPropertyConfiguration
+internal class QueryablePropertyConfig : IQueryableConfiguration
 {
     internal LambdaExpression Expression { get; }
-    internal bool IsKey { get; private set; }
-    internal bool IsNotAnalyzed { get; private set; }
-    internal bool IsNumeric { get; private set; }
-    internal bool HasDocValues { get; private set; }
-    internal Type? AnalyzerType { get; private set; }
+    internal QueryableMode Mode { get; private set; } = QueryableMode.Auto;
 
-    public IndexedPropertyConfig(LambdaExpression expression)
+    public QueryablePropertyConfig(LambdaExpression expression)
     {
         Expression = expression;
     }
 
-    public IIndexPropertyConfiguration AsKey() { IsKey = true; return this; }
-    public IIndexPropertyConfiguration NotAnalyzed() { IsNotAnalyzed = true; return this; }
-    public IIndexPropertyConfiguration AnalyzedWith<TAnalyzer>() where TAnalyzer : class { AnalyzerType = typeof(TAnalyzer); return this; }
-    public IIndexPropertyConfiguration AsNumeric() { IsNumeric = true; return this; }
-    public IIndexPropertyConfiguration WithDocValues() { HasDocValues = true; return this; }
+    public IQueryableConfiguration Analyzed() { Mode = QueryableMode.Analyzed; return this; }
+    public IQueryableConfiguration NotAnalyzed() { Mode = QueryableMode.NotAnalyzed; return this; }
+}
+
+internal class FieldPropertyConfig : IFieldConfiguration
+{
+    internal LambdaExpression Expression { get; }
+    internal bool IsNotAnalyzed { get; private set; }
+
+    public FieldPropertyConfig(LambdaExpression expression)
+    {
+        Expression = expression;
+    }
+
+    public IFieldConfiguration Analyzed() { IsNotAnalyzed = false; return this; }
+    public IFieldConfiguration NotAnalyzed() { IsNotAnalyzed = true; return this; }
 }

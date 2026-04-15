@@ -7,9 +7,9 @@ namespace Lotta;
 /// </summary>
 public interface ILottaConfiguration
 {
-    /// <summary>Register an object type. Config from [Key]/[Tag] attributes, or fluent override.</summary>
+    /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
-    /// <param name="configure">Optional fluent configuration for key strategy, tags, and index fields.</param>
+    /// <param name="configure">Optional fluent configuration for key strategy, queryable properties, etc.</param>
     ILottaConfiguration Store<T>(Action<IStorageConfiguration<T>>? configure = null) where T : class, new();
 
     /// <summary>
@@ -37,36 +37,49 @@ public interface IStorageConfiguration<T> where T : class, new()
     /// <param name="strategy">The key generation mode (Manual or Auto).</param>
     IStorageConfiguration<T> SetKey(KeyMode strategy);
 
-    /// <summary>Promote a property to a native Azure Table Storage column (tag) for server-side filtering.</summary>
+    /// <summary>
+    /// Make a property queryable: promotes it to a Table Storage column for server-side
+    /// filtering AND indexes it in Lucene for search. Smart defaults by type —
+    /// strings are analyzed (full-text), value types are not analyzed (exact match).
+    /// </summary>
+    /// <typeparam name="TProp">The property type.</typeparam>
+    /// <param name="property">Expression selecting the property to make queryable.</param>
+    IQueryableConfiguration AddQueryable<TProp>(Expression<Func<T, TProp>> property);
+
+    /// <summary>Promote a property to a Table Storage column only (not indexed in Lucene).</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
     /// <param name="property">Expression selecting the property to promote.</param>
     IStorageConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property);
 
-    /// <summary>Configure how a property is indexed in Lucene. Returns a builder for field options.</summary>
+    /// <summary>Index a property in Lucene only (not promoted to a Table Storage column).</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
-    /// <param name="property">Expression selecting the property to configure.</param>
-    IIndexPropertyConfiguration Index<TProp>(Expression<Func<T, TProp>> property);
+    /// <param name="property">Expression selecting the property to index.</param>
+    IFieldConfiguration AddField<TProp>(Expression<Func<T, TProp>> property);
 
-    /// <summary>Exclude a property from both table storage tags and Lucene indexing.</summary>
+    /// <summary>Exclude a property from both table storage and Lucene indexing.</summary>
     /// <typeparam name="TProp">The property type.</typeparam>
     /// <param name="property">Expression selecting the property to exclude.</param>
     IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property);
 }
 
 /// <summary>
-/// Fluent configuration for a single Lucene index field.
+/// Fluent options for a queryable property.
 /// </summary>
-public interface IIndexPropertyConfiguration
+public interface IQueryableConfiguration
 {
-    /// <summary>Mark this field as the Lucene document key (for upsert behavior).</summary>
-    IIndexPropertyConfiguration AsKey();
-    /// <summary>Index as a non-analyzed (exact match) field.</summary>
-    IIndexPropertyConfiguration NotAnalyzed();
-    /// <summary>Index with a custom analyzer for full-text search.</summary>
-    /// <typeparam name="TAnalyzer">The Lucene analyzer type.</typeparam>
-    IIndexPropertyConfiguration AnalyzedWith<TAnalyzer>() where TAnalyzer : class;
-    /// <summary>Index as a trie-encoded numeric field (supports range queries).</summary>
-    IIndexPropertyConfiguration AsNumeric();
-    /// <summary>Enable DocValues for fast sorting on this field.</summary>
-    IIndexPropertyConfiguration WithDocValues();
+    /// <summary>Index with full-text analysis (tokenized, searchable by terms).</summary>
+    IQueryableConfiguration Analyzed();
+    /// <summary>Index as-is for exact match filtering only.</summary>
+    IQueryableConfiguration NotAnalyzed();
+}
+
+/// <summary>
+/// Fluent options for a Lucene-only indexed field.
+/// </summary>
+public interface IFieldConfiguration
+{
+    /// <summary>Index with full-text analysis (tokenized, searchable by terms).</summary>
+    IFieldConfiguration Analyzed();
+    /// <summary>Index as-is for exact match filtering only.</summary>
+    IFieldConfiguration NotAnalyzed();
 }
