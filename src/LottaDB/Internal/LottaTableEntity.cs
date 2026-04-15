@@ -17,7 +17,6 @@ namespace Lotta.Internal
             RowKey = rowKey;
             Timestamp = DateTimeOffset.UtcNow;
             Type = obj.GetType().FullName!;
-            Types = String.Join(",", TypeUtils.GetTypeHierarchy(obj.GetType()));
             Json = JsonSerializer.Serialize(obj, obj.GetType());
         }
 
@@ -26,10 +25,6 @@ namespace Lotta.Internal
         /// </summary>
         public string Type { get => GetString(nameof(Type)); set => this[nameof(Type)] = value; }
 
-        /// <summary>
-        /// The JSON of type hierarchy for the stored object, used for deserialization. Stored as a separate field to allow querying by type hierarchy (e.g. all objects that derive from a base type).
-        /// </summary>
-        public string Types { get => GetString(nameof(Types)); set => this[nameof(Types)] = value; }
         /// <summary>
         /// Gets or sets the JSON representation of the object or data associated with this property.
         /// </summary>

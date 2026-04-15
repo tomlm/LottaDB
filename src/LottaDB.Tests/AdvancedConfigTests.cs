@@ -60,9 +60,8 @@ public class AdvancedConfigTests
 
     private static LottaDB CreateDb(Action<ILottaConfiguration> configure)
     {
-        var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        var tableClient = LottaDBFixture.CreateTableServiceClient();
+        var directory = LottaDBFixture.CreateLuceneDirectory();
 
         var options = new LottaConfiguration();
         configure(options);

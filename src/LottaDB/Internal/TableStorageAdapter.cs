@@ -1,8 +1,7 @@
 using Azure;
 using Azure.Data.Tables;
-using Lucene.Net.Diagnostics;
-using Lucene.Net.Linq.Mapping;
 using System.Linq.Expressions;
+using System.Text;
 using System.Text.Json;
 
 namespace Lotta.Internal;
@@ -16,7 +15,7 @@ internal class TableStorageAdapter
     private readonly TableServiceClient _serviceClient;
     private readonly Dictionary<string, TableClient> _tables = new();
 
-    public const string PK = "OBJ";
+    public const string PK = "O";
 
     public TableStorageAdapter(TableServiceClient serviceClient)
     {
@@ -48,28 +47,6 @@ internal class TableStorageAdapter
         }
 
         await table.UpsertEntityAsync(entity, TableUpdateMode.Replace);
-    }
-
-    public async Task<bool> UpsertWithETagAsync(string tableName, string key, object obj, TypeMetadata meta, string expectedETag)
-    {
-        var table = GetTable(tableName);
-        var entity = new LottaTableEntity(key, obj);
-        foreach (var tag in meta.Tags)
-        {
-            var value = tag.GetValue(obj);
-            if (value != null)
-                entity[tag.Name] = ConvertToTableValue(value);
-        }
-
-        try
-        {
-            await table.UpdateEntityAsync(entity, new ETag(expectedETag), TableUpdateMode.Replace);
-            return true;
-        }
-        catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409)
-        {
-            return false; // ETag mismatch
-        }
     }
 
     public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key) where T : class, new()
@@ -119,26 +96,72 @@ internal class TableStorageAdapter
         }
     }
 
-    public IQueryable<object> Query(string tableName)
+    public IAsyncEnumerable<object> QueryAsync(string tableName,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.Query<LottaTableEntity>()
-            .Where(entity => entity.PartitionKey == PK)
-            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type))
-            .AsQueryable()!;
+        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK,
+                maxPerPage: maxPerPage,
+                cancellationToken: cancellationToken)
+            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+    }
+
+    public IAsyncEnumerable<T> QueryAsync<T>(string tableName,
+        Expression<Func<T, bool>>? predicate = null,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        var table = GetTable(tableName);
+        var query = GetODataQuery<T>(predicate);
+        return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+    }
+
+    public IEnumerable<object> Query(string tableName,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        return table.Query<LottaTableEntity>(e => e.PartitionKey == PK, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
     /// <summary>
     /// Query all objects whose _type hierarchy contains the given type name.
     /// Deserializes using the concrete type from _type so derived properties are preserved.
     /// </summary>
-    public IQueryable<T> Query<T>(string tableName) where T : class, new()
+    public IEnumerable<T> Query<T>(string tableName,
+        Expression<Func<T, bool>>? predicate = null,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
+
+        where T : class, new()
     {
         var table = GetTable(tableName);
-        return table.Query<LottaTableEntity>()
-            .Where(e => e.PartitionKey == PK && e.Types.Contains(typeof(T).FullName!))
-            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type))
-            .AsQueryable()!;
+
+        var query = GetODataQuery<T>(predicate);
+
+        return table.Query<LottaTableEntity>(query, maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+    }
+
+    private static string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append($"PartitionKey eq '{PK}'");
+
+        var derivedTypes = TypeUtils.GetDerivedTypes(typeof(T));
+        if (derivedTypes.Any())
+        {
+            sb.Append($" AND ({String.Join(" OR ", derivedTypes.Select(t => $"Type eq '{t.FullName}'"))})");
+        }
+        if (predicate != null)
+        {
+            sb.Append($" AND ({TableClient.CreateQueryFilter(predicate)})");
+        }
+        return sb.ToString();
     }
 
     /// <summary>

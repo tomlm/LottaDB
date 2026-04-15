@@ -13,7 +13,8 @@
             }
         }
 
-        static readonly Dictionary<string, Type> _cache = new();
+        static readonly Dictionary<string, Type> _fullNameToType = new();
+        static readonly Dictionary<Type, List<Type>> _derivedTypes = new();
 
         /// <summary>
         /// Resolve Type.FullName => Type
@@ -22,17 +23,33 @@
         /// <returns></returns>
         internal static Type ResolveType(string fullName)
         {
-            lock (_cache)
+            lock (_fullNameToType)
             {
-                if (_cache.TryGetValue(fullName, out var t))
+                if (_fullNameToType.TryGetValue(fullName, out var t))
                     return t;
 
                 foreach (var type in AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => a.DefinedTypes))
                 {
-                    _cache[type.FullName!] = type;
+                    _fullNameToType[type.FullName!] = type;
                 }
 
-                return _cache[fullName];
+                return _fullNameToType[fullName];
+            }
+        }
+
+        internal static List<Type> GetDerivedTypes(Type type)
+        {
+            lock (_derivedTypes)
+            {
+                if (_derivedTypes.TryGetValue(type, out var derivedTypes))
+                    return derivedTypes;
+                derivedTypes = AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => a.DefinedTypes)
+                    .Where(t => t != typeof(object) && t.IsClass && !t.IsAbstract && type.IsAssignableFrom(t))
+                    .Select(t => t.AsType())
+                    .ToList();
+                _derivedTypes[type] = derivedTypes;
+                return derivedTypes;
             }
         }
     }
