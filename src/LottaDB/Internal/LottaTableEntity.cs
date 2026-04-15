@@ -68,7 +68,12 @@ namespace Lotta.Internal
         /// <value>An <see cref="ETag"/> containing the ETag value for the entity.</value>
         public ETag ETag
         {
-            get { return new(); }
+            get
+            {
+                if (TryGetValue(nameof(ETag), out var v) && v is string s && !string.IsNullOrEmpty(s))
+                    return new ETag(s);
+                return default;
+            }
             set { this[nameof(ETag)] = value.ToString(); }
         }
 

@@ -36,6 +36,32 @@ internal class TableStorageAdapter
     public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta)
     {
         var table = GetTable(tableName);
+        var entity = BuildEntity(key, obj, meta);
+        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace);
+    }
+
+    /// <summary>
+    /// Conditional replace using the supplied ETag. Returns false if another writer
+    /// changed the row since it was read (HTTP 412 Precondition Failed) so the caller
+    /// can re-read and retry. A missing row (404) bubbles up as an exception.
+    /// </summary>
+    public async Task<bool> TryReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag)
+    {
+        var table = GetTable(tableName);
+        var entity = BuildEntity(key, obj, meta);
+        try
+        {
+            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace);
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 412)
+        {
+            return false;
+        }
+    }
+
+    private static LottaTableEntity BuildEntity(string key, object obj, TypeMetadata meta)
+    {
         var entity = new LottaTableEntity(key, obj);
 
         // Promote tags
@@ -46,7 +72,7 @@ internal class TableStorageAdapter
                 entity[tag.Name] = ConvertToTableValue(value);
         }
 
-        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace);
+        return entity;
     }
 
     public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key) where T : class, new()
@@ -60,7 +86,10 @@ internal class TableStorageAdapter
             if (!entityType.IsAssignableTo(typeof(T)))
                 return (null, null);
             var obj = JsonSerializer.Deserialize<T>(entity.Json);
-            return (obj, entity.ETag.ToString());
+            // Prefer the entity's ETag (Azure SDK assigns it via the ITableEntity.ETag setter);
+            // fall back to the raw HTTP ETag header if the property round-trip produced nothing.
+            var etag = entity.ETag == default ? response.GetRawResponse().Headers.ETag?.ToString() : entity.ETag.ToString();
+            return (obj, etag);
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {

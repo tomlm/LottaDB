@@ -22,10 +22,10 @@ public class LottaDBFixture : IDisposable
 
     public static TableServiceClient CreateTableServiceClient()
     {
-        //var provider = new InMemoryStorageProvider();
-        //var account = provider.AddAccount($"test{Guid.NewGuid():N}");
-        //return InMemoryTableServiceClient.FromAccount(account);
-        return new TableServiceClient("UseDevelopmentStorage=true");
+        var provider = new InMemoryStorageProvider();
+        var account = provider.AddAccount($"test{Guid.NewGuid():N}");
+        return InMemoryTableServiceClient.FromAccount(account);
+        //return new TableServiceClient("UseDevelopmentStorage=true");
     }
 
     public static Lucene.Net.Store.Directory CreateLuceneDirectory()

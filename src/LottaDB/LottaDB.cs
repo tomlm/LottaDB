@@ -241,8 +241,12 @@ public class LottaDB
     }
 
     /// <summary>
-    /// Read-modify-write. Fetches the object by key, applies the mutation function, and saves.
-    /// Throws if the object does not exist.
+    /// Read-modify-write with optimistic concurrency. Fetches the object by key (capturing its
+    /// ETag), applies the mutation, and commits with an <c>If-Match</c> condition. If another
+    /// writer changed the row in between, the read-modify-write is retried against the latest
+    /// state — so the mutation is guaranteed to be applied on top of the committed version.
+    /// The mutation function may therefore be invoked more than once; it must be a pure function
+    /// of its input. Throws if the object does not exist, or if retries are exhausted.
     /// </summary>
     /// <param name="key">The unique key of the object to modify.</param>
     /// <param name="mutate">A function that receives the current object and returns the modified version.</param>
@@ -250,10 +254,52 @@ public class LottaDB
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
     public async Task<ObjectResult> ChangeAsync<T>(string key, Func<T, T> mutate, CancellationToken ct = default) where T : class, new()
     {
-        var current = await GetAsync<T>(key, ct)
-            ?? throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
-        var mutated = mutate(current);
-        return await SaveAsync(mutated, ct);
+        const int maxAttempts = 16;
+        var meta = GetMeta<T>();
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key);
+            if (current == null || string.IsNullOrEmpty(etag))
+                throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
+
+            var mutated = mutate(current);
+
+            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag);
+            if (!committed)
+                continue; // someone else wrote between our read and write — re-read and retry
+
+            TrackKey(typeof(T), mutated!, key);
+
+            using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
+            {
+                session.Add(KeyConstraint.Unique, mutated!);
+            }
+
+            var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, ct);
+
+            if (isRoot)
+            {
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
+            }
+
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
+        }
+
+        throw new InvalidOperationException(
+            $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts.");
     }
 
     // === Read ===
