@@ -54,10 +54,17 @@ public class LottaDB
             writer.Commit();
         }
         _lucene = new Lucene.Net.Linq.LuceneDataProvider(directory, LuceneVersion.LUCENE_48);
-        _lucene.MapperFactory = (type, version, analyzer) => // instantiate LottaDocumentMapper for type
+        _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
-            return Activator.CreateInstance(mapperType, version)!;
+            var mapper = Activator.CreateInstance(mapperType, version)!;
+            if (_metadata.TryGetValue(type, out var meta))
+            {
+                var initMethod = mapperType.GetMethod("Initialize",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                initMethod?.Invoke(mapper, new object[] { meta });
+            }
+            return mapper;
         };
 
         InitializeMetadata();
@@ -102,7 +109,7 @@ public class LottaDB
         {
             var mapper = new LottaDocumentMapper<T>(Version.LUCENE_48);
             if (_metadata.TryGetValue(typeof(T), out var meta))
-                mapper.ApplyFluentConfig(meta);
+                mapper.Initialize(meta);
             return mapper;
         });
     }

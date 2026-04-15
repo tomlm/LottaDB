@@ -120,8 +120,20 @@ internal class TypeMetadata
                 AddTag(meta, prop, tagAttr.Name);
             }
 
-            // [Field] from Lucene.Net.Linq → Lucene index only (handled by ReflectionDocumentMapper)
-            // No action needed here — the base mapper picks up [Field] attributes directly.
+            // [Field] from Lucene.Net.Linq → Lucene index only (skip [Key] which inherits from [Field])
+            if (prop.GetCustomAttribute<KeyAttribute>() == null)
+            {
+                var fieldAttr = prop.GetCustomAttribute<Lucene.Net.Linq.Mapping.FieldAttribute>(true);
+                if (fieldAttr != null)
+                {
+                    meta.IndexedProperties.Add(new IndexedPropertyInfo
+                    {
+                        Property = prop,
+                        IsNotAnalyzed = fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzed
+                                     || fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzedNoNorms,
+                    });
+                }
+            }
         }
 
         if (fluent == null) return;
