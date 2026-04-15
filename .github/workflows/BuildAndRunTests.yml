@@ -32,4 +32,4 @@ jobs:
       run: dotnet build --no-restore src/LottaDB.slnx --property WarningLevel=0
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal src/LottaDB.slnx
+      run: dotnet test --no-build --verbosity diag src/LottaDB.slnx 
