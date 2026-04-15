@@ -1,12 +1,29 @@
 # LottaDB
 
-**LottaDB**  is a .NET library that stores POCOs objects in a combination of **Table Storage** and **Lucene** catalogs. One line to save, one line to query, one line to search.
+**LottaDB**  is a .NET library that stores POCOs objects in a combination of **Table Storage** and **Lucene** catalogs. 
+
+* One line to save
+* One line to query
+* One line to search.
 
 ## Overview
 
-LottaDB gives you a document database built on Azure Table Storage with automatic full-text search via Lucene. Each LottaDB instance is a single database -- one Azure table, one Lucene index. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying.
+**LottaDB** gives you a document database built on Azure Table Storage with automatic full-text search via Lucene. Each LottaDB instance is a single database -- one Azure table, one Lucene index. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying.
 
 Reactive handlers (`On<T>`) let you build materialized views, cascading updates, and side effects that run inline after each write.
+
+## Why LottaDB?
+
+- **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
+- **A lotta LINQ.** `Query<T>()` and `Search<T>()` both return `IQueryable<T>`. Same `.Where()` expressions, two backends.
+- **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives. Queryable properties are promoted *alongside* the JSON, not instead of it.
+- **A lotta views.** `On<T>` triggers build materialized views with plain C#. No event buses, no eventual consistency -- just inline code.
+- **A lotta tenants.** One instance per tenant. Natural isolation, simple backup, no noisy neighbors.
+- **A lotta nothing to operate.** Table Storage is serverless. Lucene runs in-process. No clusters, no connection pools, no ops team required.
+
+### Sweet spot
+
+LottaDB is ideal for **per-user or per-tenant workloads** -- think user profiles, settings, activity feeds, personal knowledge bases, mailboxes, or per-project data. Thousands of objects per tenant, thousands of tenants per deployment. Each tenant gets its own isolated database for pennies/month. It's not designed for billion-row analytics or high-throughput write-heavy pipelines.
 
 ## Installation
 
