@@ -21,16 +21,9 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 {
     private const string JSON = "_json_";
 
-    public LottaDocumentMapper(Version version) : base(version)
+    public LottaDocumentMapper(Version version, TypeMetadata? meta = null) : base(version)
     {
-    }
-
-    /// <summary>
-    /// Builds Lucene field mappings from TypeMetadata using ClassMap, then
-    /// extracts the field mappers and adds them to this mapper.
-    /// </summary>
-    internal void Initialize(TypeMetadata meta)
-    {
+        if (meta == null) return;
         var classMap = new ClassMap<T>(version);
 
         // Key property → Lucene document key for upsert/delete

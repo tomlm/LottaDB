@@ -57,14 +57,8 @@ public class LottaDB
         _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
-            var mapper = Activator.CreateInstance(mapperType, version)!;
-            if (_metadata.TryGetValue(type, out var meta))
-            {
-                var initMethod = mapperType.GetMethod("Initialize",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                initMethod?.Invoke(mapper, new object[] { meta });
-            }
-            return mapper;
+            _metadata.TryGetValue(type, out var meta);
+            return Activator.CreateInstance(mapperType, version, meta)!;
         };
 
         InitializeMetadata();
@@ -107,10 +101,8 @@ public class LottaDB
     {
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
-            var mapper = new LottaDocumentMapper<T>(Version.LUCENE_48);
-            if (_metadata.TryGetValue(typeof(T), out var meta))
-                mapper.Initialize(meta);
-            return mapper;
+            _metadata.TryGetValue(typeof(T), out var meta);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, meta);
         });
     }
 
