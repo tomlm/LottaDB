@@ -7,7 +7,7 @@ public class StoreRegistrationTests
     {
         var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
-        var result = await db.SaveAsync(actor);
+        var result = await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
 
@@ -16,8 +16,8 @@ public class StoreRegistrationTests
     {
         var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
-        await db.SaveAsync(actor);
-        var loaded = await db.GetAsync<Actor>("alice");
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("alice", loaded.Username);
     }
@@ -26,8 +26,8 @@ public class StoreRegistrationTests
     public async Task Store_WithAttributes_ExtractsTags()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
         var aliceOnly = db.Query<Actor>()
             .Where(a => a.DisplayName == "Alice")
@@ -47,8 +47,8 @@ public class StoreRegistrationTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
-        var loaded = await db.GetAsync<Actor>("bob");
+        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("bob", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
     }
 
@@ -64,8 +64,8 @@ public class StoreRegistrationTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
         var results = db.Query<Actor>()
             .Where(a => a.DisplayName == "Alice")
@@ -77,10 +77,10 @@ public class StoreRegistrationTests
     public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Username = "alice" });
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var actor = await db.GetAsync<Actor>("alice");
+        var actor = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.NotNull(actor);
 
         var notes = db.Query<Note>().ToList();
@@ -88,7 +88,7 @@ public class StoreRegistrationTests
     }
 
     [Fact]
-    public void Store_UnregisteredType_Throws()
+    public async Task Store_UnregisteredType_Throws()
     {
         // Create a DB without registering Actor
         var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
@@ -98,8 +98,8 @@ public class StoreRegistrationTests
         // deliberately NOT registering Actor
         var db = new LottaDB("test", tableClient, directory, options);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() =>
-            db.SaveAsync(new Actor { Username = "alice" }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            db.SaveAsync(new Actor { Username = "alice" }, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -111,13 +111,13 @@ public class StoreRegistrationTests
         var entry = new LogEntry { Message = "auto key test", Timestamp = DateTimeOffset.UtcNow };
         Assert.Equal("", entry.Id);
 
-        await db.SaveAsync(entry);
+        await db.SaveAsync(entry, TestContext.Current.CancellationToken);
 
         // Id should now be populated with a ULID
         Assert.NotEmpty(entry.Id);
 
         // Should be retrievable by the generated key
-        var loaded = await db.GetAsync<LogEntry>(entry.Id);
+        var loaded = await db.GetAsync<LogEntry>(entry.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("auto key test", loaded.Message);
     }
@@ -129,8 +129,8 @@ public class StoreRegistrationTests
 
         var entry1 = new LogEntry { Message = "first" };
         var entry2 = new LogEntry { Message = "second" };
-        await db.SaveAsync(entry1);
-        await db.SaveAsync(entry2);
+        await db.SaveAsync(entry1, TestContext.Current.CancellationToken);
+        await db.SaveAsync(entry2, TestContext.Current.CancellationToken);
 
         Assert.NotEqual(entry1.Id, entry2.Id);
 
@@ -145,10 +145,10 @@ public class StoreRegistrationTests
 
         // If Id is already set, Auto mode should use it (upsert)
         var entry = new LogEntry { Id = "my-custom-id", Message = "explicit" };
-        await db.SaveAsync(entry);
+        await db.SaveAsync(entry, TestContext.Current.CancellationToken);
         Assert.Equal("my-custom-id", entry.Id);
 
-        var loaded = await db.GetAsync<LogEntry>("my-custom-id");
+        var loaded = await db.GetAsync<LogEntry>("my-custom-id", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("explicit", loaded.Message);
     }
@@ -164,9 +164,9 @@ public class StoreRegistrationTests
             });
         });
 
-        await db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<Actor>("test.com/alice");
+        var loaded = await db.GetAsync<Actor>("test.com/alice", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Alice", loaded.DisplayName);
     }
@@ -182,14 +182,14 @@ public class StoreRegistrationTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         // Fluent key should win
-        var loaded = await db.GetAsync<Actor>("custom-alice");
+        var loaded = await db.GetAsync<Actor>("custom-alice", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
 
         // Attribute-derived key should NOT work
-        var notFound = await db.GetAsync<Actor>("alice");
+        var notFound = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.Null(notFound);
     }
 }

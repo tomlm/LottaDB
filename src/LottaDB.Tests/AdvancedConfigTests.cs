@@ -76,8 +76,8 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<TagOnlyModel>());
 
-        await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" });
-        await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" });
+        await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
 
         var results = db.Query<TagOnlyModel>()
             .Where(x => x.Category == "A")
@@ -91,7 +91,7 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<TagOnlyModel>());
 
-        await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" });
+        await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
 
         // Search returns the object (via _json), but Category is not an indexed field
         var all = db.Search<TagOnlyModel>().ToList();
@@ -106,8 +106,8 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
 
-        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" });
-        await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" });
+        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<FieldOnlyModel>()
             .Where(x => x.Status == "active")
@@ -121,8 +121,8 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
 
-        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" });
-        await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" });
+        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<FieldOnlyModel>()
             .Where(x => x.Body.Contains("hello"))
@@ -136,7 +136,7 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
 
-        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "test" });
+        await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "test" }, TestContext.Current.CancellationToken);
 
         // Query returns the object (via _json), but Status is not a table storage tag,
         // so it's only filterable client-side not server-side
@@ -152,8 +152,8 @@ public class AdvancedConfigTests
     {
         var db = CreateDb(opts => opts.Store<MixedModel>());
 
-        await db.SaveAsync(new MixedModel { Id = "1", Category = "news", Body = "breaking news today" });
-        await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" });
+        await db.SaveAsync(new MixedModel { Id = "1", Category = "news", Body = "breaking news today" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
         var byCategory = db.Query<MixedModel>()
@@ -184,8 +184,8 @@ public class AdvancedConfigTests
             });
         });
 
-        await db.SaveAsync(new BareModel { Id = "1", Category = "A" });
-        await db.SaveAsync(new BareModel { Id = "2", Category = "B" });
+        await db.SaveAsync(new BareModel { Id = "1", Category = "A" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BareModel { Id = "2", Category = "B" }, TestContext.Current.CancellationToken);
 
         var results = db.Query<BareModel>()
             .Where(x => x.Category == "A")
@@ -208,8 +208,8 @@ public class AdvancedConfigTests
             });
         });
 
-        await db.SaveAsync(new BareModel { Id = "1", Body = "hello world" });
-        await db.SaveAsync(new BareModel { Id = "2", Body = "goodbye moon" });
+        await db.SaveAsync(new BareModel { Id = "1", Body = "hello world" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BareModel { Id = "2", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<BareModel>()
             .Where(x => x.Body.Contains("hello"))
@@ -230,8 +230,8 @@ public class AdvancedConfigTests
             });
         });
 
-        await db.SaveAsync(new BareModel { Id = "1", Category = "active" });
-        await db.SaveAsync(new BareModel { Id = "2", Category = "archived" });
+        await db.SaveAsync(new BareModel { Id = "1", Category = "active" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BareModel { Id = "2", Category = "archived" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<BareModel>()
             .Where(x => x.Category == "active")
@@ -255,8 +255,8 @@ public class AdvancedConfigTests
             });
         });
 
-        await db.SaveAsync(new BareModel { Id = "1", Category = "news", Body = "breaking news today" });
-        await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" });
+        await db.SaveAsync(new BareModel { Id = "1", Category = "news", Body = "breaking news today" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
         var byCategory = db.Query<BareModel>()

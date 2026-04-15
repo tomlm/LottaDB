@@ -11,7 +11,7 @@ public class ObserveTests
             opts.On<Actor>(async (actor, kind, db) => { received = actor; });
         });
 
-        await db.SaveAsync(new Actor { Username = "saved", DisplayName = "Saved" });
+        await db.SaveAsync(new Actor { Username = "saved", DisplayName = "Saved" }, TestContext.Current.CancellationToken);
         Assert.NotNull(received);
         Assert.Equal("Saved", received.DisplayName);
     }
@@ -26,8 +26,8 @@ public class ObserveTests
         });
 
         var actor = new Actor { Username = "deleted", DisplayName = "Gone" };
-        await db.SaveAsync(actor);
-        await db.DeleteAsync(actor);
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        await db.DeleteAsync(actor, TestContext.Current.CancellationToken);
         Assert.Equal(TriggerKind.Deleted, receivedKind);
     }
 
@@ -38,7 +38,7 @@ public class ObserveTests
         Actor? received = null;
 
         using var handle = db.On<Actor>(async (actor, kind, db) => { received = actor; });
-        await db.SaveAsync(new Actor { Username = "runtime", DisplayName = "Runtime" });
+        await db.SaveAsync(new Actor { Username = "runtime", DisplayName = "Runtime" }, TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
     }
@@ -50,11 +50,11 @@ public class ObserveTests
         int count = 0;
 
         var handle = db.On<Actor>(async (actor, kind, db) => { Interlocked.Increment(ref count); });
-        await db.SaveAsync(new Actor { Username = "before" });
+        await db.SaveAsync(new Actor { Username = "before" }, TestContext.Current.CancellationToken);
         Assert.Equal(1, count);
 
         handle.Dispose();
-        await db.SaveAsync(new Actor { Username = "after" });
+        await db.SaveAsync(new Actor { Username = "after" }, TestContext.Current.CancellationToken);
         Assert.Equal(1, count); // Should not have incremented
     }
 
@@ -68,7 +68,7 @@ public class ObserveTests
             opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
         });
 
-        await db.SaveAsync(new Actor { Username = "multi" });
+        await db.SaveAsync(new Actor { Username = "multi" }, TestContext.Current.CancellationToken);
         Assert.Equal(2, count);
     }
 }

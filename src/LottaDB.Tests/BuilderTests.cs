@@ -25,10 +25,10 @@ public class BuilderTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var view = await db.GetAsync<NoteView>("nv-n1");
+        var view = await db.GetAsync<NoteView>("nv-n1", TestContext.Current.CancellationToken);
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);
     }
@@ -45,7 +45,7 @@ public class BuilderTests
             });
         });
 
-        await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         var views = db.Query<NoteView>().ToList();
         Assert.Contains(views, v => v.Id == "nv-n2");
@@ -63,7 +63,7 @@ public class BuilderTests
             });
         });
 
-        await db.SaveAsync(new Note { NoteId = "n3", Content = "Indexed", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "n3", Content = "Indexed", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         var views = db.Search<NoteView>().ToList();
         Assert.Contains(views, v => v.Id == "nv-n3");
@@ -86,11 +86,11 @@ public class BuilderTests
         });
 
         var note = new Note { NoteId = "n4", Content = "Delete me", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note);
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-n4"));
+        await db.SaveAsync(note, TestContext.Current.CancellationToken);
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-n4", TestContext.Current.CancellationToken));
 
-        await db.DeleteAsync(note);
-        Assert.Null(await db.GetAsync<NoteView>("nv-n4"));
+        await db.DeleteAsync(note, TestContext.Current.CancellationToken);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n4", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class BuilderTests
             opts.On<Note>(async (note, kind, db) => { received = kind; });
         });
 
-        await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         Assert.Equal(TriggerKind.Saved, received);
     }
 
@@ -116,8 +116,8 @@ public class BuilderTests
         });
 
         var note = new Note { NoteId = "td1", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note);
-        await db.DeleteAsync(note);
+        await db.SaveAsync(note, TestContext.Current.CancellationToken);
+        await db.DeleteAsync(note, TestContext.Current.CancellationToken);
         Assert.Equal(TriggerKind.Deleted, received);
     }
 
@@ -137,10 +137,10 @@ public class BuilderTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "access", DisplayName = "Accessible" });
-        await db.SaveAsync(new Note { NoteId = "access-n", AuthorId = "access", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "access", DisplayName = "Accessible" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "access-n", AuthorId = "access", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var view = await db.GetAsync<NoteView>("nv-access-n");
+        var view = await db.GetAsync<NoteView>("nv-access-n", TestContext.Current.CancellationToken);
         Assert.NotNull(view);
         Assert.Equal("Accessible", view.AuthorDisplay);
     }
@@ -156,9 +156,9 @@ public class BuilderTests
             });
         });
 
-        var result = await db.SaveAsync(new Note { NoteId = "fail1", Published = DateTimeOffset.UtcNow });
+        var result = await db.SaveAsync(new Note { NoteId = "fail1", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(await db.GetAsync<Note>("fail1"));
+        Assert.NotNull(await db.GetAsync<Note>("fail1", TestContext.Current.CancellationToken));
         Assert.NotEmpty(result.Errors);
     }
 
@@ -173,7 +173,7 @@ public class BuilderTests
             });
         });
 
-        var result = await db.SaveAsync(new Note { NoteId = "fail2", Published = DateTimeOffset.UtcNow });
+        var result = await db.SaveAsync(new Note { NoteId = "fail2", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         Assert.Single(result.Errors);
         Assert.IsType<InvalidOperationException>(result.Errors[0]);
@@ -189,7 +189,7 @@ public class BuilderTests
             opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
         });
 
-        await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         Assert.Equal(2, count);
     }
 
@@ -205,7 +205,7 @@ public class BuilderTests
             });
         });
 
-        var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "alice", Content = "Test", Published = DateTimeOffset.UtcNow });
+        var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "alice", Content = "Test", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(Note));
         Assert.Contains(result.Changes, c => c.Type == typeof(NoteView));

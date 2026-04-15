@@ -6,7 +6,7 @@ public class SearchTests
     public async Task SearchAsync_AutoIndexed_OnSave()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>().ToList();
         Assert.Single(results);
@@ -17,8 +17,8 @@ public class SearchTests
     public async Task SearchAsync_FindsByFieldValue()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob" });
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>()
             .Where(a => a.Username == "alice")
@@ -31,8 +31,8 @@ public class SearchTests
     public async Task SearchAsync_FilterByContent()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         // Filter by a non-analyzed field (AuthorId has NotAnalyzed)
         var results = db.Search<Note>()
@@ -47,7 +47,7 @@ public class SearchTests
     {
         var db = LottaDBFixture.CreateDb();
         for (int i = 0; i < 10; i++)
-            await db.SaveAsync(new Actor { Domain = "search.test", Username = $"user-{i}", DisplayName = $"User {i}" });
+            await db.SaveAsync(new Actor { Domain = "search.test", Username = $"user-{i}", DisplayName = $"User {i}" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>().Take(3).ToList();
         Assert.Equal(3, results.Count);
@@ -58,7 +58,7 @@ public class SearchTests
     {
         var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Domain = "search.test", Username = "deletable", DisplayName = "Gone" };
-        await db.SaveAsync(actor);
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
         // Verify it's in the index
         var before = db.Search<Actor>()
@@ -67,7 +67,7 @@ public class SearchTests
         Assert.Single(before);
 
         // Delete and verify it's removed
-        await db.DeleteAsync(actor);
+        await db.DeleteAsync(actor, TestContext.Current.CancellationToken);
         var after = db.Search<Actor>()
             .Where(a => a.Username == "deletable")
             .ToList();
@@ -86,8 +86,8 @@ public class SearchTests
     public async Task SearchAsync_UpdatedObject_ReflectsInIndex()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "updatable", DisplayName = "Before" });
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "updatable", DisplayName = "After" });
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "updatable", DisplayName = "Before" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "updatable", DisplayName = "After" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>()
             .Where(a => a.Username == "updatable")

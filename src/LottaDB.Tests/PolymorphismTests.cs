@@ -7,9 +7,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "base1", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "person1", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "emp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "base1", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "person1", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "emp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<BaseEntity> should return all three
         var all = db.Query<BaseEntity>().ToList();
@@ -21,9 +21,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "base2", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "person2", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "emp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "base2", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "person2", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "emp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<Person> should return Person + Employee, not BaseEntity
         var people = db.Query<Person>().ToList();
@@ -35,9 +35,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "base3", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "person3", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "emp3", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "base3", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "person3", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "emp3", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<Employee> should return only Employee
         var employees = db.Query<Employee>().ToList();
@@ -50,7 +50,7 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Employee { Id = "emp4", Name = "Carol", Email = "carol@test.com", Department = "Sales" });
+        await db.SaveAsync(new Employee { Id = "emp4", Name = "Carol", Email = "carol@test.com", Department = "Sales" }, TestContext.Current.CancellationToken);
 
         // Query<BaseEntity> should return an Employee with all properties intact
         var all = db.Query<BaseEntity>().ToList();
@@ -70,7 +70,7 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Employee { Id = "emp5", Name = "Dave", Email = "dave@test.com", Department = "HR" });
+        await db.SaveAsync(new Employee { Id = "emp5", Name = "Dave", Email = "dave@test.com", Department = "HR" }, TestContext.Current.CancellationToken);
 
         // Query<Person> should return Employee with Department intact
         var people = db.Query<Person>().ToList();
@@ -84,12 +84,12 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Employee { Id = "emp6", Name = "Eve", Email = "eve@test.com", Department = "Legal" });
+        await db.SaveAsync(new Employee { Id = "emp6", Name = "Eve", Email = "eve@test.com", Department = "Legal" }, TestContext.Current.CancellationToken);
 
         // GetAsync<BaseEntity> should return the concrete Employee type
         // Note: GetAsync uses PartitionKey which is the exact type name,
         // so this only works with the exact type
-        var emp = await db.GetAsync<Employee>("emp6");
+        var emp = await db.GetAsync<Employee>("emp6", TestContext.Current.CancellationToken);
         Assert.NotNull(emp);
         Assert.Equal("Legal", emp.Department);
     }
@@ -99,9 +99,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "base7", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "person7", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "emp7", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "base7", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "person7", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "emp7", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Search<Employee> should return only Employee
         // Currently returns all types because Lucene has no type discriminator
@@ -115,9 +115,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "sbase1", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "sperson1", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "semp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "sbase1", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "sperson1", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "semp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         var all = db.Search<BaseEntity>().ToList();
         Assert.Equal(3, all.Count);
@@ -128,9 +128,9 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new BaseEntity { Id = "sbase2", Name = "Base" });
-        await db.SaveAsync(new Person { Id = "sperson2", Name = "Alice", Email = "alice@test.com" });
-        await db.SaveAsync(new Employee { Id = "semp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" });
+        await db.SaveAsync(new BaseEntity { Id = "sbase2", Name = "Base" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Person { Id = "sperson2", Name = "Alice", Email = "alice@test.com" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Employee { Id = "semp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         var people = db.Search<Person>().ToList();
         Assert.Equal(2, people.Count);
@@ -141,7 +141,7 @@ public class PolymorphismTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Employee { Id = "semp3", Name = "Carol", Email = "carol@test.com", Department = "Sales" });
+        await db.SaveAsync(new Employee { Id = "semp3", Name = "Carol", Email = "carol@test.com", Department = "Sales" }, TestContext.Current.CancellationToken);
 
         var all = db.Search<BaseEntity>().ToList();
         Assert.Single(all);

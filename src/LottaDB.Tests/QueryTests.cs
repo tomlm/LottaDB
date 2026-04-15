@@ -6,8 +6,8 @@ public class QueryTests
     public async Task QueryAsync_ReturnsAllOfType()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice" });
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob" });
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob" }, TestContext.Current.CancellationToken);
 
         var all = db.Query<Actor>().ToList();
         Assert.Equal(2, all.Count);
@@ -17,8 +17,8 @@ public class QueryTests
     public async Task QueryAsync_FilterByTag_ServerSide()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         var aliceNotes = db.Query<Note>()
             .Where(n => n.AuthorId == "alice")
@@ -33,7 +33,7 @@ public class QueryTests
     {
         var db = LottaDBFixture.CreateDb();
         for (int i = 0; i < 10; i++)
-            await db.SaveAsync(new Actor { Domain = "query.test", Username = $"user-{i}" });
+            await db.SaveAsync(new Actor { Domain = "query.test", Username = $"user-{i}" }, TestContext.Current.CancellationToken);
 
         var limited = db.Query<Actor>().Take(3).ToList();
         Assert.Equal(3, limited.Count);
@@ -51,8 +51,8 @@ public class QueryTests
     public async Task QueryAsync_WhereOnNonTag_EvaluatesClientSide()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" });
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "" });
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "" }, TestContext.Current.CancellationToken);
 
         // AvatarUrl is not a tag — should still filter (client-side)
         var withAvatar = db.Query<Actor>()

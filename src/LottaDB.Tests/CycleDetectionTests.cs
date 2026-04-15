@@ -24,7 +24,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_DirectCycle_Stops()
     {
         var db = CreateDbWithCycles();
-        var result = await db.SaveAsync(new CycleA { Id = "c1", Value = "start" });
+        var result = await db.SaveAsync(new CycleA { Id = "c1", Value = "start" }, TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
 
@@ -32,9 +32,9 @@ public class CycleDetectionTests
     public async Task CycleDetection_ProducesFirstLevel()
     {
         var db = CreateDbWithCycles();
-        await db.SaveAsync(new CycleA { Id = "c2", Value = "start" });
+        await db.SaveAsync(new CycleA { Id = "c2", Value = "start" }, TestContext.Current.CancellationToken);
 
-        var b = await db.GetAsync<CycleB>("cb-c2");
+        var b = await db.GetAsync<CycleB>("cb-c2", TestContext.Current.CancellationToken);
         Assert.NotNull(b);
     }
 
@@ -43,7 +43,7 @@ public class CycleDetectionTests
     {
         var db = CreateDbWithCycles();
         var exception = await Record.ExceptionAsync(() =>
-            db.SaveAsync(new CycleA { Id = "c3", Value = "safe" }));
+            db.SaveAsync(new CycleA { Id = "c3", Value = "safe" }, TestContext.Current.CancellationToken));
         Assert.Null(exception);
     }
 
@@ -51,7 +51,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_ResultContainsAllChanges()
     {
         var db = CreateDbWithCycles();
-        var result = await db.SaveAsync(new CycleA { Id = "c4", Value = "chain" });
+        var result = await db.SaveAsync(new CycleA { Id = "c4", Value = "chain" }, TestContext.Current.CancellationToken);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(CycleA));
         Assert.Contains(result.Changes, c => c.Type == typeof(CycleB));
@@ -69,10 +69,10 @@ public class CycleDetectionTests
             });
         });
 
-        await db.SaveAsync(new CycleA { Id = "x1", Value = "one" });
-        await db.SaveAsync(new CycleA { Id = "x2", Value = "two" });
+        await db.SaveAsync(new CycleA { Id = "x1", Value = "one" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new CycleA { Id = "x2", Value = "two" }, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(await db.GetAsync<CycleB>("cb-x1"));
-        Assert.NotNull(await db.GetAsync<CycleB>("cb-x2"));
+        Assert.NotNull(await db.GetAsync<CycleB>("cb-x1", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<CycleB>("cb-x2", TestContext.Current.CancellationToken));
     }
 }

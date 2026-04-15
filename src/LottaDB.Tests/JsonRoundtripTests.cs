@@ -28,7 +28,7 @@ public class JsonRoundtripTests
                 ["region"] = "us-west"
             }
         };
-        await db.SaveAsync(order);
+        await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
         var results = db.Query<OrderWithLines>().ToList();
         Assert.Single(results);
@@ -58,7 +58,7 @@ public class JsonRoundtripTests
             Total = 100m,
             Lines = new List<OrderLine> { new() { ProductId = "a", Quantity = 1, Price = 100m } },
             Metadata = new Dictionary<string, string> { ["key"] = "val1" }
-        });
+        }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new OrderWithLines
         {
             OrderId = "q-multi-2",
@@ -69,7 +69,7 @@ public class JsonRoundtripTests
                 new() { ProductId = "c", Quantity = 2, Price = 50m }
             },
             Metadata = new Dictionary<string, string> { ["key"] = "val2" }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var results = db.Query<OrderWithLines>().ToList();
         Assert.Equal(2, results.Count);
@@ -103,7 +103,7 @@ public class JsonRoundtripTests
                 ["promo"] = "SAVE10"
             }
         };
-        await db.SaveAsync(order);
+        await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
         // Search deserializes from _json stored in Lucene — full POCO fidelity
         var results = db.Search<OrderWithLines>().ToList();
@@ -138,7 +138,7 @@ public class JsonRoundtripTests
             },
             Metadata = new Dictionary<string, string> { ["key"] = "val" }
         };
-        await db.SaveAsync(order);
+        await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
         var fromQuery = db.Query<OrderWithLines>().First();
         var fromSearch = db.Search<OrderWithLines>().First();
@@ -167,7 +167,7 @@ public class JsonRoundtripTests
             {
                 ["a"] = "1", ["b"] = "2"
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var result = db.Search<OrderWithLines>().First();
         Assert.Equal(350m, result.Total);
@@ -188,7 +188,7 @@ public class JsonRoundtripTests
             Content = "Full text content here",
             Published = DateTimeOffset.UtcNow,
             Domain = "test.com"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Search returns Note with [Field]-annotated properties
         var results = db.Search<Note>().ToList();
@@ -209,7 +209,7 @@ public class JsonRoundtripTests
             Total = 0m,
             Lines = new List<OrderLine>(),
             Metadata = new Dictionary<string, string>()
-        });
+        }, TestContext.Current.CancellationToken);
 
         var results = db.Query<OrderWithLines>().ToList();
         Assert.Single(results);
@@ -229,7 +229,7 @@ public class JsonRoundtripTests
             Content = "Tagged note",
             Published = DateTimeOffset.UtcNow,
             Tags = new List<string> { "csharp", "dotnet", "lucene" }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var results = db.Query<Note>().ToList();
         Assert.Single(results);
@@ -251,7 +251,7 @@ public class JsonRoundtripTests
             Content = "Another tagged note",
             Published = DateTimeOffset.UtcNow,
             Tags = new List<string> { "azure", "tables" }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Note>().ToList();
         Assert.Single(results);
@@ -274,9 +274,9 @@ public class JsonRoundtripTests
                 new() { ProductId = "x", Quantity = 3, Price = 199.997m }
             },
             Metadata = new Dictionary<string, string> { ["k"] = "v" }
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await db.RebuildIndex();
+        await db.RebuildIndex(TestContext.Current.CancellationToken);
 
         var result = db.Search<OrderWithLines>().First();
         Assert.Equal("rebuild-complex", result.OrderId);
@@ -303,7 +303,7 @@ public class JsonRoundtripTests
             });
         });
 
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note
         {
             NoteId = "builder-json",
@@ -311,7 +311,7 @@ public class JsonRoundtripTests
             Content = "Test",
             Published = DateTimeOffset.UtcNow,
             Tags = new List<string> { "a", "b" }
-        });
+        }, TestContext.Current.CancellationToken);
 
         // NoteView produced by builder should have Tags preserved through Search
         var view = db.Search<NoteView>()

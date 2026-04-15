@@ -68,65 +68,65 @@ public class CascadingViewTests
     public async Task CascadingView_NoteCreates_NoteViewAndFeedEntry()
     {
         var db = CreateDbWithCascadingHandlers();
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Note { NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c1"));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c1"));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c1", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c1", TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task CascadingView_ActorChange_UpdatesBothViews()
     {
         var db = CreateDbWithCascadingHandlers();
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" });
-        await db.SaveAsync(new Note { NoteId = "c2", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "c2", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" });
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" }, TestContext.Current.CancellationToken);
 
-        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-c2"))!.AuthorDisplay);
-        Assert.Contains("After", (await db.GetAsync<FeedEntry>("fe-nv-c2"))!.Title);
+        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-c2", TestContext.Current.CancellationToken))!.AuthorDisplay);
+        Assert.Contains("After", (await db.GetAsync<FeedEntry>("fe-nv-c2", TestContext.Current.CancellationToken))!.Title);
     }
 
     [Fact]
     public async Task CascadingView_NoteDeleted_DeletesBothViews()
     {
         var db = CreateDbWithCascadingHandlers();
-        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" });
+        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, TestContext.Current.CancellationToken);
         var note = new Note { NoteId = "c3", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note);
+        await db.SaveAsync(note, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c3"));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c3"));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c3", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c3", TestContext.Current.CancellationToken));
 
-        await db.DeleteAsync(note);
+        await db.DeleteAsync(note, TestContext.Current.CancellationToken);
 
-        Assert.Null(await db.GetAsync<NoteView>("nv-c3"));
-        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c3"));
+        Assert.Null(await db.GetAsync<NoteView>("nv-c3", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c3", TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task CascadingView_ActorDeleted_DeletesAllViews()
     {
         var db = CreateDbWithCascadingHandlers();
-        await db.SaveAsync(new Actor { Username = "gone-actor", DisplayName = "Gone" });
-        await db.SaveAsync(new Note { NoteId = "c4", AuthorId = "gone-actor", Content = "A", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "gone-actor", DisplayName = "Gone" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "c4", AuthorId = "gone-actor", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c4"));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c4"));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c4", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c4", TestContext.Current.CancellationToken));
 
-        await db.DeleteAsync<Actor>("gone-actor");
+        await db.DeleteAsync<Actor>("gone-actor", TestContext.Current.CancellationToken);
 
-        Assert.Null(await db.GetAsync<NoteView>("nv-c4"));
-        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c4"));
+        Assert.Null(await db.GetAsync<NoteView>("nv-c4", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c4", TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task CascadingView_ResultContainsAllChanges()
     {
         var db = CreateDbWithCascadingHandlers();
-        await db.SaveAsync(new Actor { Username = "result-actor", DisplayName = "R" });
-        var result = await db.SaveAsync(new Note { NoteId = "c5", AuthorId = "result-actor", Content = "Chain", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Username = "result-actor", DisplayName = "R" }, TestContext.Current.CancellationToken);
+        var result = await db.SaveAsync(new Note { NoteId = "c5", AuthorId = "result-actor", Content = "Chain", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(Note));
         Assert.Contains(result.Changes, c => c.Type == typeof(NoteView));

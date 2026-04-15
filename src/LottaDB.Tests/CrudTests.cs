@@ -13,8 +13,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_NewObject_CanGetBack()
     {
         var actor = new Actor { Domain = "crud.test", Username = "save-get", DisplayName = "Test" };
-        await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("save-get");
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var loaded = await _db.GetAsync<Actor>("save-get", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Test", loaded.DisplayName);
     }
@@ -24,8 +24,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     {
         // Actor has [Key] on Username, so saving with Username="explicit-keys" uses that as the key
         var actor = new Actor { Domain = "crud.test", Username = "explicit-keys", DisplayName = "Explicit" };
-        await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("explicit-keys");
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var loaded = await _db.GetAsync<Actor>("explicit-keys", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Explicit", loaded.DisplayName);
     }
@@ -34,12 +34,12 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_ExistingObject_Overwrites()
     {
         var actor = new Actor { Domain = "crud.test", Username = "overwrite", DisplayName = "V1" };
-        await _db.SaveAsync(actor);
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
         actor.DisplayName = "V2";
-        await _db.SaveAsync(actor);
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
-        var loaded = await _db.GetAsync<Actor>("overwrite");
+        var loaded = await _db.GetAsync<Actor>("overwrite", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("V2", loaded.DisplayName);
     }
@@ -48,7 +48,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_ReturnsObjectResult_WithSavedChange()
     {
         var actor = new Actor { Domain = "crud.test", Username = "result-check", DisplayName = "Test" };
-        var result = await _db.SaveAsync(actor);
+        var result = await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(result.Changes);
         Assert.Contains(result.Changes, c => c.Type == typeof(Actor) && c.Kind == ChangeKind.Saved);
@@ -58,8 +58,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task GetAsync_ByKeys_ReturnsObject()
     {
         var actor = new Actor { Domain = "crud.test", Username = "get-by-keys", DisplayName = "Found" };
-        await _db.SaveAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("get-by-keys");
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var loaded = await _db.GetAsync<Actor>("get-by-keys", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Found", loaded.DisplayName);
     }
@@ -67,7 +67,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task GetAsync_NonExistent_ReturnsNull()
     {
-        var loaded = await _db.GetAsync<Actor>("does-not-exist");
+        var loaded = await _db.GetAsync<Actor>("does-not-exist", TestContext.Current.CancellationToken);
         Assert.Null(loaded);
     }
 
@@ -75,9 +75,9 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_ByKeys_RemovesObject()
     {
         var actor = new Actor { Domain = "crud.test", Username = "delete-me", DisplayName = "Gone" };
-        await _db.SaveAsync(actor);
-        await _db.DeleteAsync<Actor>("delete-me");
-        var loaded = await _db.GetAsync<Actor>("delete-me");
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        await _db.DeleteAsync<Actor>("delete-me", TestContext.Current.CancellationToken);
+        var loaded = await _db.GetAsync<Actor>("delete-me", TestContext.Current.CancellationToken);
         Assert.Null(loaded);
     }
 
@@ -85,9 +85,9 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_ByObject_RemovesObject()
     {
         var actor = new Actor { Domain = "crud.test", Username = "delete-obj", DisplayName = "Gone" };
-        await _db.SaveAsync(actor);
-        await _db.DeleteAsync(actor);
-        var loaded = await _db.GetAsync<Actor>("delete-obj");
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        await _db.DeleteAsync(actor, TestContext.Current.CancellationToken);
+        var loaded = await _db.GetAsync<Actor>("delete-obj", TestContext.Current.CancellationToken);
         Assert.Null(loaded);
     }
 
@@ -95,8 +95,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_ReturnsObjectResult_WithDeletedChange()
     {
         var actor = new Actor { Domain = "crud.test", Username = "delete-result", DisplayName = "Gone" };
-        await _db.SaveAsync(actor);
-        var result = await _db.DeleteAsync(actor);
+        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var result = await _db.DeleteAsync(actor, TestContext.Current.CancellationToken);
         Assert.Contains(result.Changes, c => c.Kind == ChangeKind.Deleted);
     }
 
@@ -104,7 +104,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_NonExistent_NoError()
     {
         // Should not throw
-        var result = await _db.DeleteAsync<Actor>("never-existed");
+        var result = await _db.DeleteAsync<Actor>("never-existed", TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
 
@@ -127,9 +127,9 @@ public class CrudTests : IClassFixture<LottaDBFixture>
                 ["campaign"] = "summer"
             }
         };
-        await _db.SaveAsync(order);
+        await _db.SaveAsync(order, TestContext.Current.CancellationToken);
 
-        var loaded = await _db.GetAsync<OrderWithLines>("order-1");
+        var loaded = await _db.GetAsync<OrderWithLines>("order-1", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal(150.50m, loaded.Total);
         Assert.Equal(2, loaded.Lines.Count);
@@ -142,17 +142,17 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_WithPredicate_DeletesMatchingObjects()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Note { NoteId = "pred1", AuthorId = "alice", Content = "A", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { NoteId = "pred2", AuthorId = "alice", Content = "B", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { NoteId = "pred3", AuthorId = "bob", Content = "C", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "pred1", AuthorId = "alice", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "pred2", AuthorId = "alice", Content = "B", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "pred3", AuthorId = "bob", Content = "C", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var result = await db.DeleteAsync<Note>(n => n.AuthorId == "alice");
+        var result = await db.DeleteAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
         // Alice's notes gone
-        Assert.Null(await db.GetAsync<Note>("pred1"));
-        Assert.Null(await db.GetAsync<Note>("pred2"));
+        Assert.Null(await db.GetAsync<Note>("pred1", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<Note>("pred2", TestContext.Current.CancellationToken));
         // Bob's note still there
-        Assert.NotNull(await db.GetAsync<Note>("pred3"));
+        Assert.NotNull(await db.GetAsync<Note>("pred3", TestContext.Current.CancellationToken));
         // Result contains 2 deletions
         Assert.Equal(2, result.Changes.Count(c => c.Kind == ChangeKind.Deleted));
     }
@@ -170,10 +170,10 @@ public class CrudTests : IClassFixture<LottaDBFixture>
             });
         });
 
-        await db.SaveAsync(new Note { NoteId = "h1", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
-        await db.SaveAsync(new Note { NoteId = "h2", AuthorId = "alice", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Note { NoteId = "h1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "h2", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        await db.DeleteAsync<Note>(n => n.AuthorId == "alice");
+        await db.DeleteAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
         Assert.Equal(2, deleteCount);
     }

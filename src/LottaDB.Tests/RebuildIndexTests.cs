@@ -7,15 +7,15 @@ public class RebuildIndexTests
     {
         var db = LottaDBFixture.CreateDb();
 
-        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "alice", DisplayName = "Alice" });
-        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "bob", DisplayName = "Bob" });
+        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
         // Verify search works
         var before = db.Search<Actor>().ToList();
         Assert.Equal(2, before.Count);
 
         // Rebuild the index (simulates recovery after Lucene data loss)
-        await db.RebuildIndex();
+        await db.RebuildIndex(TestContext.Current.CancellationToken);
 
         // Should still find everything
         var after = db.Search<Actor>().ToList();
@@ -28,7 +28,7 @@ public class RebuildIndexTests
         var db = LottaDBFixture.CreateDb();
 
         // Rebuild with no data — should not throw
-        await db.RebuildIndex();
+        await db.RebuildIndex(TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>().ToList();
         Assert.Empty(results);
@@ -48,15 +48,15 @@ public class RebuildIndexTests
             });
         });
 
-        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "auth", DisplayName = "Auth" });
-        await db.SaveAsync(new Note { Domain = "rebuild.test", NoteId = "rn1", AuthorId = "auth", Content = "Test", Published = DateTimeOffset.UtcNow });
+        await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "auth", DisplayName = "Auth" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { Domain = "rebuild.test", NoteId = "rn1", AuthorId = "auth", Content = "Test", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         // NoteView should exist from the builder
         var viewBefore = db.Search<NoteView>().ToList();
         Assert.Single(viewBefore);
 
         // Rebuild only Actor index — should not affect NoteViews
-        await db.RebuildIndex();
+        await db.RebuildIndex(TestContext.Current.CancellationToken);
 
         // NoteView should still be searchable (its index wasn't rebuilt/cleared)
         var viewAfter = db.Search<NoteView>().ToList();
