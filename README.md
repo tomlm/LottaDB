@@ -10,7 +10,7 @@
 
 ## Overview
 
-**LottaDB** gives you a document database built on **Azure Table Storage** with automatic full-text search via **Lucene Search Engine**. Each LottaDB instance is a single database. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying using full typed Linq expressions.
+**LottaDB** gives you a document database built on **Azure Table Storage** with automatic full-text search via **Lucene Search Engine**. Each LottaDB instance is a single table wih backing lucene catalog. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying using full typed Linq expressions.
 
 Reactive handlers (`On<T>`) let you build materialized views, cascading updates, and side effects that run inline after each write.
 
