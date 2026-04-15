@@ -1,0 +1,101 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:TodoApp.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="720" d:DesignHeight="600"
+        x:Class="TodoApp.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="LottaDB Todo Sample"
+        Width="720" Height="620"
+        MinWidth="520" MinHeight="400">
+
+    <DockPanel LastChildFill="True">
+
+        <!-- Search + filter row -->
+        <Border DockPanel.Dock="Top" Padding="14,14,14,10"
+                BorderBrush="#22000000" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="*,Auto,8,Auto">
+                <TextBox Grid.Column="0"
+                         Watermark="Search (Lucene-backed: title + notes)"
+                         Text="{Binding SearchText, Mode=TwoWay}" />
+                <Button Grid.Column="1" Content="Clear"
+                        Command="{Binding ClearSearchCommand}"
+                        Margin="6,0,0,0" />
+                <ComboBox Grid.Column="3"
+                          SelectedIndex="{Binding FilterIndex, Mode=TwoWay}"
+                          MinWidth="110">
+                    <ComboBoxItem>All</ComboBoxItem>
+                    <ComboBoxItem>Open</ComboBoxItem>
+                    <ComboBoxItem>Done</ComboBoxItem>
+                </ComboBox>
+            </Grid>
+        </Border>
+
+        <!-- Status line -->
+        <Border DockPanel.Dock="Bottom" Padding="14,8"
+                BorderBrush="#22000000" BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusLine}" Opacity="0.7" />
+        </Border>
+
+        <!-- Add row -->
+        <Border DockPanel.Dock="Top" Padding="14,10,14,10">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0"
+                         Watermark="New todo — press Enter to add"
+                         Text="{Binding NewTodoTitle, Mode=TwoWay}">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding AddCommand}" />
+                    </TextBox.KeyBindings>
+                </TextBox>
+                <Button Grid.Column="1" Content="Add"
+                        Command="{Binding AddCommand}"
+                        IsDefault="True"
+                        Margin="6,0,0,0" />
+            </Grid>
+        </Border>
+
+        <!-- Todo list -->
+        <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Items}" Margin="10,0,10,10">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:TodoItemViewModel">
+                        <Border Padding="10" Margin="4,4,4,6" CornerRadius="6"
+                                BorderThickness="1" BorderBrush="#25000000"
+                                Background="#08000000">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                <CheckBox Grid.Column="0"
+                                          IsChecked="{Binding IsDone, Mode=TwoWay}"
+                                          VerticalAlignment="Top"
+                                          Margin="0,2,10,0" />
+
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBox Text="{Binding Title, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             Classes="inlineEdit"
+                                             Classes.done="{Binding IsDone}"
+                                             FontSize="15" FontWeight="SemiBold" />
+                                    <TextBox Text="{Binding Notes, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             Watermark="Notes…"
+                                             Classes="inlineEdit"
+                                             FontSize="12"
+                                             Opacity="0.75"
+                                             TextWrapping="Wrap"
+                                             AcceptsReturn="True" />
+                                </StackPanel>
+
+                                <Button Grid.Column="2" Content="✕"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="6,2"
+                                        VerticalAlignment="Top"
+                                        ToolTip.Tip="Delete"
+                                        Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).DeleteCommand, FallbackValue={x:Null}}"
+                                        CommandParameter="{Binding}" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

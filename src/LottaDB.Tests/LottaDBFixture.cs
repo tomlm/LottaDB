@@ -1,34 +1,49 @@
+using Azure;
 using Azure.Data.Tables;
 using Lotta;
+using Lucene.Net.Util;
 using Microsoft.Extensions.DependencyInjection;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
+using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
 
 public class LottaDBFixture : IDisposable
 {
-    public LottaDB Db { get; }
 
     public LottaDBFixture()
     {
-        Db = CreateDb();
     }
 
     public void Dispose() { }
 
-    public static TableServiceClient CreateInMemoryTableServiceClient()
+    public static TableServiceClient CreateTableServiceClient()
     {
-        var provider = new InMemoryStorageProvider();
-        var account = provider.AddAccount($"test{Guid.NewGuid():N}");
-        return InMemoryTableServiceClient.FromAccount(account);
+        //var provider = new InMemoryStorageProvider();
+        //var account = provider.AddAccount($"test{Guid.NewGuid():N}");
+        //return InMemoryTableServiceClient.FromAccount(account);
+        return new TableServiceClient("UseDevelopmentStorage=true");
     }
 
-    public static LottaDB CreateDb(Action<ILottaConfiguration>? configure = null)
+    public static Lucene.Net.Store.Directory CreateLuceneDirectory()
     {
-        var tableClient = CreateInMemoryTableServiceClient();
         var directory = new Lucene.Net.Store.RAMDirectory();
         directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        return directory;
+    }
+
+    public static LottaDB CreateDb(Action<ILottaConfiguration>? configure = null,
+        [CallerMemberName] string? testName = null)
+    {
+        var tableClient = CreateTableServiceClient();
+        var directory = CreateLuceneDirectory();
+        //foreach (var table in tableClient.Query().Where(t => t.Name.StartsWith("test")))
+        //{
+        //    tableClient.DeleteTable(table.Name);
+        //}
+        testName = String.Join("", testName.Where(c => char.IsLetterOrDigit(c)));
+        try { tableClient.DeleteTable(testName); } catch { }
 
         var options = new LottaConfiguration();
         options.Store<Actor>();
@@ -46,6 +61,6 @@ public class LottaDBFixture : IDisposable
 
         configure?.Invoke(options);
 
-        return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
+        return new LottaDB(testName, tableClient, directory, options);
     }
 }

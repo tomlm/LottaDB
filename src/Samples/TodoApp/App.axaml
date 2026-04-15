@@ -1,0 +1,21 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="TodoApp.App"
+             RequestedThemeVariant="Default">
+    <Application.Styles>
+        <FluentTheme />
+
+        <Style Selector="TextBox.inlineEdit">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="TextBox.inlineEdit:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="#10000000" />
+        </Style>
+        <Style Selector="TextBox.done">
+            <Setter Property="Opacity" Value="0.5" />
+        </Style>
+    </Application.Styles>
+</Application>

@@ -2,8 +2,10 @@ using Azure.Data.Tables;
 using Lotta.Internal;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Index;
+using Lucene.Net.Linq;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using static Lucene.Net.Search.FieldValueHitQueue;
 using LuceneDirectory = Lucene.Net.Store.Directory;
@@ -86,7 +88,7 @@ public class LottaDB
     internal TypeMetadata GetMeta(Type type)
     {
         if (_metadata.TryGetValue(type, out var meta)) return meta;
-            throw new InvalidOperationException($"Type {type.Name} not registered. Call opts.Store<{type.Name}>().");
+        throw new InvalidOperationException($"Type {type.Name} not registered. Call opts.Store<{type.Name}>().");
 
     }
 
@@ -130,7 +132,7 @@ public class LottaDB
 
         using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
         {
-            session.Add(Lucene.Net.Linq.KeyConstraint.Unique, entity);
+            session.Add(KeyConstraint.Unique, entity);
         }
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
@@ -168,8 +170,10 @@ public class LottaDB
 
         if (existing != null)
         {
-            using var session = _lucene.OpenSession<T>(GetMapper<T>());
-            session.Delete(existing);
+            using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
+            {
+                session.Delete(existing);
+            }
         }
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = existing };
@@ -211,9 +215,9 @@ public class LottaDB
     /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
-    public async Task<ObjectResult> DeleteAsync<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> DeleteAsync<T>(Expression<Func<T, bool>> predicate, CancellationToken ct = default) where T : class, new()
     {
-        var matches = Query<T>().Where(predicate).ToList();
+        var matches = Query<T>(predicate).ToList();
         if (matches.Count == 0)
             return new ObjectResult();
 
@@ -237,8 +241,12 @@ public class LottaDB
     }
 
     /// <summary>
-    /// Read-modify-write. Fetches the object by key, applies the mutation function, and saves.
-    /// Throws if the object does not exist.
+    /// Read-modify-write with optimistic concurrency. Fetches the object by key (capturing its
+    /// ETag), applies the mutation, and commits with an <c>If-Match</c> condition. If another
+    /// writer changed the row in between, the read-modify-write is retried against the latest
+    /// state — so the mutation is guaranteed to be applied on top of the committed version.
+    /// The mutation function may therefore be invoked more than once; it must be a pure function
+    /// of its input. Throws if the object does not exist, or if retries are exhausted.
     /// </summary>
     /// <param name="key">The unique key of the object to modify.</param>
     /// <param name="mutate">A function that receives the current object and returns the modified version.</param>
@@ -246,10 +254,52 @@ public class LottaDB
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
     public async Task<ObjectResult> ChangeAsync<T>(string key, Func<T, T> mutate, CancellationToken ct = default) where T : class, new()
     {
-        var current = await GetAsync<T>(key, ct)
-            ?? throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
-        var mutated = mutate(current);
-        return await SaveAsync(mutated, ct);
+        const int maxAttempts = 16;
+        var meta = GetMeta<T>();
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key);
+            if (current == null || string.IsNullOrEmpty(etag))
+                throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
+
+            var mutated = mutate(current);
+
+            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag);
+            if (!committed)
+                continue; // someone else wrote between our read and write — re-read and retry
+
+            TrackKey(typeof(T), mutated!, key);
+
+            using (var session = _lucene.OpenSession<T>(GetMapper<T>()))
+            {
+                session.Add(KeyConstraint.Unique, mutated!);
+            }
+
+            var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, ct);
+
+            if (isRoot)
+            {
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
+            }
+
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
+        }
+
+        throw new InvalidOperationException(
+            $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts.");
     }
 
     // === Read ===
@@ -269,16 +319,20 @@ public class LottaDB
     /// Supports polymorphic queries and LINQ joins.
     /// </summary>
     /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
-    public IQueryable<T> Query<T>() where T : class, new()
+    /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query. Defaults to 1000. Set to null for no limit (use with caution).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public IAsyncEnumerable<T> QueryAsync<T>(Expression<Func<T, bool>>? predicate = null,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default) where T : class, new()
     {
-        return _tableAdapter.Query<T>(_name);
+        return _tableAdapter.QueryAsync<T>(_name, predicate, maxPerPage, cancellationToken);
     }
 
     /// <summary>Query Azure Table Storage with a predicate filter.</summary>
     /// <typeparam name="T">The object type.</typeparam>
     /// <param name="predicate">Filter expression.</param>
-    public IQueryable<T> Query<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate) where T : class, new()
-        => Query<T>().Where(predicate);
+    public IEnumerable<T> Query<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
+        => _tableAdapter.Query<T>(_name, predicate);
 
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
@@ -295,7 +349,7 @@ public class LottaDB
     /// <summary>Search the Lucene index with a predicate filter.</summary>
     /// <typeparam name="T">The object type.</typeparam>
     /// <param name="predicate">Filter expression applied to Lucene results.</param>
-    public IQueryable<T> Search<T>(System.Linq.Expressions.Expression<Func<T, bool>> predicate) where T : class, new()
+    public IQueryable<T> Search<T>(Expression<Func<T, bool>> predicate) where T : class, new()
         => Search<T>().Where(predicate);
 
     // === On<T> (runtime registration) ===

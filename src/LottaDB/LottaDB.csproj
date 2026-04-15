@@ -9,7 +9,7 @@
 <PropertyGroup>
     <Version>1.0.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <Description>**LottaDB**  is a .NET library that stores **POCO** => **Table Storage** and **Lucene** catalogs. </Description>
+    <Description>**LottaDB**  is a .NET library that stores **POCO** =&gt; **Table Storage** and **Lucene** catalogs. </Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -37,6 +37,7 @@
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
     <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.1-beta00017" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
+    <PackageReference Include="System.Linq.AsyncEnumerable" Version="10.0.6" />
     <PackageReference Include="Ulid" Version="1.4.1" />
   </ItemGroup>
 

@@ -61,4 +61,38 @@ public class QueryTests
         Assert.Single(withAvatar);
         Assert.Equal("alice", withAvatar[0].Username);
     }
+
+    [Fact]
+    public async Task QueryAsync_CombinedTagAndNonTag_FiltersCorrectly()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alex", DisplayName = "Alice", AvatarUrl = "" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "https://example.com/bob.png" }, TestContext.Current.CancellationToken);
+
+        var matches = db.Query<Actor>()
+            .Where(a => a.DisplayName == "Alice" && a.AvatarUrl != "")
+            .ToList();
+
+        Assert.Single(matches);
+        Assert.Equal("alice", matches[0].Username);
+    }
+
+    [Fact]
+    public async Task QueryAsync_OrAcrossTags_FiltersCorrectly()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", DisplayName = "Carol" }, TestContext.Current.CancellationToken);
+
+        var matches = db.Query<Actor>()
+            .Where(a => a.DisplayName == "Alice" || a.DisplayName == "Bob")
+            .OrderBy(a => a.Username)
+            .ToList();
+
+        Assert.Equal(2, matches.Count);
+        Assert.Equal("alice", matches[0].Username);
+        Assert.Equal("bob", matches[1].Username);
+    }
 }

@@ -9,9 +9,9 @@ public class FluentConfigTests
 {
     private static LottaDB CreateFluentDb(Action<ILottaConfiguration>? extra = null)
     {
-        var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        var tableClient = LottaDBFixture.CreateTableServiceClient();
+        var directory = LottaDBFixture.CreateLuceneDirectory();
+        
 
         var options = new LottaConfiguration();
         options.Store<BareActor>(s =>
@@ -416,21 +416,20 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_CompositeKey()
     {
-        var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        var tableClient = LottaDBFixture.CreateTableServiceClient();
+        var directory = LottaDBFixture.CreateLuceneDirectory();
 
         var options = new LottaConfiguration();
         options.Store<BareActor>(s =>
         {
-            s.SetKey(a => $"{a.Domain}/{a.Username}");
+            s.SetKey(a => $"{a.Domain}-{a.Username}");
         });
 
         var db = new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
 
         await db.SaveAsync(new BareActor { Domain = "example.com", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<BareActor>("example.com/alice", TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<BareActor>("example.com-alice", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Alice", loaded.DisplayName);
     }

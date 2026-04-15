@@ -71,8 +71,7 @@ await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
 var actor = await db.GetAsync<Actor>("alice");
 
 // Query (Table Storage -- server-side filter on [Queryable] properties)
-var results = db.Query<Actor>()
-    .Where(a => a.DisplayName == "Alice")
+var results = db.Query<Actor>(a => a.DisplayName == "Alice")
     .ToList();
 
 // Search (Lucene -- full-text search on [Queryable] properties)
@@ -161,8 +160,7 @@ Filters on `[Queryable]` properties are executed by table storage server-side.
 var all = db.Query<Actor>().ToList();
 
 // Server-side filter (AuthorId is [Queryable])
-var aliceNotes = db.Query<Note>()
-    .Where(n => n.AuthorId == "alice")
+var aliceNotes = db.Query<Note>(n => n.AuthorId == "alice")
     .ToList();
 
 // Predicate shorthand
@@ -299,16 +297,20 @@ await db.DeleteAsync<Note>(note);
 
 ### QueryAsync<T>()
 Search table storage using linq
+> NOTE: only filter passed to QueryAsync is processed server side by table storage and it needs to be on [Queryable] properties. 
+> All other linq operations are processed client side after fetching the data from table storage.
+
 ```csharp
-foreach(var actor in db.QueryAsync<Actor>()
-                       .Where(actor => actor.Age > 50)
+foreach(var actor in db.QueryAsync<Actor>(actor => actor.Age > 50)
 {
     ...
 }
 ```
 
 ### SearchAsync<T>()
-Search lucene index using linq
+Search lucene index using linq search syntax. 
+> NOTE: only [Queryable] properties are searchable in lucene and string properties support full text search with Contains.
+
 ```csharp
 foreach(var actor in db.SearchAsync<Actor>("name:bob*")
                        .Where(actor => actor.Age > 50)

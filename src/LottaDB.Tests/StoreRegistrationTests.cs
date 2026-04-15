@@ -91,9 +91,9 @@ public class StoreRegistrationTests
     public async Task Store_UnregisteredType_Throws()
     {
         // Create a DB without registering Actor
-        var tableClient = LottaDBFixture.CreateInMemoryTableServiceClient();
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        var tableClient = LottaDBFixture.CreateTableServiceClient();
+        var directory = LottaDBFixture.CreateLuceneDirectory();
+        
         var options = new LottaConfiguration();
         // deliberately NOT registering Actor
         var db = new LottaDB("test", tableClient, directory, options);
@@ -160,13 +160,13 @@ public class StoreRegistrationTests
         {
             opts.Store<Actor>(s =>
             {
-                s.SetKey(a => $"{a.Domain}/{a.Username}");
+                s.SetKey(a => $"{a.Domain}-{a.Username}");
             });
         });
 
         await db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<Actor>("test.com/alice", TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("test.com-alice", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("Alice", loaded.DisplayName);
     }
