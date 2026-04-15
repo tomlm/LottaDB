@@ -2,6 +2,7 @@
   <Folder Name="/Solution Items/">
     <File Path="../Analysis.md" />
     <File Path="../Architecture.md" />
+    <File Path="../README.md" />
   </Folder>
   <Project Path="../../Lucene.Net.Linq/source/Lucene.Net.Linq/Lucene.Net.Linq.csproj" />
   <Project Path="LottaDB.Tests/LottaDB.Tests.csproj" Id="8068fd34-450f-41f2-9c0e-f39330c38af3" />
