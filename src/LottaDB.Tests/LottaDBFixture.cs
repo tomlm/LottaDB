@@ -11,21 +11,19 @@ namespace Lotta.Tests;
 
 public class LottaDBFixture : IDisposable
 {
-    public LottaDB Db { get; }
 
     public LottaDBFixture()
     {
-        Db = CreateDb();
     }
 
     public void Dispose() { }
 
     public static TableServiceClient CreateTableServiceClient()
     {
-        var provider = new InMemoryStorageProvider();
-        var account = provider.AddAccount($"test{Guid.NewGuid():N}");
-        return InMemoryTableServiceClient.FromAccount(account);
-        //return new TableServiceClient("UseDevelopmentStorage=true");
+        //var provider = new InMemoryStorageProvider();
+        //var account = provider.AddAccount($"test{Guid.NewGuid():N}");
+        //return InMemoryTableServiceClient.FromAccount(account);
+        return new TableServiceClient("UseDevelopmentStorage=true");
     }
 
     public static Lucene.Net.Store.Directory CreateLuceneDirectory()
@@ -40,12 +38,12 @@ public class LottaDBFixture : IDisposable
     {
         var tableClient = CreateTableServiceClient();
         var directory = CreateLuceneDirectory();
-        //foreach(var table in tableClient.Query().Where(t => t.Name.StartsWith("test")))
+        //foreach (var table in tableClient.Query().Where(t => t.Name.StartsWith("test")))
         //{
         //    tableClient.DeleteTable(table.Name);
         //}
         testName = String.Join("", testName.Where(c => char.IsLetterOrDigit(c)));
-        tableClient.DeleteTable(testName);
+        try { tableClient.DeleteTable(testName); } catch { }
 
         var options = new LottaConfiguration();
         options.Store<Actor>();

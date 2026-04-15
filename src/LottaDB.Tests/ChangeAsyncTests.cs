@@ -2,26 +2,22 @@ namespace Lotta.Tests;
 
 public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 {
-    private readonly LottaDB _db;
-
-    public ChangeAsyncTests(LottaDBFixture fixture)
-    {
-        _db = fixture.Db;
-    }
 
     [Fact]
     public async Task ChangeAsync_MutatesAndSaves()
     {
-        var actor = new Actor { Domain = "change.test", Username = "mutate", DisplayName = "Before" };
-        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var db = LottaDBFixture.CreateDb();
 
-        await _db.ChangeAsync<Actor>("mutate", a =>
+        var actor = new Actor { Domain = "change.test", Username = "mutate", DisplayName = "Before" };
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+
+        await db.ChangeAsync<Actor>("mutate", a =>
         {
             a.DisplayName = "After";
             return a;
         }, TestContext.Current.CancellationToken);
 
-        var loaded = await _db.GetAsync<Actor>("mutate", TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("mutate", TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("After", loaded.DisplayName);
     }
@@ -29,29 +25,33 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ByObject_ExtractsKeys()
     {
+        var db = LottaDBFixture.CreateDb();
+
         var actor = new Actor { Domain = "change.test", Username = "by-obj", DisplayName = "Before" };
-        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
         // Get the object so it has tracked ETag
-        var loaded = await _db.GetAsync<Actor>("by-obj", TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("by-obj", TestContext.Current.CancellationToken);
 
-        await _db.ChangeAsync<Actor>(loaded!.Username, a =>
+        await db.ChangeAsync<Actor>(loaded!.Username, a =>
         {
             a.DisplayName = "After";
             return a;
         }, TestContext.Current.CancellationToken);
 
-        var updated = await _db.GetAsync<Actor>("by-obj", TestContext.Current.CancellationToken);
+        var updated = await db.GetAsync<Actor>("by-obj", TestContext.Current.CancellationToken);
         Assert.Equal("After", updated!.DisplayName);
     }
 
     [Fact]
     public async Task ChangeAsync_ReturnsObjectResult()
     {
-        var actor = new Actor { Domain = "change.test", Username = "result", DisplayName = "Before" };
-        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        var db = LottaDBFixture.CreateDb();
 
-        var result = await _db.ChangeAsync<Actor>("result", a =>
+        var actor = new Actor { Domain = "change.test", Username = "result", DisplayName = "Before" };
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+
+        var result = await db.ChangeAsync<Actor>("result", a =>
         {
             a.DisplayName = "After";
             return a;
@@ -64,8 +64,9 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_NonExistent_Throws()
     {
+        var db = LottaDBFixture.CreateDb();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _db.ChangeAsync<Actor>("ghost", a =>
+            db.ChangeAsync<Actor>("ghost", a =>
             {
                 a.DisplayName = "impossible";
                 return a;
@@ -75,11 +76,12 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_MutationIsPure_CalledAtLeastOnce()
     {
+        var db = LottaDBFixture.CreateDb();
         var actor = new Actor { Domain = "change.test", Username = "pure", DisplayName = "Before" };
-        await _db.SaveAsync(actor, TestContext.Current.CancellationToken);
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
         int callCount = 0;
-        await _db.ChangeAsync<Actor>("pure", a =>
+        await db.ChangeAsync<Actor>("pure", a =>
         {
             Interlocked.Increment(ref callCount);
             a.DisplayName = "After";
@@ -101,6 +103,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetriesOnEtagConflict_MergesWithConcurrentWrite()
     {
+        var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
 
         // V1
@@ -111,7 +114,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
             DisplayName = "V1",
             AvatarUrl = "v1.png"
         };
-        await _db.SaveAsync(v1, ct);
+        await db.SaveAsync(v1, ct);
 
         var firstReadDone = new TaskCompletionSource();
         var allowApply = new TaskCompletionSource();
@@ -122,7 +125,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         // ETag conflict forces a re-read) should apply immediately without blocking.
         var changeTask = Task.Run(async () =>
         {
-            return await _db.ChangeAsync<Actor>("concurrent-mutate", actor =>
+            return await db.ChangeAsync<Actor>("concurrent-mutate", actor =>
             {
                 var call = Interlocked.Increment(ref mutateCalls);
                 if (call == 1)
@@ -140,11 +143,11 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         // Outer write: V2 — changes AvatarUrl (an unrelated field) and bumps DisplayName.
         // This bumps the ETag so the in-flight ChangeAsync's V1-based write will 412.
-        var loaded = await _db.GetAsync<Actor>("concurrent-mutate", ct);
+        var loaded = await db.GetAsync<Actor>("concurrent-mutate", ct);
         Assert.NotNull(loaded);
         loaded!.DisplayName = "V2";
         loaded.AvatarUrl = "v2.png";
-        await _db.SaveAsync(loaded, ct);
+        await db.SaveAsync(loaded, ct);
 
         // Let the blocked mutator proceed. Its commit must fail and retry.
         allowApply.TrySetResult();
@@ -158,7 +161,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
             $"expected mutator to be called at least twice due to ETag conflict retry; got {mutateCalls}");
 
         // Final state: V3 DisplayName merged over V2's AvatarUrl (not V1's).
-        var final = await _db.GetAsync<Actor>("concurrent-mutate", ct);
+        var final = await db.GetAsync<Actor>("concurrent-mutate", ct);
         Assert.NotNull(final);
         Assert.Equal("V3", final!.DisplayName);
         Assert.Equal("v2.png", final.AvatarUrl);
@@ -173,10 +176,11 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetryAfterConflict_HandlerFiresOnceForCommittedValue()
     {
+        var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
         var username = "handler-once";
 
-        await _db.SaveAsync(new Actor
+        await db.SaveAsync(new Actor
         {
             Domain = "change.test",
             Username = username,
@@ -186,7 +190,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var handlerCalls = new List<string>();
         var handlerLock = new object();
-        using var handle = _db.On<Actor>((a, _, _) =>
+        using var handle = db.On<Actor>((a, _, _) =>
         {
             if (a.Username == username)
                 lock (handlerLock) handlerCalls.Add(a.DisplayName);
@@ -198,7 +202,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var changeTask = Task.Run(async () =>
         {
-            return await _db.ChangeAsync<Actor>(username, actor =>
+            return await db.ChangeAsync<Actor>(username, actor =>
             {
                 if (firstReadDone.TrySetResult())
                     allowApply.Task.Wait();
@@ -209,10 +213,10 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         await firstReadDone.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
-        var loaded = await _db.GetAsync<Actor>(username, ct);
+        var loaded = await db.GetAsync<Actor>(username, ct);
         loaded!.DisplayName = "V2";
         loaded.AvatarUrl = "v2.png";
-        await _db.SaveAsync(loaded, ct);
+        await db.SaveAsync(loaded, ct);
 
         allowApply.TrySetResult();
         await changeTask;
@@ -237,11 +241,12 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ParallelWriters_NoLostUpdates()
     {
+        var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
         var username = "parallel-counter";
         const int N = 10;
 
-        await _db.SaveAsync(new Actor
+        await db.SaveAsync(new Actor
         {
             Domain = "change.test",
             Username = username,
@@ -249,7 +254,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         }, ct);
 
         var tasks = Enumerable.Range(0, N).Select(_ => Task.Run(() =>
-            _db.ChangeAsync<Actor>(username, a =>
+            db.ChangeAsync<Actor>(username, a =>
             {
                 a.DisplayName = (int.Parse(a.DisplayName) + 1).ToString();
                 return a;
@@ -257,8 +262,10 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         await Task.WhenAll(tasks);
 
-        var final = await _db.GetAsync<Actor>(username, ct);
+        var final = await db.GetAsync<Actor>(username, ct);
         Assert.Equal(N.ToString(), final!.DisplayName);
+        var final2 = db.Search<Actor>(a => a.Username == final.Username).Single();
+        Assert.Equal(N.ToString(), final2!.DisplayName);
     }
 
     /// <summary>
@@ -269,10 +276,11 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetryAfterConflict_LuceneReflectsFinalCommit()
     {
+        var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
         var username = "lucene-final";
 
-        await _db.SaveAsync(new Actor
+        await db.SaveAsync(new Actor
         {
             Domain = "change.test",
             Username = username,
@@ -285,7 +293,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var changeTask = Task.Run(async () =>
         {
-            return await _db.ChangeAsync<Actor>(username, actor =>
+            return await db.ChangeAsync<Actor>(username, actor =>
             {
                 if (firstReadDone.TrySetResult())
                     allowApply.Task.Wait();
@@ -296,22 +304,22 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         await firstReadDone.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
-        var loaded = await _db.GetAsync<Actor>(username, ct);
+        var loaded = await db.GetAsync<Actor>(username, ct);
         loaded!.DisplayName = "V2-lucene";
         loaded.AvatarUrl = "v2.png";
-        await _db.SaveAsync(loaded, ct);
+        await db.SaveAsync(loaded, ct);
 
         allowApply.TrySetResult();
         await changeTask;
 
         // Lucene Search returns deserialized POCOs — check both the indexed field (DisplayName)
         // and a non-indexed field (AvatarUrl, round-trips via _json) reflect the merged state.
-        var indexed = _db.Search<Actor>().ToList().Single(a => a.Username == username);
+        var indexed = db.Search<Actor>().ToList().Single(a => a.Username == username);
         Assert.Equal("V3-lucene", indexed.DisplayName);
         Assert.Equal("v2.png", indexed.AvatarUrl);
 
         // And no stale "V1"-based variant lingers in the index.
-        var stale = _db.Search<Actor>().ToList().Where(a => a.Username == username && a.AvatarUrl == "v1.png").ToList();
+        var stale = db.Search<Actor>().ToList().Where(a => a.Username == username && a.AvatarUrl == "v1.png").ToList();
         Assert.Empty(stale);
     }
 
@@ -323,10 +331,11 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetryAfterConflict_MutatorSeesFreshInputOnRetry()
     {
+        var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
         var username = "fresh-input";
 
-        await _db.SaveAsync(new Actor
+        await db.SaveAsync(new Actor
         {
             Domain = "change.test",
             Username = username,
@@ -340,7 +349,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var changeTask = Task.Run(async () =>
         {
-            return await _db.ChangeAsync<Actor>(username, actor =>
+            return await db.ChangeAsync<Actor>(username, actor =>
             {
                 seenInputs.Add((actor.DisplayName, actor.AvatarUrl));
                 if (firstReadDone.TrySetResult())
@@ -352,10 +361,10 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         await firstReadDone.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
-        var loaded = await _db.GetAsync<Actor>(username, ct);
+        var loaded = await db.GetAsync<Actor>(username, ct);
         loaded!.DisplayName = "V2-fresh";
         loaded.AvatarUrl = "v2.png";
-        await _db.SaveAsync(loaded, ct);
+        await db.SaveAsync(loaded, ct);
 
         allowApply.TrySetResult();
         await changeTask;
