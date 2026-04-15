@@ -24,14 +24,14 @@ jobs:
           version: bump-build
   
       - name: Restore dependencies
-        run: dotnet restore src/s:\github\LottaDB\src\LottaDB.slnx
+        run: dotnet restore src/LottaDB.slnx
 
       - name: Build
-        run: dotnet build src/s:\github\LottaDB\src\LottaDB.slnx -c Release --no-restore 
+        run: dotnet build src/LottaDB.slnx -c Release --no-restore 
   
       - name: dotnet pack 
         run: |
-          dotnet pack --no-build src/s:\github\LottaDB\src\LottaDB.slnx -c Release -o packages --include-symbols --property WarningLevel=0
+          dotnet pack --no-build src/LottaDB.slnx -c Release -o packages --include-symbols --property WarningLevel=0
 
       - name: Publish NuGet and symbols
         id: nuget-push

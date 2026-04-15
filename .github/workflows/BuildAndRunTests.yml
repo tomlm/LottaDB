@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout s:\github\LottaDB\src\LottaDB.slnx
+    - name: Checkout LottaDB.slnx
       uses: actions/checkout@v4
 
     - name: Setup .NET
@@ -26,10 +26,10 @@ jobs:
         dotnet-version: 10.0.x
 
     - name: Restore dependencies
-      run: dotnet restore src/s:\github\LottaDB\src\LottaDB.slnx
+      run: dotnet restore src/LottaDB.slnx
 
     - name: Build
-      run: dotnet build --no-restore src/s:\github\LottaDB\src\LottaDB.slnx --property WarningLevel=0
+      run: dotnet build --no-restore src/LottaDB.slnx --property WarningLevel=0
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal src/s:\github\LottaDB\src\LottaDB.slnx
+      run: dotnet test --no-build --verbosity normal src/LottaDB.slnx
