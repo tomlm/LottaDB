@@ -20,7 +20,7 @@ jobs:
         uses: vers-one/dotnet-project-version-updater@v1.5
         with:
           files: |
-            "**/s:\github\LottaDB\src\LottaDB.slnx.csproj"
+            "**/LottaDB.slnx.csproj"
           version: bump-build
   
       - name: Restore dependencies
