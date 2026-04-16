@@ -121,8 +121,8 @@ public class SearchTests
     public async Task SearchAsync_FilterByContent()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { Domain = "search.test", NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { Domain = "search.test1", NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search", NotQueryable="dogs and cats", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { Domain = "search.test2", NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast", NotQueryable="kittens and puppies", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         // Filter by a non-analyzed field (AuthorId has NotAnalyzed)
         var results = db.Search<Note>()
@@ -130,7 +130,7 @@ public class SearchTests
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
-        results = db.Search<Note>("lucene")
+        results = db.Search<Note>("dog* lizards")
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);

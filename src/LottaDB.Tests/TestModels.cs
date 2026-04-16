@@ -36,6 +36,8 @@ public class Note
     [Queryable]
     public string Content { get; set; } = "";
 
+    public string NotQueryable { get; set; } = "";
+
     public string Domain { get; set; } = "";
     public IList<string> Tags { get; set; } = new List<string>();
 }

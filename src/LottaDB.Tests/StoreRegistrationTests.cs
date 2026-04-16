@@ -94,7 +94,7 @@ public class StoreRegistrationTests
     {
         // Create a DB without registering Actor
         // deliberately NOT registering Actor
-        var db = new LottaDB("test"!, "UseDeveloperStorage=true", (c) =>
+        var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDeveloperStorage=true", (c) =>
         {
             c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
             c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;

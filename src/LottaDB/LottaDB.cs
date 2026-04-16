@@ -1,16 +1,11 @@
-using Azure.Data.Tables;
 using Lotta.Internal;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Index;
 using Lucene.Net.Linq;
-using Lucene.Net.Store.Azure;
 using Lucene.Net.Util;
-using Microsoft.Extensions.Configuration;
-using System;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
-using static Lucene.Net.Search.FieldValueHitQueue;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
 
@@ -40,7 +35,7 @@ public class LottaDB
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
     internal const string JSON_FIELD = "_json_";
 
-    private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration> options)
+    private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration>? options)
     {
         var config = new LottaConfiguration(connectionString);
         options?.Invoke(config);
@@ -80,7 +75,12 @@ public class LottaDB
         InitializeHandlers();
     }
 
-    public LottaDB(string name, string connectionString, Action<LottaConfiguration> options = null)
+    public LottaDB(string name, Action<LottaConfiguration>? options = null)
+    : this(name, CreateConfig(null!, options))
+    {
+    }
+
+    public LottaDB(string name, string connectionString, Action<LottaConfiguration>? options = null)
         : this(name, CreateConfig(connectionString, options))
     {
     }

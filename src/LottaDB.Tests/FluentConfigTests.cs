@@ -13,7 +13,7 @@ public class FluentConfigTests
     private static LottaDB CreateFluentDb(Action<ILottaConfiguration>? extra = null,
         [CallerMemberName] string? testName = null)
     {
-        testName = String.Join(String.Empty, testName.Where(char.IsLetterOrDigit).Take(60));
+        testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
         return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
         {

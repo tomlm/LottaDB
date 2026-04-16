@@ -16,9 +16,13 @@ public class LottaConfiguration : ILottaConfiguration
     }
 
     public LottaConfiguration(string connectionString)
+        : this()
     {
-        CreateTableServiceClient = name => new TableServiceClient(connectionString);
-        CreateLuceneDirectory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
+        if (!String.IsNullOrEmpty(connectionString))
+        {
+            CreateTableServiceClient = name => new TableServiceClient(connectionString);
+            CreateLuceneDirectory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
+        }
     }
 
     public Func<string, TableServiceClient> CreateTableServiceClient { get; set; }
