@@ -49,6 +49,7 @@ public class ToAsyncEnumerableTests
     public async Task QueryAsync_ToAsyncEnumerable_WithFilter_ReturnsFiltered()
     {
         var db = LottaDBFixture.CreateDb();
+
         await db.SaveAsync(new Note { Domain = "async.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { Domain = "async.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 

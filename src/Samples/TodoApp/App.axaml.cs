@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Microsoft.Extensions.Configuration;
 using TodoApp.Services;
 using TodoApp.ViewModels;
 using TodoApp.Views;
@@ -15,7 +16,10 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var store = new TodoStore();
+            var store = new TodoStore(new ConfigurationManager()
+            {
+                ["ConnectionString"] = "UseDevelopmentStorage=true"
+            });
             desktop.MainWindow = new MainWindow
             {
                 DataContext = new MainViewModel(store)

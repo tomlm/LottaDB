@@ -28,6 +28,7 @@ namespace Lotta.Internal
         /// <summary>
         /// Gets or sets the JSON representation of the object or data associated with this property.
         /// </summary>
+        [Queryable]
         public string Json { get => GetString(nameof(Json)); set => this[nameof(Json)] = value; }
 
         /// <summary>

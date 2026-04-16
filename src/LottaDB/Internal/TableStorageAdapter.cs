@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Text;
 using System.Text.Json;
@@ -8,7 +9,7 @@ namespace Lotta.Internal;
 
 /// <summary>
 /// Adapter over Azure.Data.Tables TableClient for storing POCOs as JSON + tags.
-/// Wokeys with both real Azure Table Storage and Spotflow in-memory fakes.
+/// Works with both real Azure Table Storage and Spotflow in-memory fakes.
 /// </summary>
 internal class TableStorageAdapter
 {
@@ -24,13 +25,21 @@ internal class TableStorageAdapter
 
     private TableClient GetTable(string tableName)
     {
+        tableName = NormalizeName(tableName);
+
         if (!_tables.TryGetValue(tableName, out var client))
         {
-            _serviceClient.CreateTableIfNotExists(tableName);
             client = _serviceClient.GetTableClient(tableName);
+            client.CreateIfNotExists();
+
             _tables[tableName] = client;
         }
         return client;
+    }
+
+    internal static string NormalizeName(string name)
+    {
+        return string.Join("", name.Where(char.IsLetterOrDigit).Take(60));
     }
 
     public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta)
@@ -60,9 +69,11 @@ internal class TableStorageAdapter
         }
     }
 
-    private static LottaTableEntity BuildEntity(string key, object obj, TypeMetadata meta)
+    private static ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
-        var entity = new LottaTableEntity(key, obj);
+        var entity = new TableEntity(TableStorageAdapter.PK, key);
+        entity[nameof(LottaTableEntity.Type)] = obj.GetType().FullName!;
+        entity[nameof(LottaTableEntity.Json)] = JsonSerializer.Serialize(obj, obj.GetType());
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -71,7 +82,6 @@ internal class TableStorageAdapter
             if (value != null)
                 entity[tag.Name] = ConvertToTableValue(value);
         }
-
         return entity;
     }
 
@@ -184,11 +194,11 @@ internal class TableStorageAdapter
         var derivedTypes = TypeUtils.GetDerivedTypes(typeof(T));
         if (derivedTypes.Any())
         {
-            sb.Append($" AND ({String.Join(" OR ", derivedTypes.Select(t => $"Type eq '{t.FullName}'"))})");
+            sb.Append($" and ({String.Join(" or ", derivedTypes.Select(t => $"Type eq '{t.FullName}'"))})");
         }
         if (predicate != null)
         {
-            sb.Append($" AND ({TableClient.CreateQueryFilter(predicate)})");
+            sb.Append($" and ({TableClient.CreateQueryFilter(predicate)})");
         }
         return sb.ToString();
     }

@@ -3,7 +3,10 @@ using Lotta.Internal;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Index;
 using Lucene.Net.Linq;
+using Lucene.Net.Store.Azure;
 using Lucene.Net.Util;
+using Microsoft.Extensions.Configuration;
+using System;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
@@ -23,6 +26,7 @@ public class LottaDB
     private readonly string _name;
     private readonly LottaConfiguration _options;
     private readonly TableStorageAdapter _tableAdapter;
+    private readonly LuceneDirectory _directory;
     private readonly Lucene.Net.Linq.LuceneDataProvider _lucene;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, object> _mappers = new();
@@ -34,28 +38,37 @@ public class LottaDB
     // Collects changes across the entire call chain (root save + handler saves)
     private static readonly AsyncLocal<List<ObjectChange>?> _chainChanges = new();
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
+    internal const string JSON_FIELD = "_json_";
+
+    private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration> options)
+    {
+        var config = new LottaConfiguration(connectionString);
+        options?.Invoke(config);
+        return config;
+    }
 
     /// <summary>
     /// Create a LottaDB database instance.
     /// </summary>
     /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="tableServiceClient">Azure Table Storage client.</param>
-    /// <param name="directory">Lucene Directory.</param>
-    /// <param name="options">Configuration (registered types, On&lt;T&gt; handlers).</param>
-    public LottaDB(string name, TableServiceClient tableServiceClient,
-        LuceneDirectory directory, LottaConfiguration options)
+    /// <param name="options">Configuration (registered types, On&lt;T&gt; handlers, storage factories).</param>
+    public LottaDB(string name, LottaConfiguration options)
     {
         _name = name;
         _options = options;
-        _tableAdapter = new TableStorageAdapter(tableServiceClient);
+        _tableAdapter = new TableStorageAdapter(options.CreateTableServiceClient(name));
+        _directory = options.CreateLuceneDirectory(name);
 
-        using (var writer = new IndexWriter(directory,
+        using (var writer = new IndexWriter(_directory,
             new IndexWriterConfig(LuceneVersion.LUCENE_48, new StandardAnalyzer(LuceneVersion.LUCENE_48))
-            { OpenMode = OpenMode.CREATE_OR_APPEND }))
+            {
+                OpenMode = OpenMode.CREATE_OR_APPEND,
+                UseCompoundFile = true,
+            }))
         {
             writer.Commit();
         }
-        _lucene = new Lucene.Net.Linq.LuceneDataProvider(directory, LuceneVersion.LUCENE_48);
+        _lucene = new Lucene.Net.Linq.LuceneDataProvider(_directory, LuceneVersion.LUCENE_48);
         _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
@@ -66,6 +79,12 @@ public class LottaDB
         InitializeMetadata();
         InitializeHandlers();
     }
+
+    public LottaDB(string name, string connectionString, Action<LottaConfiguration> options = null)
+        : this(name, CreateConfig(connectionString, options))
+    {
+    }
+
 
     private void InitializeMetadata()
     {
@@ -343,6 +362,14 @@ public class LottaDB
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
         GetMeta<T>();
+        if (!String.IsNullOrEmpty(query))
+        {
+            var mapper = GetMapper<T>();
+            //var parser = _lucene.CreateQueryParser<T>(LottaDB.JSON_FIELD, mapper);
+            var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, LottaDB.JSON_FIELD, mapper);
+            return _lucene.AsQueryable<T>(mapper)
+                .Where(parser.Parse(query));
+        }
         return _lucene.AsQueryable<T>(GetMapper<T>());
     }
 

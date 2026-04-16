@@ -65,8 +65,25 @@ public class AdHocJoinTests
 
         // SearchAsync with query parameter (basic test — full Lucene query support depends on indexer)
         var filtered = db.Search<Actor>("DisplayName:Alice").ToList();
-        // Note: until Lucene searcher refresh is implemented, this may return all or filtered
-        // The test verifies the parameter is accepted without error
-        Assert.NotNull(filtered);
+        Assert.Equal(1, filtered.Count);
+        Assert.Equal("Alice", filtered[0].DisplayName);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WithOpenQueryString_FiltersResults()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+
+        // SearchAsync with no query returns all
+        var all = db.Search<Actor>().ToList();
+        Assert.Equal(2, all.Count);
+
+        // SearchAsync with query parameter (basic test — full Lucene query support depends on indexer)
+        var filtered = db.Search<Actor>("Alice").ToList();
+        Assert.Equal(1, filtered.Count);
+        Assert.Equal("Alice", filtered[0].DisplayName);
     }
 }

@@ -1,5 +1,6 @@
 using Lotta;
 using Lucene.Net.Store;
+using Microsoft.Extensions.Configuration;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
 using TodoApp.Models;
@@ -18,19 +19,15 @@ public class TodoStore
 {
     private readonly Lotta.LottaDB _db;
 
-    public TodoStore()
+    public TodoStore(IConfiguration configuration)
     {
-        var provider = new InMemoryStorageProvider();
-        var account = provider.AddAccount("todoapp");
-        var tables = InMemoryTableServiceClient.FromAccount(account);
+        var connectionString = configuration.GetValue<string>("ConnectionString");
+        ArgumentNullException.ThrowIfNull(connectionString, "ConnectionString");
 
-        var directory = new RAMDirectory();
-        directory.SetLockFactory(NoLockFactory.GetNoLockFactory());
-
-        var options = new LottaConfiguration();
-        options.Store<TodoItem>();
-
-        _db = new Lotta.LottaDB("todos", tables, directory, options);
+        _db = new LottaDB("todos", connectionString, lotta =>
+        {
+            lotta.Store<TodoItem>();
+        });
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>
@@ -58,7 +55,7 @@ public class TodoStore
     /// </summary>
     public IReadOnlyList<TodoItem> Search(string? query, TodoFilter filter)
     {
-        var q = _db.Search<TodoItem>();
+        var q = _db.Search<TodoItem>(query);
 
         q = filter switch
         {
@@ -67,12 +64,12 @@ public class TodoStore
             _ => q
         };
 
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            var term = query.Trim().ToLowerInvariant();
-            // Analyzed fields -> token/substring match via Lucene.Net.Linq's Contains translation.
-            q = q.Where(t => t.Title.Contains(term) || t.Notes.Contains(term));
-        }
+        //if (!string.IsNullOrWhiteSpace(query))
+        //{
+        //    var term = query.Trim().ToLowerInvariant();
+        //    // Analyzed fields -> token/substring match via Lucene.Net.Linq's Contains translation.
+        //    q = q.Where(t => t.Title.Contains(term) || t.Notes.Contains(term));
+        //}
 
         return q.ToList()
             .OrderBy(t => t.IsDone)

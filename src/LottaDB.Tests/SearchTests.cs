@@ -17,14 +17,42 @@ public class SearchTests
     public async Task SearchAsync_FindsByFieldValue()
     {
         var db = LottaDBFixture.CreateDb();
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice", Counter=5 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob", Counter=30 }, TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>()
             .Where(a => a.Username == "alice")
             .ToList();
         Assert.Single(results);
-        Assert.Equal("Alice", results[0].DisplayName);
+    }
+
+    [Fact]
+    public async Task SearchAsync_FindsByNumericCounterComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice", Counter = 5 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob", Counter = 30 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "carol", DisplayName = "Carol", Counter = 30 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Search<Actor>()
+            .Where(a => a.Counter == 30)
+            .OrderBy(a => a.Username)
+            .ToList();
+        Assert.Equal(2, equalsResults.Count);
+        Assert.Equal(["bob", "carol"], equalsResults.Select(a => a.Username).ToArray());
+
+        var lessThanResults = db.Search<Actor>()
+            .Where(a => a.Counter < 10)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Search<Actor>()
+            .Where(a => a.Counter > 10)
+            .OrderBy(a => a.Username)
+            .ToList();
+        Assert.Equal(2, greaterThanResults.Count);
+        Assert.Equal(["bob", "carol"], greaterThanResults.Select(a => a.Username).ToArray());
     }
 
     [Fact]
@@ -37,6 +65,10 @@ public class SearchTests
         // Filter by a non-analyzed field (AuthorId has NotAnalyzed)
         var results = db.Search<Note>()
             .Where(n => n.Content.Contains("lucene"))
+            .ToList();
+        Assert.Single(results);
+        Assert.Equal("n1", results[0].NoteId);
+        results = db.Search<Note>("lucene")
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
@@ -94,5 +126,26 @@ public class SearchTests
             .ToList();
         Assert.Single(results);
         Assert.Equal("After", results[0].DisplayName);
+    }
+
+    [Fact]
+    public async Task SearchAsync_ChangeAsync_ReflectsInIndex()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "changed", DisplayName = "Before", Counter = 1 }, TestContext.Current.CancellationToken);
+
+        await db.ChangeAsync<Actor>("changed", actor =>
+        {
+            actor.DisplayName = "After";
+            actor.Counter = 2;
+            return actor;
+        }, TestContext.Current.CancellationToken);
+
+        var results = db.Search<Actor>()
+            .Where(a => a.Username == "changed")
+            .ToList();
+        Assert.Single(results);
+        Assert.Equal("After", results[0].DisplayName);
+        Assert.Equal(2, results[0].Counter);
     }
 }

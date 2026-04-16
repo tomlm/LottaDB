@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Configuration;
+using System.Runtime.CompilerServices;
+
 namespace Lotta.Tests;
 
 /// <summary>
@@ -7,27 +10,28 @@ namespace Lotta.Tests;
 /// </summary>
 public class FluentConfigTests
 {
-    private static LottaDB CreateFluentDb(Action<ILottaConfiguration>? extra = null)
+    private static LottaDB CreateFluentDb(Action<ILottaConfiguration>? extra = null,
+        [CallerMemberName] string? testName = null)
     {
-        var tableClient = LottaDBFixture.CreateTableServiceClient();
-        var directory = LottaDBFixture.CreateLuceneDirectory();
-        
 
-        var options = new LottaConfiguration();
-        options.Store<BareActor>(s =>
+        return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
         {
-            s.SetKey(a => a.Username);
-            s.AddQueryable(a => a.DisplayName).NotAnalyzed();
-        });
-        options.Store<BareNote>(s =>
-        {
-            s.SetKey(n => n.NoteId);
-            s.AddQueryable(n => n.AuthorId).NotAnalyzed();
-            s.AddQueryable(n => n.Content);
-        });
-        extra?.Invoke(options);
+            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
+            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
 
-        return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
+            options.Store<BareActor>(s =>
+            {
+                s.SetKey(a => a.Username);
+                s.AddQueryable(a => a.DisplayName).NotAnalyzed();
+            });
+            options.Store<BareNote>(s =>
+            {
+                s.SetKey(n => n.NoteId);
+                s.AddQueryable(n => n.AuthorId);
+                s.AddQueryable(n => n.Content);
+            });
+            extra?.Invoke(options);
+        });
     }
 
     // === CRUD ===
@@ -152,10 +156,11 @@ public class FluentConfigTests
     public async Task Fluent_Query_PredicateOverload()
     {
         var db = CreateFluentDb();
+
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "Hello" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "bob", Content = "World" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareNote>(n => n.AuthorId == "alice").ToList();
+        var results = db.Query<BareNote>().Where(n => n.AuthorId == "alice").ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
     }
@@ -416,16 +421,17 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_CompositeKey()
     {
-        var tableClient = LottaDBFixture.CreateTableServiceClient();
-        var directory = LottaDBFixture.CreateLuceneDirectory();
 
-        var options = new LottaConfiguration();
-        options.Store<BareActor>(s =>
+        var db = new LottaDB(nameof(Fluent_CompositeKey)!, "UseDeveloperStorage=true", options =>
         {
-            s.SetKey(a => $"{a.Domain}-{a.Username}");
-        });
+            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
+            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
 
-        var db = new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
+            options.Store<BareActor>(s =>
+            {
+                s.SetKey(a => $"{a.Domain}-{a.Username}");
+            });
+        });
 
         await db.SaveAsync(new BareActor { Domain = "example.com", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 

@@ -10,6 +10,7 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <RootNamespace>TodoApp</RootNamespace>
     <IsPackable>false</IsPackable>
+    <UserSecretsId>b93accea-af2a-4c2e-8771-73a73e5f43e7</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,9 +22,9 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.3.14" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.14" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.14" />
-    <PackageReference Condition="'$(Configuration)' == 'Debug'"
-                      Include="Avalonia.Diagnostics" Version="11.3.14" />
+    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" Version="11.3.14" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="6.0.1" />
     <PackageReference Include="Spotflow.InMemory.Azure.Storage" Version="0.16.3" />
   </ItemGroup>
 

@@ -174,7 +174,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     /// (index writes, notifications) get duplicated or applied to phantom state.
     /// </summary>
     [Fact]
-    public async Task ChangeAsync_RetryAfterConflict_HandlerFiresOnceForCommittedValue()
+    public async Task ChangeAsync_Retry_FiresOnceForCommittedValue()
     {
         var db = LottaDBFixture.CreateDb();
         var ct = TestContext.Current.CancellationToken;
@@ -250,22 +250,22 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         {
             Domain = "change.test",
             Username = username,
-            DisplayName = "0"
+            Counter = 0
         }, ct);
 
         var tasks = Enumerable.Range(0, N).Select(_ => Task.Run(() =>
             db.ChangeAsync<Actor>(username, a =>
             {
-                a.DisplayName = (int.Parse(a.DisplayName) + 1).ToString();
+                a.Counter++;
                 return a;
             }, ct), ct)).ToArray();
 
         await Task.WhenAll(tasks);
 
         var final = await db.GetAsync<Actor>(username, ct);
-        Assert.Equal(N.ToString(), final!.DisplayName);
+        Assert.Equal(N, final!.Counter);
         var final2 = db.Search<Actor>(a => a.Username == final.Username).Single();
-        Assert.Equal(N.ToString(), final2!.DisplayName);
+        Assert.Equal(N, final2!.Counter);
     }
 
     /// <summary>

@@ -7,11 +7,14 @@ public class Actor
     [Key]
     public string Username { get; set; } = "";
 
-    [Queryable(QueryableMode.NotAnalyzed)]
+    [Queryable]
     public string DisplayName { get; set; } = "";
 
     public string Domain { get; set; } = "";
     public string AvatarUrl { get; set; } = "";
+
+    [Queryable]
+    public int Counter { get; set; }
 }
 
 public class Note
@@ -21,7 +24,7 @@ public class Note
 
     public DateTimeOffset Published { get; set; }
 
-    [Queryable(QueryableMode.NotAnalyzed)]
+    [Queryable]
     public string AuthorId { get; set; } = "";
 
     [Queryable]

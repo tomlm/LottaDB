@@ -1,4 +1,8 @@
 using Lucene.Net.Linq.Mapping;
+using Microsoft.Extensions.Configuration;
+using Spotflow.InMemory.Azure.Storage;
+using Spotflow.InMemory.Azure.Storage.Tables;
+using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
 
@@ -58,14 +62,15 @@ public class AdvancedConfigTests
         public string Body { get; set; } = "";
     }
 
-    private static LottaDB CreateDb(Action<ILottaConfiguration> configure)
+    private static LottaDB CreateDb(Action<ILottaConfiguration> config,
+        [CallerMemberName] string? testName = null)
     {
-        var tableClient = LottaDBFixture.CreateTableServiceClient();
-        var directory = LottaDBFixture.CreateLuceneDirectory();
-
-        var options = new LottaConfiguration();
-        configure(options);
-        return new LottaDB($"test{Guid.NewGuid():N}", tableClient, directory, options);
+        return new LottaDB(testName!, "UseDeveloperStorage=true", c =>
+        {
+            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
+            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            config?.Invoke(c);
+        });
     }
 
     // === [Tag] attribute tests ===

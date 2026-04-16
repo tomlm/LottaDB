@@ -147,9 +147,13 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_WithPredicate_DeletesMatchingObjects()
     {
         var db = LottaDBFixture.CreateDb();
+
         await db.SaveAsync(new Note { NoteId = "pred1", AuthorId = "alice", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "pred2", AuthorId = "alice", Content = "B", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "pred3", AuthorId = "bob", Content = "C", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(await db.GetAsync<Note>("pred1", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<Note>("pred2", TestContext.Current.CancellationToken));
 
         var result = await db.DeleteAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 

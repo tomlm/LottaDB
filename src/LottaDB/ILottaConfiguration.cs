@@ -1,3 +1,5 @@
+using Azure.Data.Tables;
+using LuceneDirectory = Lucene.Net.Store.Directory;
 using System.Linq.Expressions;
 
 namespace Lotta;
@@ -7,6 +9,9 @@ namespace Lotta;
 /// </summary>
 public interface ILottaConfiguration
 {
+    Func<string, TableServiceClient> CreateTableServiceClient { get; set; }
+    Func<string, LuceneDirectory> CreateLuceneDirectory { get; set; }
+
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, queryable properties, etc.</param>

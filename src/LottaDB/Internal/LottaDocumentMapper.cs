@@ -1,12 +1,10 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
-using Lucene.Net.Analysis;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Fluent;
 using Lucene.Net.Linq.Mapping;
-using Lucene.Net.Search;
 using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;
@@ -19,8 +17,6 @@ namespace Lotta.Internal;
 internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     where T : class, new()
 {
-    private const string JSON = "_json_";
-
     public LottaDocumentMapper(Version version, TypeMetadata? meta = null) : base(version)
     {
         if (meta == null) return;
@@ -48,6 +44,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
             AddKeyField(fieldMapper);
         }
+
         foreach (var propName in source.AllProperties)
         {
             if (fieldMap.ContainsKey(propName))
@@ -55,6 +52,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
             AddField(fieldMapper);
         }
+        AddField(new JsonFieldMapper<T>(version));
     }
 
     private static Expression<Func<T, object>> PropExpr(PropertyInfo prop)
@@ -68,13 +66,12 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     public override void MapFieldsToDocument(T source, Document target)
     {
         base.MapFieldsToDocument(source, target);
-        target.Add(new StoredField(JSON, JsonSerializer.Serialize(source, source.GetType())));
     }
 
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
     {
-        var json = source.Get(JSON);
+        var json = source.Get(LottaDB.JSON_FIELD);
         if (json != null)
         {
             return (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
@@ -85,7 +82,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
     public override bool IsModified(T item, Document document)
     {
-        var json1 = document.Get(JSON);
+        var json1 = document.Get(LottaDB.JSON_FIELD);
         if (String.IsNullOrEmpty(json1))
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());
