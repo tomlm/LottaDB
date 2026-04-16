@@ -289,6 +289,25 @@ public class LottaDB
     /// of its input. Throws if the object does not exist, or if retries are exhausted.
     /// </summary>
     /// <param name="key">The unique key of the object to modify.</param>
+    /// <param name="mutate">A function that receives the current object to be mutated</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
+    public Task<ObjectResult> ChangeAsync<T>(string key, Action<T> mutate, CancellationToken ct = default) where T : class, new()
+        => ChangeAsync<T>(key, entity =>
+        {
+            mutate(entity);
+            return entity;
+        }, ct);
+
+    /// <summary>
+    /// Read-modify-write with optimistic concurrency. Fetches the object by key (capturing its
+    /// ETag), applies the mutation, and commits with an <c>If-Match</c> condition. If another
+    /// writer changed the row in between, the read-modify-write is retried against the latest
+    /// state — so the mutation is guaranteed to be applied on top of the committed version.
+    /// The mutation function may therefore be invoked more than once; it must be a pure function
+    /// of its input. Throws if the object does not exist, or if retries are exhausted.
+    /// </summary>
+    /// <param name="key">The unique key of the object to modify.</param>
     /// <param name="mutate">A function that receives the current object and returns the modified version.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>

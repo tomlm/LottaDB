@@ -23,6 +23,21 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
+    public async Task ChangeAsync_ActionOverload_MutatesAndSaves()
+    {
+        var db = LottaDBFixture.CreateDb();
+
+        var actor = new Actor { Domain = "change.test", Username = "mutate-action", DisplayName = "Before" };
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+
+        await db.ChangeAsync<Actor>("mutate-action", a => a.DisplayName = "After", TestContext.Current.CancellationToken);
+
+        var loaded = await db.GetAsync<Actor>("mutate-action", TestContext.Current.CancellationToken);
+        Assert.NotNull(loaded);
+        Assert.Equal("After", loaded.DisplayName);
+    }
+
+    [Fact]
     public async Task ChangeAsync_ByObject_ExtractsKeys()
     {
         var db = LottaDBFixture.CreateDb();
@@ -86,6 +101,23 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
             Interlocked.Increment(ref callCount);
             a.DisplayName = "After";
             return a;
+        }, TestContext.Current.CancellationToken);
+
+        Assert.True(callCount >= 1);
+    }
+
+    [Fact]
+    public async Task ChangeAsync_ActionOverload_CalledAtLeastOnce()
+    {
+        var db = LottaDBFixture.CreateDb();
+        var actor = new Actor { Domain = "change.test", Username = "pure-action", DisplayName = "Before" };
+        await db.SaveAsync(actor, TestContext.Current.CancellationToken);
+
+        int callCount = 0;
+        await db.ChangeAsync<Actor>("pure-action", a =>
+        {
+            Interlocked.Increment(ref callCount);
+            a.DisplayName = "After";
         }, TestContext.Current.CancellationToken);
 
         Assert.True(callCount >= 1);
