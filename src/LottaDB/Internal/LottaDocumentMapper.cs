@@ -18,8 +18,8 @@ namespace Lotta.Internal;
 internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     where T : class, new()
 {
-    private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("O");
-    private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("O");
+    private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("yyyyMMddTHHmmssfffZ");
+    private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("yyyyMMddTHHmmssfffZ");
 
     public LottaDocumentMapper(Version version, TypeMetadata? meta = null) : base(version)
     {
@@ -38,20 +38,13 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
             var propMap = classMap.Property(PropExpr(indexed.Property));
 
-            if (indexed.Property.PropertyType == typeof(DateTime) ||
-                indexed.Property.PropertyType == typeof(DateTime?))
-            {
+            if (indexed.Property.PropertyType == typeof(DateTime) || indexed.Property.PropertyType == typeof(DateTime?))
                 propMap.ConvertWith(_dtConverter);
-            }
-
-            if (indexed.Property.PropertyType == typeof(DateTimeOffset) ||
-                indexed.Property.PropertyType == typeof(DateTimeOffset?))
-            {
+            else if (indexed.Property.PropertyType == typeof(DateTimeOffset) || indexed.Property.PropertyType == typeof(DateTimeOffset?))
                 propMap.ConvertWith(_dtoConverter);
-            }
-
-            if (IsNumericType(indexed.Property.PropertyType))
+            else if (IsNumericType(indexed.Property.PropertyType))
                 propMap.AsNumericField();
+
             if (indexed.IsNotAnalyzed)
                 propMap.NotAnalyzed();
 
