@@ -183,8 +183,11 @@ var active = db.Search<Note>()
     .Where(n => n.AuthorId == "alice")
     .ToList();
 
-// Predicate shorthand
-var results = db.Search<Note>(n => n.Content.Contains("search")).ToList();
+// FREETEXT query
+var results = db.Search<Note>("foo bar").ToList();
+
+// Lucene Query syntax
+var results = db.Search<Note>("Title:foo AND bar").ToList();
 ```
 
 ## Triggers via `On<T>`
@@ -202,7 +205,7 @@ options.On<Note>(async (note, kind, db) =>
 
 ### Materialized views via `On<T>`
 
-You can use On<T> triggers to build derived objects that stay in sync automatically:
+You can use On<T> triggers to build derived objects that stay in sync automatically, whenever the trigger runs you can create/update/delete other objects.
 
 ```csharp
 public class NoteView
