@@ -145,6 +145,71 @@ public class BareNote
  }
 ```
 
+
+## Lotta Operations
+
+| Operation            | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| **SaveAsync<T>()**   | Save T instance using Upsert semantics            |
+| **ChangeAsync<T>()** | Apply changes to T instance via lamda             |
+| **DeleteAsync<T>()** | Delete T instance object                          |
+| **QueryAsync<T>()**  | Query against table storage for objects of type T |
+| **SearchAsync<T>()** | Search against lucene for objects of type T       |
+
+### SaveAsync<T>() 
+
+Save a POCO object into a Lotta DB using it's Key
+
+```csharp
+await db.SaveAsync<Actor>(actor);
+```
+
+### ChangeAsync<T>()
+
+Apply change to T with ETag concurrency. It will fetch the object, call the lamda to change and attempt to save it with ETag concurrency. If the object fails, it will loop until it succeeds to mutate it.
+
+```csharp
+await db.ChangeAsync<Actor>(key, actor =>
+{
+    actor.DisplayName = "Alice Updated";
+    return actor;
+});
+```
+
+### DeleteAsync<T>()
+
+Delete an object from a Lotta DB.
+
+```csharp
+await db.DeleteAsync<Note>(key);
+await db.DeleteAsync<Note>(note);
+```
+
+### QueryAsync<T>()
+Search table storage using linq
+> NOTE: only filter passed to QueryAsync is processed server side by table storage and it needs to be on [Queryable] properties. 
+> All other linq operations are processed client side after fetching the data from table storage.
+
+```csharp
+foreach(var actor in db.QueryAsync<Actor>(actor => actor.Age > 50)
+{
+    ...
+}
+```
+
+### SearchAsync<T>()
+Search lucene index using linq search syntax. 
+> NOTE: only [Queryable] properties are searchable in lucene and string properties support full text search with Contains.
+
+```csharp
+foreach(var actor in db.SearchAsync<Actor>("name:bob*")
+                       .Where(actor => actor.Age > 50)
+{
+    ...
+}
+```
+
+
 ## LINQ in Lotta
 
 Lotta stores 2 representations of every object, one in **table storage** (for the truth), and one a **Lucene** index (for fast access). **Query()** gives you a Linq query over table storage and **.Search()** uses the **Linq To Lucene** library to query the search engine with linq expressions
@@ -254,69 +319,6 @@ var result = await db.SaveAsync(note);
 if (result.Errors.Count > 0)
 {
     // log handler failures
-}
-```
-
-## Lotta Operations
-
-| Operation            | Description                                       |
-| -------------------- | ------------------------------------------------- |
-| **SaveAsync<T>()**   | Save T instance using Upsert semantics            |
-| **ChangeAsync<T>()** | Apply changes to T instance via lamda             |
-| **DeleteAsync<T>()** | Delete T instance object                          |
-| **QueryAsync<T>()**  | Query against table storage for objects of type T |
-| **SearchAsync<T>()** | Search against lucene for objects of type T       |
-
-### SaveAsync<T>() 
-
-Save a POCO object into a Lotta DB using it's Key
-
-```csharp
-await db.SaveAsync<Actor>(actor);
-```
-
-### ChangeAsync<T>()
-
-Apply change to T with ETag concurrency. It will fetch the object, call the lamda to change and attempt to save it with ETag concurrency. If the object fails, it will loop until it succeeds to mutate it.
-
-```csharp
-await db.ChangeAsync<Actor>(key, actor =>
-{
-    actor.DisplayName = "Alice Updated";
-    return actor;
-});
-```
-
-### DeleteAsync<T>()
-
-Delete an object from a Lotta DB.
-
-```csharp
-await db.DeleteAsync<Note>(key);
-await db.DeleteAsync<Note>(note);
-```
-
-### QueryAsync<T>()
-Search table storage using linq
-> NOTE: only filter passed to QueryAsync is processed server side by table storage and it needs to be on [Queryable] properties. 
-> All other linq operations are processed client side after fetching the data from table storage.
-
-```csharp
-foreach(var actor in db.QueryAsync<Actor>(actor => actor.Age > 50)
-{
-    ...
-}
-```
-
-### SearchAsync<T>()
-Search lucene index using linq search syntax. 
-> NOTE: only [Queryable] properties are searchable in lucene and string properties support full text search with Contains.
-
-```csharp
-foreach(var actor in db.SearchAsync<Actor>("name:bob*")
-                       .Where(actor => actor.Age > 50)
-{
-    ...
 }
 ```
 
