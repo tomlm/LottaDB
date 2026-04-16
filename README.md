@@ -10,7 +10,7 @@
 
 ## Overview
 
-**LottaDB** gives you a document database built on **Azure Table Storage** with automatic full-text search via **Lucene Search Engine**. Each LottaDB instance is a single database. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying using full typed Linq expressions.
+**LottaDB** gives you a document database built on **Azure Table Storage** with automatic full-text search via **Lucene Search Engine**. Each LottaDB instance is a single table wih backing lucene catalog. Objects are stored with full POCO fidelity, while selected properties are promoted into Table Storage/Lucene for efficient querying using full typed Linq expressions.
 
 Reactive handlers (`On<T>`) let you build materialized views, cascading updates, and side effects that run inline after each write.
 
@@ -36,10 +36,10 @@ dotnet add package LottaDB
 ## Features
 
 - **Plain POCOs** -- no base classes, no interfaces. Just `[Key]` and `[Queryable]`.
-- **Dual-backend querying** -- `Query<T>()` hits Table Storage (server-side filters), `Search<T>()` hits Lucene (full-text search). Both return `IQueryable<T>` with full LINQ support.
+- **Dual-backend querying** -- `Query<T>()` hits Table Storage (server-side filters), `Search<T>()` hits Lucene (full-text search)
 - **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
 - **Polymorphic queries** -- `Query<BaseClass>()/Search<BaseClass>()` returns all derived types, correctly deserialized.
-- **Reactive handlers** -- `On<T>` handlers run inline after saves/deletes with full DB access. Build materialized views with plain C#.
+- **Reactive handlers** -- `On<T>` handlers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
 - **Fluent or attribute configuration** -- annotate your models, or configure bare POCOs entirely via fluent API.
 - **Per-tenant scaling** -- one LottaDB instance per tenant. All data bounded by tenant size.
 
