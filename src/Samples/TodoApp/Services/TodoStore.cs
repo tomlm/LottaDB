@@ -1,8 +1,10 @@
 using Lotta;
+using Lucene.Net.Linq;
 using Lucene.Net.Store;
 using Microsoft.Extensions.Configuration;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
+using System.Diagnostics;
 using TodoApp.Models;
 
 namespace TodoApp.Services;
@@ -21,13 +23,13 @@ public class TodoStore
 
     public TodoStore(IConfiguration configuration)
     {
-        var connectionString = configuration.GetValue<string>("ConnectionString");
-        ArgumentNullException.ThrowIfNull(connectionString, "ConnectionString");
+        var connectionString = configuration.GetConnectionString("TableStorage");
 
-        _db = new LottaDB("todos", connectionString, lotta =>
+        _db = new LottaDB("todos", connectionString!, lotta =>
         {
             lotta.Store<TodoItem>();
         });
+        _db.RebuildIndex().Wait();
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>
@@ -55,26 +57,33 @@ public class TodoStore
     /// </summary>
     public IReadOnlyList<TodoItem> Search(string? query, TodoFilter filter)
     {
-        var q = _db.Search<TodoItem>(query);
-
-        q = filter switch
+        try
         {
-            TodoFilter.Open => q.Where(t => t.IsDone == false),
-            TodoFilter.Done => q.Where(t => t.IsDone == true),
-            _ => q
-        };
+            var q = _db.Search<TodoItem>(query);
 
-        //if (!string.IsNullOrWhiteSpace(query))
-        //{
-        //    var term = query.Trim().ToLowerInvariant();
-        //    // Analyzed fields -> token/substring match via Lucene.Net.Linq's Contains translation.
-        //    q = q.Where(t => t.Title.Contains(term) || t.Notes.Contains(term));
-        //}
+            q = filter switch
+            {
+                TodoFilter.Open => q.Where(t => t.IsDone == false),
+                TodoFilter.Done => q.Where(t => t.IsDone == true),
+                _ => q
+            };
 
-        return q.ToList()
-            .OrderBy(t => t.IsDone)
-            .ThenByDescending(t => t.Created)
-            .ToList();
+            //if (!string.IsNullOrWhiteSpace(query))
+            //{
+            //    var term = query.Trim().ToLowerInvariant();
+            //    // Analyzed fields -> token/substring match via Lucene.Net.Linq's Contains translation.
+            //    q = q.Where(t => t.Title.Contains(term) || t.Notes.Contains(term));
+            //}
+
+            return q.OrderBy(t => t.IsDone)
+                .ThenByDescending(t => t.Created)
+                .ToList();
+        }
+        catch (Exception err)
+        {
+            Debug.WriteLine(err.Message);
+            return Array.Empty<TodoItem>();
+        }
     }
 }
 

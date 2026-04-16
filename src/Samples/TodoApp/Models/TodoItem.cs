@@ -19,9 +19,12 @@ public class TodoItem
     [Queryable]
     public string Notes { get; set; } = "";
 
-    [Queryable(QueryableMode.NotAnalyzed)]
+    [Queryable]
     public bool IsDone { get; set; }
 
+    [Queryable]
     public DateTimeOffset Created { get; set; } = DateTimeOffset.UtcNow;
+    
+    [Queryable]
     public DateTimeOffset? CompletedAt { get; set; }
 }

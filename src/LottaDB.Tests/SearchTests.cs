@@ -433,4 +433,113 @@ public class SearchTests
 
         Assert.Equal(3, db.Search<Actor>().Take(3).ToList().Count);
     }
+
+    // =====================================================================
+    // Regression: mirrors the TodoApp sample — free-text search over Title/Notes
+    // combined with an OrderBy on a NotAnalyzed bool field.
+    // =====================================================================
+
+    public class TodoLike
+    {
+        [Key(Mode = KeyMode.Auto)]
+        public string Id { get; set; } = "";
+
+        [Queryable]
+        public string Title { get; set; } = "";
+
+        [Queryable]
+        public string Notes { get; set; } = "";
+
+        [Queryable]
+        public bool IsDone { get; set; }
+
+        [Queryable]
+        public DateTimeOffset Created { get; set; } = DateTimeOffset.UtcNow;
+    }
+
+    [Fact]
+    public async Task TodoApp_FreeTextSearch_MatchesTitleToken()
+    {
+        var db = LottaDBFixture.CreateDb(opts => opts.Store<TodoLike>());
+        await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
+        await db.SaveAsync(new TodoLike { Title = "Write report", Notes = "quarterly numbers" });
+
+        var results = db.Search<TodoLike>("groceries")
+            .OrderBy(t => t.IsDone)
+            .ThenByDescending(t => t.Created)
+            .ToList();
+
+        Assert.Single(results);
+        Assert.Equal("Buy groceries", results[0].Title);
+    }
+
+    [Fact]
+    public async Task TodoApp_FreeTextSearch_MatchesNotesToken()
+    {
+        var db = LottaDBFixture.CreateDb(opts => opts.Store<TodoLike>());
+        await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
+        await db.SaveAsync(new TodoLike { Title = "Write report", Notes = "quarterly numbers" });
+
+        var results = db.Search<TodoLike>("milk")
+            .OrderBy(t => t.IsDone)
+            .ThenByDescending(t => t.Created)
+            .ToList();
+
+        Assert.Single(results);
+        Assert.Equal("Buy groceries", results[0].Title);
+    }
+
+    [Fact]
+    public async Task TodoApp_FreeTextSearch_AfterRebuildIndexOnFreshInstance()
+    {
+        // Reproduces the TodoApp "reopen" scenario: prior run wrote data to table storage;
+        // second run constructs a fresh LottaDB (no mappers registered yet) and calls
+        // RebuildIndex before any typed SaveAsync. Then a free-text search is issued.
+        var provider = new Spotflow.InMemory.Azure.Storage.InMemoryStorageProvider();
+        var account = provider.AddAccount("shared");
+        Azure.Data.Tables.TableServiceClient CreateTable(string _) =>
+            Spotflow.InMemory.Azure.Storage.Tables.InMemoryTableServiceClient.FromAccount(account);
+
+        var directory = new Lucene.Net.Store.RAMDirectory();
+        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        Lucene.Net.Store.Directory CreateDir(string _) => directory;
+
+        // First run: save a todo.
+        var db1 = new Lotta.LottaDB("shared", opts =>
+        {
+            opts.CreateTableServiceClient = CreateTable;
+            opts.CreateLuceneDirectory = CreateDir;
+            opts.Store<TodoLike>();
+        });
+        await db1.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
+
+        // Second run: fresh LottaDB (no mapper cache), same storage. TodoApp calls this.
+        var db2 = new Lotta.LottaDB("shared", opts =>
+        {
+            opts.CreateTableServiceClient = CreateTable;
+            opts.CreateLuceneDirectory = CreateDir;
+            opts.Store<TodoLike>();
+        });
+        await db2.RebuildIndex();
+
+        var results = db2.Search<TodoLike>("groceries").ToList();
+        Assert.Single(results);
+    }
+
+    [Fact]
+    public async Task TodoApp_FreeTextSearch_WithBoolFilter()
+    {
+        var db = LottaDBFixture.CreateDb(opts => opts.Store<TodoLike>());
+        await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk", IsDone = false });
+        await db.SaveAsync(new TodoLike { Title = "Buy flowers", Notes = "for mom", IsDone = true });
+
+        var results = db.Search<TodoLike>("buy")
+            .Where(t => t.IsDone == false)
+            .OrderBy(t => t.IsDone)
+            .ThenByDescending(t => t.Created)
+            .ToList();
+
+        Assert.Single(results);
+        Assert.Equal("Buy groceries", results[0].Title);
+    }
 }

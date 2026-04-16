@@ -73,7 +73,27 @@ public class LottaDB
         };
 
         InitializeMetadata();
+        InitializeMappers();
         InitializeHandlers();
+    }
+
+    // Opens and immediately disposes a session per registered type so each mapper's
+    // PerFieldAnalyzer (e.g. _content_ → EnglishAnalyzer) is merged into the shared
+    // IndexWriter analyzer. Without this, RebuildIndex — which uses session<object>
+    // and dispatches to per-type mappers through the document registry — would index
+    // fields with the default KeywordAnalyzer because the registry's on-demand mappers
+    // never get merged back into the provider's analyzer.
+    private void InitializeMappers()
+    {
+        var method = typeof(LottaDB).GetMethod(nameof(WarmUpMapper),
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        foreach (var type in _metadata.Keys)
+            method.MakeGenericMethod(type).Invoke(this, null);
+    }
+
+    private void WarmUpMapper<T>() where T : class, new()
+    {
+        using var _ = _lucene.OpenSession<T>(GetMapper<T>());
     }
 
     public LottaDB(string name, Action<LottaConfiguration>? options = null)
