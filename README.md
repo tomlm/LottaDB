@@ -169,11 +169,7 @@ await db.SaveAsync<Actor>(actor);
 Apply change to T with ETag concurrency. It will fetch the object, call the lamda to change and attempt to save it with ETag concurrency. If the object fails, it will loop until it succeeds to mutate it.
 
 ```csharp
-await db.ChangeAsync<Actor>(key, actor =>
-{
-    actor.DisplayName = "Alice Updated";
-    return actor;
-});
+await db.ChangeAsync<Actor>(key, actor => actor.Movies++);
 ```
 
 ### DeleteAsync<T>()
