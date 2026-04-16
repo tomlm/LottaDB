@@ -65,6 +65,8 @@ public class AdvancedConfigTests
     private static LottaDB CreateDb(Action<ILottaConfiguration> config,
         [CallerMemberName] string? testName = null)
     {
+        testName = String.Join(String.Empty, testName.Where(char.IsLetterOrDigit).Take(60));
+
         return new LottaDB(testName!, "UseDeveloperStorage=true", c =>
         {
             c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;

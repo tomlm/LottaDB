@@ -13,6 +13,7 @@ public class FluentConfigTests
     private static LottaDB CreateFluentDb(Action<ILottaConfiguration>? extra = null,
         [CallerMemberName] string? testName = null)
     {
+        testName = String.Join(String.Empty, testName.Where(char.IsLetterOrDigit).Take(60));
 
         return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
         {
@@ -422,7 +423,7 @@ public class FluentConfigTests
     public async Task Fluent_CompositeKey()
     {
 
-        var db = new LottaDB(nameof(Fluent_CompositeKey)!, "UseDeveloperStorage=true", options =>
+        var db = new LottaDB("FluentCompositeKey", "UseDeveloperStorage=true", options =>
         {
             options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
             options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;

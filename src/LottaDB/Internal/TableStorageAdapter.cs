@@ -25,8 +25,8 @@ internal class TableStorageAdapter
 
     private TableClient GetTable(string tableName)
     {
-        tableName = NormalizeName(tableName);
-
+        if (tableName.Any(ch => !Char.IsAsciiLetterOrDigit(ch)) || tableName.Length > 62)
+            throw new ArgumentException($"{tableName} is not a valid table name");
         if (!_tables.TryGetValue(tableName, out var client))
         {
             client = _serviceClient.GetTableClient(tableName);
@@ -35,11 +35,6 @@ internal class TableStorageAdapter
             _tables[tableName] = client;
         }
         return client;
-    }
-
-    internal static string NormalizeName(string name)
-    {
-        return string.Join("", name.Where(char.IsLetterOrDigit).Take(60));
     }
 
     public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta)

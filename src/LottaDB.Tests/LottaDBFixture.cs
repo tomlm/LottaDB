@@ -39,6 +39,7 @@ public class LottaDBFixture : IDisposable
     public static LottaDB CreateDb(Action<ILottaConfiguration>? configure = null,
         [CallerMemberName] string? testName = null)
     {
+        testName = string.Join("", testName.Where(char.IsLetterOrDigit).Take(60));
         return new LottaDB(testName!, null, options =>
         {
             options.CreateTableServiceClient = CreateMockTableServiceClient;
