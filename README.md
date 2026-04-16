@@ -15,8 +15,8 @@ Reactive handlers (`On<T>`) let you build materialized views, cascading updates,
 ## Why LottaDB?
 
 - **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
-- **A lotta LINQ.** `Query<T>()` and `Search<T>()` both return `IQueryable<T>`. Same `.Where()` expressions, two backends.
-- **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives. Queryable properties are promoted *alongside* the JSON, not instead of it.
+- **A lotta LINQ.** `Query<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
+- **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives. 
 - **A lotta views.** `On<T>` triggers build materialized views with plain C#. No event buses, no eventual consistency -- just inline code.
 - **A lotta tenants.** One instance per tenant. Natural isolation, simple backup, no noisy neighbors.
 - **A lotta nothing to operate.** Table Storage is serverless. Lucene runs in-process. No clusters, no connection pools, no ops team required.
@@ -33,13 +33,13 @@ dotnet add package LottaDB
 
 ## Features
 
-- **Plain POCOs** -- no base classes, no interfaces. Just `[Key]` and `[Queryable]`.
-- **Dual-backend querying** -- `Query<T>()` hits Table Storage (server-side filters), `Search<T>()` hits Lucene (full-text search)
+- **Plain POCOs** -- no base classes, no interfaces. Have an object? Store an object.
 - **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
-- **Polymorphic queries** -- `Query<BaseClass>()/Search<BaseClass>()` returns all derived types, correctly deserialized.
-- **Reactive handlers** -- `On<T>` handlers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
-- **Fluent or attribute configuration** -- annotate your models, or configure bare POCOs entirely via fluent API.
-- **Per-tenant scaling** -- one LottaDB instance per tenant. All data bounded by tenant size.
+- **LINQ** -- Rich Linq against typed objects makes it so easy.
+- **Polymorphic queries** -- `Query<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
+- **Triggers** -- `On<T>` triggers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
+- **Fluent or attribute configuration** -- annotate your models, or configure foreign POCOs entirely via fluent API.
+- **Per-tenant scaling** -- one LottaDB instance per tenant. 
 
 ## Quick Example
 
