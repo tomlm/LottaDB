@@ -297,6 +297,11 @@ public class FluentConfigTests
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
+        
+        results = db.Search<BareNote>("lucene AND alice")
+            .ToList();
+        Assert.Single(results);
+        Assert.Equal("n1", results[0].NoteId);
     }
 
     // === ChangeAsync ===

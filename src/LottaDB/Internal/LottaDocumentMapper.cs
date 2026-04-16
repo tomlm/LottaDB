@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
+using Lucene.Net.Analysis;
+using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Fluent;
@@ -20,8 +22,10 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 {
     private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("yyyyMMddTHHmmssfffZ");
     private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("yyyyMMddTHHmmssfffZ");
+    private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
 
-    public LottaDocumentMapper(Version version, TypeMetadata? meta = null) : base(version)
+    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta = null)
+        : base(version, analyzer)
     {
         if (meta == null) return;
         var classMap = new ClassMap<T>(version);
@@ -44,9 +48,16 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
                 propMap.ConvertWith(_dtoConverter);
             else if (IsNumericType(indexed.Property.PropertyType))
                 propMap.AsNumericField();
-
-            if (indexed.IsNotAnalyzed)
-                propMap.NotAnalyzed();
+            else
+            {
+                if (indexed.IsNotAnalyzed)
+                    propMap.NotAnalyzed();
+                else
+                    // Per-property fields always use StandardAnalyzer so LINQ .Contains/.StartsWith/.EndsWith
+                    // produce wildcard terms that match the indexed tokens verbatim. The configured Analyzer
+                    // (which may stem) applies only to the _content_ free-text field.
+                    propMap.AnalyzeWith(_propertyAnalyzer).Analyzed();
+            }
 
             propMap.NotStored(); // we don't store any of the propertiies as we have the _json_
         }
@@ -66,7 +77,12 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
             AddField(fieldMapper);
         }
-        AddField(new JsonFieldMapper<T>(version));
+        AddField(new JsonFieldMapper<T>(version, analyzer));
+
+        var contentProps = meta.IndexedProperties
+            .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
+            .Select(p => p.Property);
+        AddField(new ContentFieldMapper<T>(version, analyzer, contentProps));
     }
 
     private static Expression<Func<T, object>> PropExpr(PropertyInfo prop)

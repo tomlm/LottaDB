@@ -19,10 +19,10 @@ namespace Lotta;
 public class LottaDB
 {
     private readonly string _name;
-    private readonly LottaConfiguration _options;
+    private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private readonly LuceneDirectory _directory;
-    private readonly Lucene.Net.Linq.LuceneDataProvider _lucene;
+    private readonly LuceneDataProvider _lucene;
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, object> _mappers = new();
     private readonly ConcurrentDictionary<string, string> _keyTracker = new();
@@ -34,6 +34,7 @@ public class LottaDB
     private static readonly AsyncLocal<List<ObjectChange>?> _chainChanges = new();
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
     internal const string JSON_FIELD = "_json_";
+    internal const string CONTENT_FIELD = "_content_";
 
     private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration>? options)
     {
@@ -46,16 +47,16 @@ public class LottaDB
     /// Create a LottaDB database instance.
     /// </summary>
     /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="options">Configuration (registered types, On&lt;T&gt; handlers, storage factories).</param>
-    public LottaDB(string name, LottaConfiguration options)
+    /// <param name="config">Configuration (registered types, On&lt;T&gt; handlers, storage factories).</param>
+    public LottaDB(string name, LottaConfiguration config)
     {
         _name = name;
-        _options = options;
-        _tableAdapter = new TableStorageAdapter(options.CreateTableServiceClient(name));
-        _directory = options.CreateLuceneDirectory(name);
+        _config = config;
+        _tableAdapter = new TableStorageAdapter(config.CreateTableServiceClient(name));
+        _directory = config.CreateLuceneDirectory(name);
 
         using (var writer = new IndexWriter(_directory,
-            new IndexWriterConfig(LuceneVersion.LUCENE_48, new StandardAnalyzer(LuceneVersion.LUCENE_48))
+            new IndexWriterConfig(LuceneVersion.LUCENE_48, config.Analyzer)
             {
                 OpenMode = OpenMode.CREATE_OR_APPEND,
                 UseCompoundFile = true,
@@ -68,7 +69,7 @@ public class LottaDB
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
             _metadata.TryGetValue(type, out var meta);
-            return Activator.CreateInstance(mapperType, version, meta)!;
+            return Activator.CreateInstance(mapperType, version, _config.Analyzer, meta)!;
         };
 
         InitializeMetadata();
@@ -88,7 +89,7 @@ public class LottaDB
 
     private void InitializeMetadata()
     {
-        foreach (var (type, configObj) in _options.StorageConfigurations)
+        foreach (var (type, configObj) in _config.StorageConfigurations)
         {
             var m = typeof(TypeMetadata).GetMethod(nameof(TypeMetadata.Build))!.MakeGenericMethod(type);
             _metadata[type] = (TypeMetadata)m.Invoke(null, new[] { configObj })!;
@@ -97,7 +98,7 @@ public class LottaDB
 
     private void InitializeHandlers()
     {
-        foreach (var reg in _options.OnRegistrations)
+        foreach (var reg in _config.OnRegistrations)
         {
             var list = _handlers.GetOrAdd(reg.ObjectType, _ => new List<object>());
             list.Add(reg.Handler);
@@ -123,7 +124,7 @@ public class LottaDB
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             _metadata.TryGetValue(typeof(T), out var meta);
-            return new LottaDocumentMapper<T>(Version.LUCENE_48, meta);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, _config.Analyzer, meta);
         });
     }
 
@@ -365,8 +366,7 @@ public class LottaDB
         var mapper = GetMapper<T>();
         if (!String.IsNullOrEmpty(query))
         {
-            //var parser = _lucene.CreateQueryParser<T>(LottaDB.JSON_FIELD, mapper);
-            var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, LottaDB.JSON_FIELD, mapper);
+            var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, LottaDB.CONTENT_FIELD, mapper);
             return _lucene.AsQueryable<T>(mapper)
                 .Where(parser.Parse(query));
         }
@@ -408,7 +408,7 @@ public class LottaDB
             session.DeleteAll();
             await foreach (var item in _tableAdapter.Query(_name).ToAsyncEnumerable())
             {
-                session.Add(Lucene.Net.Linq.KeyConstraint.Unique, item);
+                session.Add(KeyConstraint.Unique, item);
             }
         }
     }
