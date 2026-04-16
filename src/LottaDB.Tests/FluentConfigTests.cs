@@ -17,6 +17,7 @@ public class FluentConfigTests
 
         return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
         {
+            // override table storage with mock ram table storage/RamDirectory
             options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
             options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
 
