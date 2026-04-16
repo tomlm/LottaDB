@@ -362,15 +362,15 @@ public class LottaDB
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
         GetMeta<T>();
+        var mapper = GetMapper<T>();
         if (!String.IsNullOrEmpty(query))
         {
-            var mapper = GetMapper<T>();
             //var parser = _lucene.CreateQueryParser<T>(LottaDB.JSON_FIELD, mapper);
             var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, LottaDB.JSON_FIELD, mapper);
             return _lucene.AsQueryable<T>(mapper)
                 .Where(parser.Parse(query));
         }
-        return _lucene.AsQueryable<T>(GetMapper<T>());
+        return _lucene.AsQueryable<T>(mapper);
     }
 
     /// <summary>Search the Lucene index with a predicate filter.</summary>

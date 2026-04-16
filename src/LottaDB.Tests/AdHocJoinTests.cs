@@ -65,7 +65,7 @@ public class AdHocJoinTests
 
         // SearchAsync with query parameter (basic test — full Lucene query support depends on indexer)
         var filtered = db.Search<Actor>("DisplayName:Alice").ToList();
-        Assert.Equal(1, filtered.Count);
+        Assert.Single(filtered);
         Assert.Equal("Alice", filtered[0].DisplayName);
     }
 
@@ -83,7 +83,7 @@ public class AdHocJoinTests
 
         // SearchAsync with query parameter (basic test — full Lucene query support depends on indexer)
         var filtered = db.Search<Actor>("Alice").ToList();
-        Assert.Equal(1, filtered.Count);
+        Assert.Single(filtered);
         Assert.Equal("Alice", filtered[0].DisplayName);
     }
 }

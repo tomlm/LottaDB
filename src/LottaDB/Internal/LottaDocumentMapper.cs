@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
@@ -17,6 +18,9 @@ namespace Lotta.Internal;
 internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     where T : class, new()
 {
+    private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("O");
+    private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("O");
+
     public LottaDocumentMapper(Version version, TypeMetadata? meta = null) : base(version)
     {
         if (meta == null) return;
@@ -33,8 +37,25 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
                 continue;
 
             var propMap = classMap.Property(PropExpr(indexed.Property));
+
+            if (indexed.Property.PropertyType == typeof(DateTime) ||
+                indexed.Property.PropertyType == typeof(DateTime?))
+            {
+                propMap.ConvertWith(_dtConverter);
+            }
+
+            if (indexed.Property.PropertyType == typeof(DateTimeOffset) ||
+                indexed.Property.PropertyType == typeof(DateTimeOffset?))
+            {
+                propMap.ConvertWith(_dtoConverter);
+            }
+
+            if (IsNumericType(indexed.Property.PropertyType))
+                propMap.AsNumericField();
             if (indexed.IsNotAnalyzed)
                 propMap.NotAnalyzed();
+
+            propMap.NotStored(); // we don't store any of the propertiies as we have the _json_
         }
 
         // Build the mapper via ClassMap, then extract its fields into ourselves
@@ -87,5 +108,19 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());
         return json1 != json2;
+    }
+
+    static bool IsNumericType(Type type)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+
+        return Type.GetTypeCode(type) switch
+        {
+            TypeCode.Int32 => true,
+            TypeCode.Int64 => true,
+            TypeCode.Double => true,
+            TypeCode.Single => true,
+            _ => false
+        };
     }
 }

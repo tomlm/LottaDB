@@ -20,8 +20,7 @@ public class QueryTests
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var aliceNotes = db.Query<Note>()
-            .Where(n => n.AuthorId == "alice")
+        var aliceNotes = db.Query<Note>(n => n.AuthorId == "alice")
             .ToList();
 
         Assert.Single(aliceNotes);
@@ -70,8 +69,8 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alex", DisplayName = "Alice", AvatarUrl = "" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "https://example.com/bob.png" }, TestContext.Current.CancellationToken);
 
-        var matches = db.Query<Actor>()
-            .Where(a => a.DisplayName == "Alice" && a.AvatarUrl != "")
+        var matches = db.Query<Actor>(a => a.DisplayName == "Alice")
+            .Where(a => a.AvatarUrl != "")
             .ToList();
 
         Assert.Single(matches);
@@ -86,13 +85,92 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", DisplayName = "Carol" }, TestContext.Current.CancellationToken);
 
-        var matches = db.Query<Actor>()
-            .Where(a => a.DisplayName == "Alice" || a.DisplayName == "Bob")
+        var matches = db.Query<Actor>(a => a.DisplayName == "Alice" || a.DisplayName == "Bob")
             .OrderBy(a => a.Username)
             .ToList();
 
         Assert.Equal(2, matches.Count);
         Assert.Equal("alice", matches[0].Username);
         Assert.Equal("bob", matches[1].Username);
+    }
+
+    [Fact]
+    public async Task QueryAsync_FindsByNumericComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", Counter = 5 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", Counter = 10 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", Counter = 15 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Query<Actor>(a => a.Counter == 10)
+            .ToList();
+        Assert.Single(equalsResults);
+        Assert.Equal("bob", equalsResults[0].Username);
+
+        var lessThanResults = db.Query<Actor>(a => a.Counter < 10)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Query<Actor>(a => a.Counter > 10)
+            .ToList();
+        Assert.Single(greaterThanResults);
+        Assert.Equal("carol", greaterThanResults[0].Username);
+    }
+
+    [Fact]
+    public async Task QueryAsync_FindsByDateTimeComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        var created1 = new DateTime(2024, 1, 1, 8, 0, 0, DateTimeKind.Utc);
+        var created2 = new DateTime(2024, 1, 2, 8, 0, 0, DateTimeKind.Utc);
+        var created3 = new DateTime(2024, 1, 3, 8, 0, 0, DateTimeKind.Utc);
+
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", CreatedAt = created1 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", CreatedAt = created2 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", CreatedAt = created3 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Query<Actor>(a => a.CreatedAt == created2)
+            .ToList();
+        Assert.Single(equalsResults);
+        Assert.Equal("bob", equalsResults[0].Username);
+
+        var lessThanResults = db.Query<Actor>(a => a.CreatedAt < created2)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Query<Actor>(a => a.CreatedAt > created2)
+            .ToList();
+        Assert.Single(greaterThanResults);
+        Assert.Equal("carol", greaterThanResults[0].Username);
+    }
+
+    [Fact]
+    public async Task QueryAsync_FindsByDateTimeOffsetComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        var seen1 = new DateTimeOffset(2024, 2, 1, 8, 0, 0, TimeSpan.Zero);
+        var seen2 = new DateTimeOffset(2024, 2, 2, 8, 0, 0, TimeSpan.Zero);
+        var seen3 = new DateTimeOffset(2024, 2, 3, 8, 0, 0, TimeSpan.Zero);
+
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", LastSeenAt = seen1 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", LastSeenAt = seen2 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", LastSeenAt = seen3 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Query<Actor>(a => a.LastSeenAt == seen2)
+            .ToList();
+        Assert.Single(equalsResults);
+        Assert.Equal("bob", equalsResults[0].Username);
+
+        var lessThanResults = db.Query<Actor>(a => a.LastSeenAt < seen2)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Query<Actor>(a => a.LastSeenAt > seen2)
+            .ToList();
+        Assert.Single(greaterThanResults);
+        Assert.Equal("carol", greaterThanResults[0].Username);
     }
 }

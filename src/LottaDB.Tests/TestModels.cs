@@ -15,6 +15,12 @@ public class Actor
 
     [Queryable]
     public int Counter { get; set; }
+
+    [Queryable]
+    public DateTime CreatedAt { get; set; }
+
+    [Queryable]
+    public DateTimeOffset LastSeenAt { get; set; }
 }
 
 public class Note

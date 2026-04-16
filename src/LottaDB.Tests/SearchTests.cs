@@ -56,6 +56,68 @@ public class SearchTests
     }
 
     [Fact]
+    public async Task SearchAsync_FindsByDateTimeComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        var created1 = new DateTime(2024, 1, 1, 8, 0, 0, DateTimeKind.Utc);
+        var created2 = new DateTime(2024, 1, 2, 8, 0, 0, DateTimeKind.Utc);
+        var created3 = new DateTime(2024, 1, 3, 8, 0, 0, DateTimeKind.Utc);
+
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice", CreatedAt = created1 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob", CreatedAt = created2 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "carol", DisplayName = "Carol", CreatedAt = created3 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Search<Actor>()
+            .Where(a => a.CreatedAt == created2)
+            .ToList();
+        Assert.Single(equalsResults);
+        Assert.Equal("bob", equalsResults[0].Username);
+
+        var lessThanResults = db.Search<Actor>()
+            .Where(a => a.CreatedAt < created2)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Search<Actor>()
+            .Where(a => a.CreatedAt > created2)
+            .ToList();
+        Assert.Single(greaterThanResults);
+        Assert.Equal("carol", greaterThanResults[0].Username);
+    }
+
+    [Fact]
+    public async Task SearchAsync_FindsByDateTimeOffsetComparisons()
+    {
+        var db = LottaDBFixture.CreateDb();
+        var seen1 = new DateTimeOffset(2024, 2, 1, 8, 0, 0, TimeSpan.Zero);
+        var seen2 = new DateTimeOffset(2024, 2, 2, 8, 0, 0, TimeSpan.Zero);
+        var seen3 = new DateTimeOffset(2024, 2, 3, 8, 0, 0, TimeSpan.Zero);
+
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "alice", DisplayName = "Alice", LastSeenAt = seen1 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "bob", DisplayName = "Bob", LastSeenAt = seen2 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "search.test", Username = "carol", DisplayName = "Carol", LastSeenAt = seen3 }, TestContext.Current.CancellationToken);
+
+        var equalsResults = db.Search<Actor>()
+            .Where(a => a.LastSeenAt == seen2)
+            .ToList();
+        Assert.Single(equalsResults);
+        Assert.Equal("bob", equalsResults[0].Username);
+
+        var lessThanResults = db.Search<Actor>()
+            .Where(a => a.LastSeenAt < seen2)
+            .ToList();
+        Assert.Single(lessThanResults);
+        Assert.Equal("alice", lessThanResults[0].Username);
+
+        var greaterThanResults = db.Search<Actor>()
+            .Where(a => a.LastSeenAt > seen2)
+            .ToList();
+        Assert.Single(greaterThanResults);
+        Assert.Equal("carol", greaterThanResults[0].Username);
+    }
+
+    [Fact]
     public async Task SearchAsync_FilterByContent()
     {
         var db = LottaDBFixture.CreateDb();
