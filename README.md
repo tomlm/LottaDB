@@ -2,7 +2,7 @@
 
 # LottaDB
 
-**LottaDB**  is a .NET library that stores **POCO** => **Table Storage** and **Lucene** catalogs with all of the goodness of **LINQ**.
+**LottaDB**  is a .NET library that makes it easy to story any **POCO** in **Azure Table Storage** with full **Lucene** search, all with the goodness of **LINQ**.
 * One line to save
 * One line to search
 
