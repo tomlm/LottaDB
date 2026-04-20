@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
@@ -15,24 +14,23 @@ public class FluentConfigTests
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
+        return new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
         {
             // override table storage with mock ram table storage/RamDirectory
-            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            config.ConfigureTestStorage();
 
-            options.Store<BareActor>(s =>
+            config.Store<BareActor>(s =>
             {
                 s.SetKey(a => a.Username);
                 s.AddQueryable(a => a.DisplayName).NotAnalyzed();
             });
-            options.Store<BareNote>(s =>
+            config.Store<BareNote>(s =>
             {
                 s.SetKey(n => n.NoteId);
                 s.AddQueryable(n => n.AuthorId);
                 s.AddQueryable(n => n.Content);
             });
-            extra?.Invoke(options);
+            extra?.Invoke(config);
         });
     }
 
@@ -41,7 +39,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_SaveAndGet()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         var loaded = await db.GetAsync<BareActor>("alice", TestContext.Current.CancellationToken);
@@ -53,7 +51,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_SaveOverwrites()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice Updated" }, TestContext.Current.CancellationToken);
 
@@ -65,7 +63,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_GetNonExistent_ReturnsNull()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         var result = await db.GetAsync<BareActor>("nobody", TestContext.Current.CancellationToken);
         Assert.Null(result);
     }
@@ -73,7 +71,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_DeleteByKey()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         await db.DeleteAsync<BareActor>("alice", TestContext.Current.CancellationToken);
@@ -85,7 +83,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_DeleteByObject()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         var actor = new BareActor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
@@ -98,7 +96,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_DeleteNonExistent_NoError()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         var result = await db.DeleteAsync<BareActor>("nobody", TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
@@ -106,7 +104,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_SaveReturnsObjectResult()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         var result = await db.SaveAsync(new BareActor { Username = "alice" }, TestContext.Current.CancellationToken);
 
         Assert.Single(result.Changes);
@@ -117,7 +115,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_DeleteReturnsObjectResult()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice" }, TestContext.Current.CancellationToken);
 
         var result = await db.DeleteAsync<BareActor>("alice", TestContext.Current.CancellationToken);
@@ -132,24 +130,23 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Query_ReturnsAll()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var all = db.Query<BareActor>().ToList();
+        var all = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, all.Count);
     }
 
     [Fact]
     public async Task Fluent_Query_FilterByTag()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareActor>()
-            .Where(a => a.DisplayName == "Alice")
-            .ToList();
+        var results = await db.GetManyAsync<BareActor>(a => a.DisplayName == "Alice", cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("alice", results[0].Username);
     }
@@ -157,12 +154,12 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Query_PredicateOverload()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
 
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "Hello" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "bob", Content = "World" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareNote>().Where(n => n.AuthorId == "alice").ToList();
+        var results = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).Where(n => n.AuthorId == "alice").ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
     }
@@ -170,20 +167,20 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Query_Take()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "a", DisplayName = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "b", DisplayName = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "c", DisplayName = "C" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareActor>().Take(2).ToList();
+        var results = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).Take(2).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, results.Count);
     }
 
     [Fact]
     public async Task Fluent_Query_Empty()
     {
-        var db = CreateFluentDb();
-        var results = db.Query<BareActor>().ToList();
+        using var db = CreateFluentDb();
+        var results = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Empty(results);
     }
 
@@ -192,7 +189,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_FindsAfterSave()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<BareActor>().ToList();
@@ -203,7 +200,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_RemovedAfterDelete()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.DeleteAsync<BareActor>("alice", TestContext.Current.CancellationToken);
 
@@ -214,7 +211,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_UpdateReflected()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice Updated" }, TestContext.Current.CancellationToken);
 
@@ -226,7 +223,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_Take()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "a", DisplayName = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "b", DisplayName = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "c", DisplayName = "C" }, TestContext.Current.CancellationToken);
@@ -238,7 +235,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_Empty()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         var results = db.Search<BareActor>().ToList();
         Assert.Empty(results);
     }
@@ -248,7 +245,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_FilterByIndexedField()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
@@ -262,7 +259,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_FilterByIndexedField_NoMatch()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         var results = db.Search<BareActor>()
@@ -274,7 +271,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_FilterByNotAnalyzedField()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "Hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "bob", Content = "Goodbye world" }, TestContext.Current.CancellationToken);
 
@@ -288,7 +285,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_Search_FilterByAnalyzedContent()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "Lucene is great for full text search" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "bob", Content = "Azure table storage is fast" }, TestContext.Current.CancellationToken);
 
@@ -297,7 +294,7 @@ public class FluentConfigTests
             .ToList();
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
-        
+
         results = db.Search<BareNote>("lucene AND alice")
             .ToList();
         Assert.Single(results);
@@ -309,7 +306,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_ChangeAsync_MutatesAndSaves()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         await db.ChangeAsync<BareActor>("alice", a =>
@@ -325,7 +322,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_ChangeAsync_NonExistent_Throws()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             db.ChangeAsync<BareActor>("nobody", a => a, TestContext.Current.CancellationToken));
     }
@@ -333,7 +330,7 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_ChangeAsync_ReturnsObjectResult()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
         var result = await db.ChangeAsync<BareActor>("alice", a =>
@@ -351,14 +348,14 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_DeleteByPredicate()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "alice", Content = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n3", AuthorId = "bob", Content = "C" }, TestContext.Current.CancellationToken);
 
         await db.DeleteAsync<BareNote>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
-        var remaining = db.Query<BareNote>().ToList();
+        var remaining = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(remaining);
         Assert.Equal("bob", remaining[0].AuthorId);
     }
@@ -368,12 +365,12 @@ public class FluentConfigTests
     [Fact]
     public async Task Fluent_MultipleTypes_Isolated()
     {
-        var db = CreateFluentDb();
+        using var db = CreateFluentDb();
         await db.SaveAsync(new BareActor { Username = "alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice" }, TestContext.Current.CancellationToken);
 
-        var actors = db.Query<BareActor>().ToList();
-        var notes = db.Query<BareNote>().ToList();
+        var actors = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var notes = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(actors);
         Assert.Single(notes);
     }
@@ -386,7 +383,7 @@ public class FluentConfigTests
         BareActor? captured = null;
         TriggerKind? capturedKind = null;
 
-        var db = CreateFluentDb(opts =>
+        using var db = CreateFluentDb(opts =>
         {
             opts.On<BareActor>((actor, kind, _) =>
             {
@@ -408,7 +405,7 @@ public class FluentConfigTests
     {
         TriggerKind? capturedKind = null;
 
-        var db = CreateFluentDb(opts =>
+        using var db = CreateFluentDb(opts =>
         {
             opts.On<BareActor>((_, kind, __) =>
             {
@@ -429,10 +426,9 @@ public class FluentConfigTests
     public async Task Fluent_CompositeKey()
     {
 
-        var db = new LottaDB("FluentCompositeKey", "UseDeveloperStorage=true", options =>
+        using var db = new LottaDB("FluentCompositeKey", "UseDevelopmentStorage=true", options =>
         {
-            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            options.ConfigureTestStorage();
 
             options.Store<BareActor>(s =>
             {

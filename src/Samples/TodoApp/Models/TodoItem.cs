@@ -24,7 +24,7 @@ public class TodoItem
 
     [Queryable]
     public DateTimeOffset Created { get; set; } = DateTimeOffset.UtcNow;
-    
+
     [Queryable]
     public DateTimeOffset? CompletedAt { get; set; }
 }

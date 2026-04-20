@@ -10,7 +10,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_ComplexObject_PreservesNestedCollections()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         var order = new OrderWithLines
         {
@@ -30,7 +30,7 @@ public class JsonRoundtripTests
         };
         await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = await db.GetManyAsync<OrderWithLines>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
 
         var loaded = results[0];
@@ -50,7 +50,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_MultipleComplexObjects_AllPreserved()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -71,7 +71,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string> { ["key"] = "val2" }
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = await db.GetManyAsync<OrderWithLines>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, results.Count);
 
         var order1 = results.First(o => o.OrderId == "q-multi-1");
@@ -86,7 +86,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_ComplexObject_PreservesAllProperties()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         var order = new OrderWithLines
         {
@@ -125,7 +125,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_And_Search_DeserializeIdentically()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         var order = new OrderWithLines
         {
@@ -140,7 +140,7 @@ public class JsonRoundtripTests
         };
         await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
-        var fromQuery = db.Query<OrderWithLines>().First();
+        var fromQuery = (await db.GetManyAsync<OrderWithLines>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken)).First();
         var fromSearch = db.Search<OrderWithLines>().First();
 
         // Deep equality: both paths should produce identical objects
@@ -152,7 +152,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_ComplexObject_PreservesNestedCollections()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -165,7 +165,8 @@ public class JsonRoundtripTests
             },
             Metadata = new Dictionary<string, string>
             {
-                ["a"] = "1", ["b"] = "2"
+                ["a"] = "1",
+                ["b"] = "2"
             }
         }, TestContext.Current.CancellationToken);
 
@@ -179,7 +180,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_Note_PreservesIndexedFields()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Note
         {
@@ -201,7 +202,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_EmptyCollections_PreservedAsEmpty()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -211,7 +212,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string>()
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = await db.GetManyAsync<OrderWithLines>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Empty(results[0].Lines);
         Assert.Empty(results[0].Metadata);
@@ -220,7 +221,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Query_NoteWithTags_PreservesListProperty()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Note
         {
@@ -231,7 +232,7 @@ public class JsonRoundtripTests
             Tags = new List<string> { "csharp", "dotnet", "lucene" }
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<Note>().ToList();
+        var results = await db.GetManyAsync<Note>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal(3, results[0].Tags.Count);
         Assert.Contains("csharp", results[0].Tags);
@@ -242,7 +243,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Search_NoteWithTags_PreservesListProperty()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Note
         {
@@ -263,7 +264,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task RebuildIndex_PreservesComplexObjectFidelity()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -276,7 +277,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string> { ["k"] = "v" }
         }, TestContext.Current.CancellationToken);
 
-        await db.RebuildIndex(TestContext.Current.CancellationToken);
+        await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         var result = db.Search<OrderWithLines>().First();
         Assert.Equal("rebuild-complex", result.OrderId);
@@ -288,7 +289,7 @@ public class JsonRoundtripTests
     [Fact]
     public async Task Builder_DerivedObject_SearchPreservesJsonFidelity()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -296,9 +297,13 @@ public class JsonRoundtripTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "",
-                    AuthorUsername = actor?.Username ?? "", Content = note.Content,
-                    Published = note.Published, Tags = note.Tags.ToArray(),
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorDisplay = actor?.DisplayName ?? "",
+                    AuthorUsername = actor?.Username ?? "",
+                    Content = note.Content,
+                    Published = note.Published,
+                    Tags = note.Tags.ToArray(),
                 });
             });
         });

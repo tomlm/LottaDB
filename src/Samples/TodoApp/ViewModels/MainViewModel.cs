@@ -1,6 +1,6 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 using TodoApp.Models;
 using TodoApp.Services;
 

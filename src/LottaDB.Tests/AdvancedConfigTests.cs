@@ -1,7 +1,4 @@
 using Lucene.Net.Linq.Mapping;
-using Microsoft.Extensions.Configuration;
-using Spotflow.InMemory.Azure.Storage;
-using Spotflow.InMemory.Azure.Storage.Tables;
 using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
@@ -62,16 +59,16 @@ public class AdvancedConfigTests
         public string Body { get; set; } = "";
     }
 
-    private static LottaDB CreateDb(Action<ILottaConfiguration> config,
+    private static LottaDB CreateDb(Action<ILottaConfiguration> configAction,
         [CallerMemberName] string? testName = null)
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        return new LottaDB(testName!, "UseDeveloperStorage=true", c =>
+        return new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
         {
-            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
-            config?.Invoke(c);
+            config.ConfigureTestStorage();
+
+            configAction?.Invoke(config);
         });
     }
 
@@ -80,14 +77,14 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_QueryFilterWorks()
     {
-        var db = CreateDb(opts => opts.Store<TagOnlyModel>());
+        using var db = CreateDb(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<TagOnlyModel>()
+        var results = await db.GetManyAsync<TagOnlyModel>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(x => x.Category == "A")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("1", results[0].Id);
     }
@@ -95,7 +92,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_NotInLuceneIndex()
     {
-        var db = CreateDb(opts => opts.Store<TagOnlyModel>());
+        using var db = CreateDb(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
 
@@ -110,7 +107,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_SearchFilterWorks()
     {
-        var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -125,7 +122,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_AnalyzedSearchWorks()
     {
-        var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -140,13 +137,13 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_NotATableStorageTag()
     {
-        var db = CreateDb(opts => opts.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "test" }, TestContext.Current.CancellationToken);
 
         // Query returns the object (via _json), but Status is not a table storage tag,
         // so it's only filterable client-side not server-side
-        var all = db.Query<FieldOnlyModel>().ToList();
+        var all = await db.GetManyAsync<FieldOnlyModel>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(all);
         Assert.Equal("active", all[0].Status);
     }
@@ -156,15 +153,14 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Mixed_TagQueryAndFieldSearch()
     {
-        var db = CreateDb(opts => opts.Store<MixedModel>());
+        using var db = CreateDb(config => config.Store<MixedModel>());
 
         await db.SaveAsync(new MixedModel { Id = "1", Category = "news", Body = "breaking news today" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.Query<MixedModel>()
-            .Where(x => x.Category == "news")
-            .ToList();
+        var byCategory = await db.GetManyAsync<MixedModel>(x => x.Category == "news", cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
         Assert.Equal("1", byCategory[0].Id);
 
@@ -181,9 +177,9 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_QueryFilterWorks()
     {
-        var db = CreateDb(opts =>
+        using var db = CreateDb(config =>
         {
-            opts.Store<BareModel>(s =>
+            config.Store<BareModel>(s =>
             {
                 s.SetKey(x => x.Id);
                 s.AddTag(x => x.Category);
@@ -193,9 +189,8 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "1", Category = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareModel { Id = "2", Category = "B" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareModel>()
-            .Where(x => x.Category == "A")
-            .ToList();
+        var results = await db.GetManyAsync<BareModel>(x => x.Category == "A", cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("1", results[0].Id);
     }
@@ -205,9 +200,9 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_SearchFilterWorks()
     {
-        var db = CreateDb(opts =>
+        using var db = CreateDb(config =>
         {
-            opts.Store<BareModel>(s =>
+            config.Store<BareModel>(s =>
             {
                 s.SetKey(x => x.Id);
                 s.AddField(x => x.Body);
@@ -227,9 +222,9 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_NotAnalyzed_ExactMatchWorks()
     {
-        var db = CreateDb(opts =>
+        using var db = CreateDb(config =>
         {
-            opts.Store<BareModel>(s =>
+            config.Store<BareModel>(s =>
             {
                 s.SetKey(x => x.Id);
                 s.AddField(x => x.Category).NotAnalyzed();
@@ -251,9 +246,9 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_And_AddField_Together()
     {
-        var db = CreateDb(opts =>
+        using var db = CreateDb(config =>
         {
-            opts.Store<BareModel>(s =>
+            config.Store<BareModel>(s =>
             {
                 s.SetKey(x => x.Id);
                 s.AddTag(x => x.Category);
@@ -265,9 +260,8 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.Query<BareModel>()
-            .Where(x => x.Category == "news")
-            .ToList();
+        var byCategory = await db.GetManyAsync<BareModel>(x => x.Category == "news", cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
 
         // Search by field

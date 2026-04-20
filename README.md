@@ -54,11 +54,10 @@ public class Actor
     public string AvatarUrl { get; set; } = "";
 }
 
-// Configure and create the database
-var options = new LottaConfiguration();
-options.Store<Actor>();
-
-var db = new LottaDB("myapp", tableServiceClient, luceneDirectory, options);
+using var db = new LottaDB("myapp", "<your Azure Storage connection string>", luceneDirectory, config =>
+{
+    config.Store<Actor>();
+});
 
 // Save
 await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });

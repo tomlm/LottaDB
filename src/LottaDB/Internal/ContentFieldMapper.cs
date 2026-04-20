@@ -1,6 +1,3 @@
-using System.Collections;
-using System.Reflection;
-using System.Text;
 using Lucene.Net.Analysis;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
@@ -8,6 +5,9 @@ using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Linq.Search;
 using Lucene.Net.QueryParsers.Classic;
 using Lucene.Net.Search;
+using System.Collections;
+using System.Reflection;
+using System.Text;
 using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;

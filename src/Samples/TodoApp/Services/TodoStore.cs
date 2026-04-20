@@ -1,9 +1,6 @@
 using Lotta;
 using Lucene.Net.Linq;
-using Lucene.Net.Store;
 using Microsoft.Extensions.Configuration;
-using Spotflow.InMemory.Azure.Storage;
-using Spotflow.InMemory.Azure.Storage.Tables;
 using System.Diagnostics;
 using TodoApp.Models;
 
@@ -17,19 +14,19 @@ namespace TodoApp.Services;
 /// <c>new TableServiceClient("UseDevelopmentStorage=true")</c> (Azurite) or a real
 /// connection string, and the Lucene directory for <c>FSDirectory.Open(path)</c>.
 /// </summary>
-public class TodoStore
+public class TodoStore : IDisposable
 {
-    private readonly Lotta.LottaDB _db;
+    private readonly LottaDB _db;
 
     public TodoStore(IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("TableStorage");
 
-        _db = new LottaDB("todos", connectionString!, lotta =>
+        _db = new LottaDB("todos", connectionString!, config =>
         {
-            lotta.Store<TodoItem>();
+            config.Store<TodoItem>();
         });
-        _db.RebuildIndex().Wait();
+        _db.RebuildSearchIndex().Wait();
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>
@@ -85,6 +82,8 @@ public class TodoStore
             return Array.Empty<TodoItem>();
         }
     }
+
+    public void Dispose() => _db.Dispose();
 }
 
 public enum TodoFilter

@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Configuration;
-
 namespace Lotta.Tests;
 
 public class StoreRegistrationTests
@@ -7,7 +5,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsKey()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         var result = await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         Assert.NotNull(result);
@@ -16,7 +14,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_CanGetByKey()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         var loaded = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
@@ -27,13 +25,13 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsTags()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var aliceOnly = db.Query<Actor>()
+        var aliceOnly = await db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(a => a.DisplayName == "Alice")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(aliceOnly);
         Assert.Equal("alice", aliceOnly[0].Username);
     }
@@ -41,7 +39,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_SetKey_Works()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -57,7 +55,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_AddQueryable_Works()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -69,23 +67,23 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<Actor>()
+        var results = await db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(a => a.DisplayName == "Alice")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
     }
 
     [Fact]
     public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         await db.SaveAsync(new Actor { Username = "alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         var actor = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.NotNull(actor);
 
-        var notes = db.Query<Note>().ToList();
+        var notes = await db.GetManyAsync<Note>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(notes);
     }
 
@@ -94,10 +92,9 @@ public class StoreRegistrationTests
     {
         // Create a DB without registering Actor
         // deliberately NOT registering Actor
-        var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDeveloperStorage=true", (c) =>
+        using var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDevelopmentStorage=true", (config) =>
         {
-            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            config.ConfigureTestStorage();
         });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -105,9 +102,21 @@ public class StoreRegistrationTests
     }
 
     [Fact]
+    public async Task Store_UnregisteredType_BulkSave_Throws()
+    {
+        using var db = new LottaDB("UnregisteredBulkThrows", "UseDevelopmentStorage=true", (c) =>
+        {
+            c.ConfigureTestStorage();
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            db.SaveManyAsync(new[] { new Actor { Username = "alice" } }, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Store_AutoKey_GeneratesUlid()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         // LogEntry has [Key(Mode = KeyMode.Auto)] — Id is generated on save
         var entry = new LogEntry { Message = "auto key test", Timestamp = DateTimeOffset.UtcNow };
@@ -127,7 +136,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_AutoKey_MultipleObjects_UniqueKeys()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         var entry1 = new LogEntry { Message = "first" };
         var entry2 = new LogEntry { Message = "second" };
@@ -136,14 +145,14 @@ public class StoreRegistrationTests
 
         Assert.NotEqual(entry1.Id, entry2.Id);
 
-        var all = db.Query<LogEntry>().ToList();
+        var all = await db.GetManyAsync<LogEntry>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, all.Count);
     }
 
     [Fact]
     public async Task Store_AutoKey_ExistingValue_NotOverwritten()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         // If Id is already set, Auto mode should use it (upsert)
         var entry = new LogEntry { Id = "my-custom-id", Message = "explicit" };
@@ -158,7 +167,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_CustomKey()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -176,7 +185,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_MixedAttributeAndFluent_FluentWins()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {

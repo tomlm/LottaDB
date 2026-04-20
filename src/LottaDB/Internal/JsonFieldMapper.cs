@@ -1,12 +1,11 @@
-using System.Text.Json;
 using Lucene.Net.Analysis;
-using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Linq.Search;
 using Lucene.Net.QueryParsers.Classic;
 using Lucene.Net.Search;
+using System.Text.Json;
 using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;

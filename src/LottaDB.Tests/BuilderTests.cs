@@ -10,7 +10,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnSave_CreatesDerivedObject()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -18,9 +18,13 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Domain = note.Domain, Id = $"nv-{note.NoteId}", NoteId = note.NoteId,
-                    AuthorUsername = actor?.Username ?? "", AuthorDisplay = actor?.DisplayName ?? "",
-                    Content = note.Content, Published = note.Published,
+                    Domain = note.Domain,
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorUsername = actor?.Username ?? "",
+                    AuthorDisplay = actor?.DisplayName ?? "",
+                    Content = note.Content,
+                    Published = note.Published,
                 });
             });
         });
@@ -36,7 +40,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnSave_DerivedObjectInTableStorage()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -47,14 +51,14 @@ public class BuilderTests
 
         await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var views = db.Query<NoteView>().ToList();
+        var views = await db.GetManyAsync<NoteView>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Contains(views, v => v.Id == "nv-n2");
     }
 
     [Fact]
     public async Task OnHandler_OnSave_DerivedObjectInLuceneIndex()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -72,7 +76,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnDelete_DeletesDerivedObject()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -97,7 +101,7 @@ public class BuilderTests
     public async Task OnHandler_ReceivesTriggerKind_Saved()
     {
         TriggerKind? received = null;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { received = kind; });
         });
@@ -110,7 +114,7 @@ public class BuilderTests
     public async Task OnHandler_ReceivesTriggerKind_Deleted()
     {
         TriggerKind? received = null;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { received = kind; });
         });
@@ -124,7 +128,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_HasAccessToDb()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -132,7 +136,9 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "unknown",
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorDisplay = actor?.DisplayName ?? "unknown",
                 });
             });
         });
@@ -148,7 +154,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_Error_DoesNotBlockSourceSave()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -165,7 +171,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_Error_CapturedInObjectResult()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -183,7 +189,7 @@ public class BuilderTests
     public async Task OnHandler_MultipleHandlers_AllRun()
     {
         int count = 0;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
             opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
@@ -196,7 +202,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_SaveResult_ContainsDerivedChanges()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {

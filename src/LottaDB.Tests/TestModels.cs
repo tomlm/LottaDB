@@ -1,5 +1,3 @@
-using Lotta;
-
 namespace Lotta.Tests;
 
 public class Actor

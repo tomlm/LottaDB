@@ -6,7 +6,7 @@ public class ObserveTests
     public async Task On_ReceivesSavedNotification()
     {
         Actor? received = null;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (actor, kind, db) => { received = actor; });
         });
@@ -20,7 +20,7 @@ public class ObserveTests
     public async Task On_ReceivesDeletedNotification()
     {
         TriggerKind? receivedKind = null;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (actor, kind, db) => { receivedKind = kind; });
         });
@@ -34,7 +34,7 @@ public class ObserveTests
     [Fact]
     public async Task On_RuntimeRegistration_Works()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         Actor? received = null;
 
         using var handle = db.On<Actor>(async (actor, kind, db) => { received = actor; });
@@ -46,7 +46,7 @@ public class ObserveTests
     [Fact]
     public async Task On_Dispose_StopsNotifications()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         int count = 0;
 
         var handle = db.On<Actor>(async (actor, kind, db) => { Interlocked.Increment(ref count); });
@@ -62,7 +62,7 @@ public class ObserveTests
     public async Task On_MultipleHandlers_AllFired()
     {
         int count = 0;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
             opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });

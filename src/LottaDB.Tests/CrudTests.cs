@@ -6,7 +6,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveAsync_NewObject_CanGetBack()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "save-get", DisplayName = "Test" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         var loaded = await db.GetAsync<Actor>("save-get", TestContext.Current.CancellationToken);
@@ -17,7 +17,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveAsync_WithExplicitKeys_Works()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         // Actor has [Key] on Username, so saving with Username="explicit-keys" uses that as the key
         var actor = new Actor { Domain = "crud.test", Username = "explicit-keys", DisplayName = "Explicit" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
@@ -29,7 +29,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveAsync_ExistingObject_Overwrites()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "overwrite", DisplayName = "V1" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
@@ -44,7 +44,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveAsync_ReturnsObjectResult_WithSavedChange()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "result-check", DisplayName = "Test" };
         var result = await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
@@ -55,7 +55,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task GetAsync_ByKeys_ReturnsObject()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "get-by-keys", DisplayName = "Found" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         var loaded = await db.GetAsync<Actor>("get-by-keys", TestContext.Current.CancellationToken);
@@ -66,7 +66,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task GetAsync_NonExistent_ReturnsNull()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var loaded = await db.GetAsync<Actor>("does-not-exist", TestContext.Current.CancellationToken);
         Assert.Null(loaded);
     }
@@ -74,7 +74,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteAsync_ByKeys_RemovesObject()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "delete-me", DisplayName = "Gone" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         await db.DeleteAsync<Actor>("delete-me", TestContext.Current.CancellationToken);
@@ -85,7 +85,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteAsync_ByObject_RemovesObject()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "delete-obj", DisplayName = "Gone" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         await db.DeleteAsync(actor, TestContext.Current.CancellationToken);
@@ -96,7 +96,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteAsync_ReturnsObjectResult_WithDeletedChange()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "crud.test", Username = "delete-result", DisplayName = "Gone" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         var result = await db.DeleteAsync(actor, TestContext.Current.CancellationToken);
@@ -106,16 +106,35 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteAsync_NonExistent_NoError()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         // Should not throw
         var result = await db.DeleteAsync<Actor>("never-existed", TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
 
     [Fact]
+    public async Task DeleteDatabaseAsync_RemovesTableAndIndex()
+    {
+        using (var db = await LottaDBFixture.CreateDbAsync(reset: true))
+        {
+            await db.SaveAsync(new Actor
+            {
+                Domain = "crud.test",
+                Username = "delete-db",
+                DisplayName = "Delete Database"
+            }, TestContext.Current.CancellationToken);
+
+            Assert.NotNull(await db.GetAsync<Actor>("delete-db", TestContext.Current.CancellationToken));
+            Assert.Single(db.Search<Actor>().Where(a => a.Username == "delete-db"));
+
+            await db.DeleteDatabaseAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task SaveAsync_JsonPreservesFullPoco()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
         var order = new OrderWithLines
         {
             TenantId = "crud.test",
@@ -146,7 +165,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteAsync_WithPredicate_DeletesMatchingObjects()
     {
-        var db = LottaDBFixture.CreateDb();
+        using var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Note { NoteId = "pred1", AuthorId = "alice", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "pred2", AuthorId = "alice", Content = "B", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
@@ -170,7 +189,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_WithPredicate_RunsOnHandlers()
     {
         int deleteCount = 0;
-        var db = LottaDBFixture.CreateDb(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, d) =>
             {
