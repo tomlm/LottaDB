@@ -10,7 +10,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnSave_CreatesDerivedObject()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -40,7 +40,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnSave_DerivedObjectInTableStorage()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -58,7 +58,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnSave_DerivedObjectInLuceneIndex()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -76,7 +76,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_OnDelete_DeletesDerivedObject()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -101,7 +101,7 @@ public class BuilderTests
     public async Task OnHandler_ReceivesTriggerKind_Saved()
     {
         TriggerKind? received = null;
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { received = kind; });
         });
@@ -114,7 +114,7 @@ public class BuilderTests
     public async Task OnHandler_ReceivesTriggerKind_Deleted()
     {
         TriggerKind? received = null;
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { received = kind; });
         });
@@ -128,7 +128,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_HasAccessToDb()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -154,7 +154,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_Error_DoesNotBlockSourceSave()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -171,7 +171,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_Error_CapturedInObjectResult()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -189,7 +189,7 @@ public class BuilderTests
     public async Task OnHandler_MultipleHandlers_AllRun()
     {
         int count = 0;
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
             opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
@@ -202,7 +202,7 @@ public class BuilderTests
     [Fact]
     public async Task OnHandler_SaveResult_ContainsDerivedChanges()
     {
-        var db = await LottaDBFixture.CreateDbAsync(opts =>
+        using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {

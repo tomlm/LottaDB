@@ -14,7 +14,7 @@ namespace TodoApp.Services;
 /// <c>new TableServiceClient("UseDevelopmentStorage=true")</c> (Azurite) or a real
 /// connection string, and the Lucene directory for <c>FSDirectory.Open(path)</c>.
 /// </summary>
-public class TodoStore
+public class TodoStore : IDisposable
 {
     private readonly LottaDB _db;
 
@@ -82,6 +82,8 @@ public class TodoStore
             return Array.Empty<TodoItem>();
         }
     }
+
+    public void Dispose() => _db.Dispose();
 }
 
 public enum TodoFilter

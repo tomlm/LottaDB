@@ -77,7 +77,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_QueryFilterWorks()
     {
-        var db = CreateDb(config => config.Store<TagOnlyModel>());
+        using var db = CreateDb(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
@@ -92,7 +92,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_NotInLuceneIndex()
     {
-        var db = CreateDb(config => config.Store<TagOnlyModel>());
+        using var db = CreateDb(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
 
@@ -107,7 +107,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_SearchFilterWorks()
     {
-        var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -122,7 +122,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_AnalyzedSearchWorks()
     {
-        var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -137,7 +137,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_NotATableStorageTag()
     {
-        var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "test" }, TestContext.Current.CancellationToken);
 
@@ -153,7 +153,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Mixed_TagQueryAndFieldSearch()
     {
-        var db = CreateDb(config => config.Store<MixedModel>());
+        using var db = CreateDb(config => config.Store<MixedModel>());
 
         await db.SaveAsync(new MixedModel { Id = "1", Category = "news", Body = "breaking news today" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
@@ -178,7 +178,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_QueryFilterWorks()
     {
-        var db = CreateDb(config =>
+        using var db = CreateDb(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -202,7 +202,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_SearchFilterWorks()
     {
-        var db = CreateDb(config =>
+        using var db = CreateDb(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -224,7 +224,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_NotAnalyzed_ExactMatchWorks()
     {
-        var db = CreateDb(config =>
+        using var db = CreateDb(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -248,7 +248,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_And_AddField_Together()
     {
-        var db = CreateDb(config =>
+        using var db = CreateDb(config =>
         {
             config.Store<BareModel>(s =>
             {

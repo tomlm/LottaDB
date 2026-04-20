@@ -794,23 +794,18 @@ public class LottaDB : IDisposable
     {
         if (!_disposed)
         {
+            _disposed = true;
             if (disposing)
             {
                 lock (_lock)
                 {
+                    _searchCT.Cancel();
                     _indexWriter?.Commit();
                     _indexWriter?.Dispose();
-                    _indexWriter = null!;
                     _lucene?.Dispose();
-                    _lucene = null!;
                     _directory?.Dispose();
-                    _directory = null!;
                 }
             }
-
-            // TODO: free unmanaged resources (unmanaged objects) and override finalizer
-            // TODO: set large fields to null
-            _disposed = true;
         }
     }
 
