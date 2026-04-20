@@ -20,7 +20,7 @@ public class QueryTests
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var aliceNotes = await db.GetManyAsync<Note>(n => n.AuthorId == "alice")
+        var aliceNotes = await db.GetManyAsync<Note>(n => n.AuthorId == "alice", cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Assert.Single(aliceNotes);
@@ -69,7 +69,7 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alex", DisplayName = "Alice", AvatarUrl = "" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "https://example.com/bob.png" }, TestContext.Current.CancellationToken);
 
-        var matches = await db.GetManyAsync<Actor>(a => a.DisplayName == "Alice")
+        var matches = await db.GetManyAsync<Actor>(a => a.DisplayName == "Alice", cancellationToken: TestContext.Current.CancellationToken)
             .Where(a => a.AvatarUrl != "")
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -85,7 +85,7 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", DisplayName = "Carol" }, TestContext.Current.CancellationToken);
 
-        var matches = await db.GetManyAsync<Actor>(a => a.DisplayName == "Alice" || a.DisplayName == "Bob")
+        var matches = await db.GetManyAsync<Actor>(a => a.DisplayName == "Alice" || a.DisplayName == "Bob", cancellationToken: TestContext.Current.CancellationToken)
             .OrderBy(a => a.Username)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -102,17 +102,17 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", Counter = 10 }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", Counter = 15 }, TestContext.Current.CancellationToken);
 
-        var equalsResults = await db.GetManyAsync<Actor>(a => a.Counter == 10)
+        var equalsResults = await db.GetManyAsync<Actor>(a => a.Counter == 10, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(equalsResults);
         Assert.Equal("bob", equalsResults[0].Username);
 
-        var lessThanResults = await db.GetManyAsync<Actor>(a => a.Counter < 10)
+        var lessThanResults = await db.GetManyAsync<Actor>(a => a.Counter < 10, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(lessThanResults);
         Assert.Equal("alice", lessThanResults[0].Username);
 
-        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.Counter > 10)
+        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.Counter > 10, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(greaterThanResults);
         Assert.Equal("carol", greaterThanResults[0].Username);
@@ -130,17 +130,17 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", CreatedAt = created2 }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", CreatedAt = created3 }, TestContext.Current.CancellationToken);
 
-        var equalsResults = await db.GetManyAsync<Actor>(a => a.CreatedAt == created2)
+        var equalsResults = await db.GetManyAsync<Actor>(a => a.CreatedAt == created2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(equalsResults);
         Assert.Equal("bob", equalsResults[0].Username);
 
-        var lessThanResults = await db.GetManyAsync<Actor>(a => a.CreatedAt < created2)
+        var lessThanResults = await db.GetManyAsync<Actor>(a => a.CreatedAt < created2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(lessThanResults);
         Assert.Equal("alice", lessThanResults[0].Username);
 
-        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.CreatedAt > created2)
+        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.CreatedAt > created2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(greaterThanResults);
         Assert.Equal("carol", greaterThanResults[0].Username);
@@ -158,17 +158,17 @@ public class QueryTests
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", LastSeenAt = seen2 }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", LastSeenAt = seen3 }, TestContext.Current.CancellationToken);
 
-        var equalsResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt == seen2)
+        var equalsResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt == seen2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(equalsResults);
         Assert.Equal("bob", equalsResults[0].Username);
 
-        var lessThanResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt < seen2)
+        var lessThanResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt < seen2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(lessThanResults);
         Assert.Equal("alice", lessThanResults[0].Username);
 
-        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt > seen2)
+        var greaterThanResults = await db.GetManyAsync<Actor>(a => a.LastSeenAt > seen2, cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(greaterThanResults);
         Assert.Equal("carol", greaterThanResults[0].Username);

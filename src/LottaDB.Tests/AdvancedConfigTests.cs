@@ -159,7 +159,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = await db.GetManyAsync<MixedModel>(x => x.Category == "news")
+        var byCategory = await db.GetManyAsync<MixedModel>(x => x.Category == "news", cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
         Assert.Equal("1", byCategory[0].Id);
@@ -189,7 +189,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "1", Category = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareModel { Id = "2", Category = "B" }, TestContext.Current.CancellationToken);
 
-        var results = await db.GetManyAsync<BareModel>(x => x.Category == "A")
+        var results = await db.GetManyAsync<BareModel>(x => x.Category == "A", cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("1", results[0].Id);
@@ -260,7 +260,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = await db.GetManyAsync<BareModel>(x => x.Category == "news")
+        var byCategory = await db.GetManyAsync<BareModel>(x => x.Category == "news", cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
 

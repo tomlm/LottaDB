@@ -145,7 +145,7 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = await db.GetManyAsync<BareActor>(a => a.DisplayName == "Alice")
+        var results = await db.GetManyAsync<BareActor>(a => a.DisplayName == "Alice", cancellationToken: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("alice", results[0].Username);
