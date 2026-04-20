@@ -29,9 +29,9 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var aliceOnly = db.GetMany<Actor>()
+        var aliceOnly = await db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(a => a.DisplayName == "Alice")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(aliceOnly);
         Assert.Equal("alice", aliceOnly[0].Username);
     }
@@ -67,9 +67,9 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<Actor>()
+        var results = await db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(a => a.DisplayName == "Alice")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
     }
 
@@ -83,7 +83,7 @@ public class StoreRegistrationTests
         var actor = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.NotNull(actor);
 
-        var notes = db.GetMany<Note>().ToList();
+        var notes = await db.GetManyAsync<Note>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(notes);
     }
 
@@ -145,7 +145,7 @@ public class StoreRegistrationTests
 
         Assert.NotEqual(entry1.Id, entry2.Id);
 
-        var all = db.GetMany<LogEntry>().ToList();
+        var all = await db.GetManyAsync<LogEntry>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, all.Count);
     }
 

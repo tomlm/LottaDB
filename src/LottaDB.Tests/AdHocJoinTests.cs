@@ -13,12 +13,10 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         // Ad-hoc join: materialize both sides via SearchAsync, then LINQ join in memory
-        var notes = db.Search<Note>().ToList();
-        var actors = db.Search<Actor>().ToList();
 
         var joined = (
-            from note in notes
-            join actor in actors
+            from note in db.Search<Note>().ToList()
+            join actor in db.Search<Actor>().ToList()
                 on note.AuthorId equals actor.Username
             select new { note.NoteId, note.Content, actor.DisplayName }
         ).ToList();
@@ -37,12 +35,9 @@ public class AdHocJoinTests
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var notes = db.Search<Note>().ToList().Where(n => n.Content.Contains("Important"));
-        var actors = db.Search<Actor>().ToList();
-
         var joined = (
-            from note in notes
-            join actor in actors
+            from note in db.Search<Note>().Where(n => n.Content.Contains("Important")).ToList()
+            join actor in db.Search<Actor>()
                 on note.AuthorId equals actor.Username
             select new { note.NoteId, actor.DisplayName }
         ).ToList();

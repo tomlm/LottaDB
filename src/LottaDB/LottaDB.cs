@@ -412,10 +412,6 @@ public class LottaDB : IDisposable
         return _tableAdapter.GetManyAsync<T>(_name, predicate, maxPerPage, cancellationToken);
     }
 
-    /// <summary>Synchronous convenience wrapper over <see cref="GetManyAsync{T}"/>.</summary>
-    public IEnumerable<T> GetMany<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
-        => _tableAdapter.GetMany<T>(_name, predicate);
-
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
     /// (deserialized from stored _json field). Always reflects the last committed state.

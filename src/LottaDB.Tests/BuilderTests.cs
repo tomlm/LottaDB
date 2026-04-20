@@ -51,7 +51,7 @@ public class BuilderTests
 
         await db.SaveAsync(new Note { NoteId = "n2", Content = "Stored", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        var views = db.GetMany<NoteView>().ToList();
+        var views = await db.GetManyAsync<NoteView>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Contains(views, v => v.Id == "nv-n2");
     }
 

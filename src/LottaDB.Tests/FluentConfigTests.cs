@@ -134,7 +134,7 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var all = db.GetMany<BareActor>().ToList();
+        var all = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, all.Count);
     }
 
@@ -145,9 +145,8 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<BareActor>()
-            .Where(a => a.DisplayName == "Alice")
-            .ToList();
+        var results = await db.GetManyAsync<BareActor>(a => a.DisplayName == "Alice")
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("alice", results[0].Username);
     }
@@ -160,7 +159,7 @@ public class FluentConfigTests
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "Hello" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "bob", Content = "World" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<BareNote>().Where(n => n.AuthorId == "alice").ToList();
+        var results = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).Where(n => n.AuthorId == "alice").ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("n1", results[0].NoteId);
     }
@@ -173,7 +172,7 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "b", DisplayName = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareActor { Username = "c", DisplayName = "C" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<BareActor>().Take(2).ToList();
+        var results = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).Take(2).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, results.Count);
     }
 
@@ -181,7 +180,7 @@ public class FluentConfigTests
     public async Task Fluent_Query_Empty()
     {
         using var db = CreateFluentDb();
-        var results = db.GetMany<BareActor>().ToList();
+        var results = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Empty(results);
     }
 
@@ -356,7 +355,7 @@ public class FluentConfigTests
 
         await db.DeleteAsync<BareNote>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
-        var remaining = db.GetMany<BareNote>().ToList();
+        var remaining = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(remaining);
         Assert.Equal("bob", remaining[0].AuthorId);
     }
@@ -370,8 +369,8 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice" }, TestContext.Current.CancellationToken);
 
-        var actors = db.GetMany<BareActor>().ToList();
-        var notes = db.GetMany<BareNote>().ToList();
+        var actors = await db.GetManyAsync<BareActor>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var notes = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(actors);
         Assert.Single(notes);
     }

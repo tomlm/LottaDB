@@ -82,9 +82,9 @@ public class AdvancedConfigTests
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<TagOnlyModel>()
+        var results = await db.GetManyAsync<TagOnlyModel>(cancellationToken: TestContext.Current.CancellationToken)
             .Where(x => x.Category == "A")
-            .ToList();
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("1", results[0].Id);
     }
@@ -143,7 +143,7 @@ public class AdvancedConfigTests
 
         // Query returns the object (via _json), but Status is not a table storage tag,
         // so it's only filterable client-side not server-side
-        var all = db.GetMany<FieldOnlyModel>().ToList();
+        var all = await db.GetManyAsync<FieldOnlyModel>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(all);
         Assert.Equal("active", all[0].Status);
     }
@@ -159,9 +159,8 @@ public class AdvancedConfigTests
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.GetMany<MixedModel>()
-            .Where(x => x.Category == "news")
-            .ToList();
+        var byCategory = await db.GetManyAsync<MixedModel>(x => x.Category == "news")
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
         Assert.Equal("1", byCategory[0].Id);
 
@@ -190,9 +189,8 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "1", Category = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareModel { Id = "2", Category = "B" }, TestContext.Current.CancellationToken);
 
-        var results = db.GetMany<BareModel>()
-            .Where(x => x.Category == "A")
-            .ToList();
+        var results = await db.GetManyAsync<BareModel>(x => x.Category == "A")
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(results);
         Assert.Equal("1", results[0].Id);
     }
@@ -262,9 +260,8 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.GetMany<BareModel>()
-            .Where(x => x.Category == "news")
-            .ToList();
+        var byCategory = await db.GetManyAsync<BareModel>(x => x.Category == "news")
+            .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(byCategory);
 
         // Search by field

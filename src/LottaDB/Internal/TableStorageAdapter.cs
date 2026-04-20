@@ -212,35 +212,35 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
-    /// <summary>
-    /// Query all objects whose _type hierarchy contains the given type name.
-    /// Deserializes using the concrete type from _type so derived properties are preserved.
-    /// </summary>
-    public IEnumerable<T> GetMany<T>(string tableName,
-        Expression<Func<T, bool>>? predicate = null,
-        int? maxPerPage = null,
-        CancellationToken cancellationToken = default)
+    ///// <summary>
+    ///// Query all objects whose _type hierarchy contains the given type name.
+    ///// Deserializes using the concrete type from _type so derived properties are preserved.
+    ///// </summary>
+    //public IEnumerable<T> GetMany<T>(string tableName,
+    //    Expression<Func<T, bool>>? predicate = null,
+    //    int? maxPerPage = null,
+    //    CancellationToken cancellationToken = default)
 
-        where T : class, new()
-    {
-        var table = GetTable(tableName);
+    //    where T : class, new()
+    //{
+    //    var table = GetTable(tableName);
 
-        var query = GetODataQuery<T>(predicate);
+    //    var query = GetODataQuery<T>(predicate);
 
-        return table.Query<LottaTableEntity>(query, maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
-    }
+    //    return table.Query<LottaTableEntity>(query, maxPerPage, cancellationToken: cancellationToken)
+    //        .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+    //}
 
-    public IEnumerable<string> GetManyKeys<T>(string tableName,
-        Expression<Func<T, bool>>? predicate = null,
-        CancellationToken cancellationToken = default)
-        where T : class, new()
-    {
-        var table = GetTable(tableName);
-        var query = GetODataQuery<T>(predicate);
-        return table.Query<TableEntity>(query, select: new[] { "RowKey" }, cancellationToken: cancellationToken)
-            .Select(entity => entity.RowKey);
-    }
+    //public IEnumerable<string> GetManyKeys<T>(string tableName,
+    //    Expression<Func<T, bool>>? predicate = null,
+    //    CancellationToken cancellationToken = default)
+    //    where T : class, new()
+    //{
+    //    var table = GetTable(tableName);
+    //    var query = GetODataQuery<T>(predicate);
+    //    return table.Query<TableEntity>(query, select: new[] { "RowKey" }, cancellationToken: cancellationToken)
+    //        .Select(entity => entity.RowKey);
+    //}
 
     private static string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
     {
