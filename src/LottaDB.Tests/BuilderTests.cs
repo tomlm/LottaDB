@@ -18,9 +18,13 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Domain = note.Domain, Id = $"nv-{note.NoteId}", NoteId = note.NoteId,
-                    AuthorUsername = actor?.Username ?? "", AuthorDisplay = actor?.DisplayName ?? "",
-                    Content = note.Content, Published = note.Published,
+                    Domain = note.Domain,
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorUsername = actor?.Username ?? "",
+                    AuthorDisplay = actor?.DisplayName ?? "",
+                    Content = note.Content,
+                    Published = note.Published,
                 });
             });
         });
@@ -132,7 +136,9 @@ public class BuilderTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "unknown",
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorDisplay = actor?.DisplayName ?? "unknown",
                 });
             });
         });

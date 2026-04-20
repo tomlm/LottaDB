@@ -1,6 +1,6 @@
 using Azure.Data.Tables;
-using LuceneDirectory = Lucene.Net.Store.Directory;
 using System.Linq.Expressions;
+using LuceneDirectory = Lucene.Net.Store.Directory;
 
 namespace Lotta;
 

@@ -1,7 +1,3 @@
-using Azure.Data.Tables;
-using Lucene.Net.Store;
-using Spotflow.InMemory.Azure.Storage;
-using Spotflow.InMemory.Azure.Storage.Tables;
 using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;

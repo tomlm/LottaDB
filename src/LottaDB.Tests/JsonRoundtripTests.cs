@@ -165,7 +165,8 @@ public class JsonRoundtripTests
             },
             Metadata = new Dictionary<string, string>
             {
-                ["a"] = "1", ["b"] = "2"
+                ["a"] = "1",
+                ["b"] = "2"
             }
         }, TestContext.Current.CancellationToken);
 
@@ -296,9 +297,13 @@ public class JsonRoundtripTests
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
-                    Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "",
-                    AuthorUsername = actor?.Username ?? "", Content = note.Content,
-                    Published = note.Published, Tags = note.Tags.ToArray(),
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorDisplay = actor?.DisplayName ?? "",
+                    AuthorUsername = actor?.Username ?? "",
+                    Content = note.Content,
+                    Published = note.Published,
+                    Tags = note.Tags.ToArray(),
                 });
             });
         });

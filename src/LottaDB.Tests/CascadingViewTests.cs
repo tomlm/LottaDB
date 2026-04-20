@@ -19,9 +19,13 @@ public class CascadingViewTests
                 if (actor == null) return;
                 await db.SaveAsync(new NoteView
                 {
-                    Domain = note.Domain, Id = $"nv-{note.NoteId}", NoteId = note.NoteId,
-                    AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
-                    AvatarUrl = actor.AvatarUrl, Content = note.Content,
+                    Domain = note.Domain,
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorUsername = actor.Username,
+                    AuthorDisplay = actor.DisplayName,
+                    AvatarUrl = actor.AvatarUrl,
+                    Content = note.Content,
                     Published = note.Published,
                 });
             });
@@ -42,9 +46,13 @@ public class CascadingViewTests
                     if (note == null) continue;
                     await db.SaveAsync(new NoteView
                     {
-                        Domain = note.Domain, Id = view.Id, NoteId = view.NoteId,
-                        AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
-                        Content = note.Content, Published = note.Published,
+                        Domain = note.Domain,
+                        Id = view.Id,
+                        NoteId = view.NoteId,
+                        AuthorUsername = actor.Username,
+                        AuthorDisplay = actor.DisplayName,
+                        Content = note.Content,
+                        Published = note.Published,
                     });
                 }
             });
@@ -58,7 +66,9 @@ public class CascadingViewTests
                 }
                 await db.SaveAsync(new FeedEntry
                 {
-                    Domain = nv.Domain, Id = $"fe-{nv.Id}", NoteViewId = nv.Id,
+                    Domain = nv.Domain,
+                    Id = $"fe-{nv.Id}",
+                    NoteViewId = nv.Id,
                     Title = $"{nv.AuthorDisplay}: {nv.Content}",
                     Published = nv.Published,
                 });

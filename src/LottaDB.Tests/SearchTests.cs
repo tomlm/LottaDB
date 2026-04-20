@@ -504,7 +504,7 @@ public class SearchTests
         Assert.Equal("Buy groceries", results[0].Title);
     }
 
-   
+
     [Fact]
     public async Task TodoApp_FreeTextSearch_WithBoolFilter()
     {

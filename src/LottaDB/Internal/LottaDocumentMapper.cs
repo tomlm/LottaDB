@@ -82,7 +82,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         var contentProps = meta.IndexedProperties
             .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
             .Select(p => p.Property);
-        
+
         AddField(new ContentFieldMapper<T>(version, analyzer, contentProps));
     }
 
@@ -99,7 +99,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
         base.MapFieldsToDocument(source, target);
 
-//        target.Add(new StringField(KEY_FIELD, key), Field.Store.YES));
+        //        target.Add(new StringField(KEY_FIELD, key), Field.Store.YES));
     }
 
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,

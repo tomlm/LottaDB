@@ -19,10 +19,15 @@ public class CreateViewTests
                 if (actor == null) return;
                 await db.SaveAsync(new NoteView
                 {
-                    Domain = note.Domain, Id = $"nv-{note.NoteId}", NoteId = note.NoteId,
-                    AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
-                    AvatarUrl = actor.AvatarUrl, Content = note.Content,
-                    Published = note.Published, Tags = note.Tags.ToArray(),
+                    Domain = note.Domain,
+                    Id = $"nv-{note.NoteId}",
+                    NoteId = note.NoteId,
+                    AuthorUsername = actor.Username,
+                    AuthorDisplay = actor.DisplayName,
+                    AvatarUrl = actor.AvatarUrl,
+                    Content = note.Content,
+                    Published = note.Published,
+                    Tags = note.Tags.ToArray(),
                 });
             });
 
@@ -42,10 +47,15 @@ public class CreateViewTests
                     if (note == null) continue;
                     await db.SaveAsync(new NoteView
                     {
-                        Domain = note.Domain, Id = view.Id, NoteId = view.NoteId,
-                        AuthorUsername = actor.Username, AuthorDisplay = actor.DisplayName,
-                        AvatarUrl = actor.AvatarUrl, Content = note.Content,
-                        Published = note.Published, Tags = note.Tags.ToArray(),
+                        Domain = note.Domain,
+                        Id = view.Id,
+                        NoteId = view.NoteId,
+                        AuthorUsername = actor.Username,
+                        AuthorDisplay = actor.DisplayName,
+                        AvatarUrl = actor.AvatarUrl,
+                        Content = note.Content,
+                        Published = note.Published,
+                        Tags = note.Tags.ToArray(),
                     });
                 }
             });

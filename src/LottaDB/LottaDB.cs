@@ -7,7 +7,6 @@ using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Linq.Expressions;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -456,7 +455,6 @@ public class LottaDB : IDisposable
         {
             lock (_indexWriter)
             {
-                Debug.Print("Cancelling previous searcher refresh...");
                 _searchCT.Cancel();
                 _searchCT.Dispose();
                 _searchCT = new CancellationTokenSource();
@@ -477,7 +475,6 @@ public class LottaDB : IDisposable
 
         lock (_indexWriter)
         {
-            Debug.Print("rebuild searcher...");
             if (!_disposed)
             {
                 _indexWriter.Commit();

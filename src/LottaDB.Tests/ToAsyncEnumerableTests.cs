@@ -75,5 +75,5 @@ public class ToAsyncEnumerableTests
         Assert.Equal(5, results.Count);
     }
 
-   
+
 }
