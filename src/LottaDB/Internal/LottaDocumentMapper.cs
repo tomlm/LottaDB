@@ -1,13 +1,12 @@
-using System.ComponentModel;
-using System.Linq.Expressions;
-using System.Reflection;
-using System.Text.Json;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Fluent;
 using Lucene.Net.Linq.Mapping;
+using System.Linq.Expressions;
+using System.Reflection;
+using System.Text.Json;
 using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;
@@ -23,6 +22,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("yyyyMMddTHHmmssfffZ");
     private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("yyyyMMddTHHmmssfffZ");
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
+    public const string KEY_FIELD = "_key_";
 
     public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta = null)
         : base(version, analyzer)
@@ -67,7 +67,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         foreach (var propName in source.KeyProperties)
         {
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
-            AddKeyField(fieldMapper);
+            AddKeyField(new LottaDocumentKeyFieldMapper<T>(fieldMapper));
         }
 
         foreach (var propName in source.AllProperties)
@@ -82,6 +82,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         var contentProps = meta.IndexedProperties
             .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
             .Select(p => p.Property);
+        
         AddField(new ContentFieldMapper<T>(version, analyzer, contentProps));
     }
 
@@ -95,7 +96,10 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
     public override void MapFieldsToDocument(T source, Document target)
     {
+
         base.MapFieldsToDocument(source, target);
+
+//        target.Add(new StringField(KEY_FIELD, key), Field.Store.YES));
     }
 
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
@@ -133,3 +137,4 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         };
     }
 }
+

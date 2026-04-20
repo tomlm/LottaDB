@@ -9,7 +9,7 @@
 <PropertyGroup>
     <Version>1.0.2</Version>
     <AssemblyVersion>1.0.2.0</AssemblyVersion>
-    <Description>LottaDB is a .NET library that stores POCO objects => Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
+    <Description>LottaDB is a .NET library that stores POCO objects =&gt; Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -38,6 +38,11 @@
     <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.1-beta00017" />
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
     <PackageReference Include="Ulid" Version="1.4.1" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Lucene.Net.Linq\source\Lucene.Net.Linq\Lucene.Net.Linq.csproj" />
   </ItemGroup>
 
 </Project>

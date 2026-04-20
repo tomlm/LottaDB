@@ -14,8 +14,6 @@ namespace Lotta.Tests;
 
 public class LottaDBFixture : IDisposable
 {
-    private const string DefaultTestName = "LottaTests";
-
     public LottaDBFixture()
     {
     }
@@ -36,11 +34,11 @@ public class LottaDBFixture : IDisposable
         return directory;
     }
 
-    public static LottaDB CreateDb(Action<ILottaConfiguration>? configure = null,
+    public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configure = null,
         [CallerMemberName] string? testName = null)
     {
         testName = string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
-        return new LottaDB(testName!, options =>
+        var db = new LottaDB(testName!, "UseDevelopmentStorage=true", options =>
         {
             options.CreateTableServiceClient = CreateMockTableServiceClient;
             options.CreateLuceneDirectory = CreateMockDirectory;
@@ -58,6 +56,7 @@ public class LottaDBFixture : IDisposable
             options.Store<Employee>();
             configure?.Invoke(options);
         });
-
+        await db.ResetAsync();
+        return db;
     }
 }

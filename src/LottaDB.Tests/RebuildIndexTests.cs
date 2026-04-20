@@ -5,7 +5,7 @@ public class RebuildIndexTests
     [Fact]
     public async Task RebuildIndex_RestoresSearchResults()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
@@ -25,7 +25,7 @@ public class RebuildIndexTests
     [Fact]
     public async Task RebuildIndex_EmptyTable_CreatesEmptyIndex()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         // Rebuild with no data — should not throw
         await db.RebuildIndex(TestContext.Current.CancellationToken);
@@ -38,7 +38,7 @@ public class RebuildIndexTests
     public async Task RebuildIndex_DoesNotRerunBuilders()
     {
         // Rebuild only re-indexes from table storage, does not re-run On<T> handlers
-        var db = LottaDBFixture.CreateDb(opts =>
+        var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db) =>
             {
@@ -61,5 +61,51 @@ public class RebuildIndexTests
         // NoteView should still be searchable (its index wasn't rebuilt/cleared)
         var viewAfter = db.Search<NoteView>().ToList();
         Assert.Single(viewAfter);
+    }
+
+    [Fact]
+    public async Task ResetAsync_ClearsTableAndIndex()
+    {
+        var db = await LottaDBFixture.CreateDbAsync();
+
+        await db.SaveAsync(new Actor { Username = "reset1", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Note { NoteId = "rn1", AuthorId = "reset1", Content = "Hello", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+
+        // Verify data exists
+        Assert.NotNull(await db.GetAsync<Actor>("reset1", TestContext.Current.CancellationToken));
+        Assert.Equal(1, db.Search<Actor>().Count());
+
+        await db.ResetAsync(TestContext.Current.CancellationToken);
+
+        // Table storage cleared
+        Assert.Null(await db.GetAsync<Actor>("reset1", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<Note>("rn1", TestContext.Current.CancellationToken));
+
+        // Lucene index cleared
+        Assert.Empty(db.Search<Actor>().ToList());
+        Assert.Empty(db.Search<Note>().ToList());
+    }
+
+    [Fact]
+    public async Task ResetAsync_CanSaveAfterReset()
+    {
+        var db = await LottaDBFixture.CreateDbAsync();
+
+        await db.SaveAsync(new Actor { Username = "before", DisplayName = "Before" }, TestContext.Current.CancellationToken);
+        await db.ResetAsync(TestContext.Current.CancellationToken);
+
+        // DB should be fully functional after reset
+        await db.SaveAsync(new Actor { Username = "after", DisplayName = "After" }, TestContext.Current.CancellationToken);
+        var loaded = await db.GetAsync<Actor>("after", TestContext.Current.CancellationToken);
+        Assert.NotNull(loaded);
+        Assert.Equal("After", loaded.DisplayName);
+
+        // Old data still gone
+        Assert.Null(await db.GetAsync<Actor>("before", TestContext.Current.CancellationToken));
+
+        // Search works for new data
+        var results = db.Search<Actor>().ToList();
+        Assert.Single(results);
+        Assert.Equal("after", results[0].Username);
     }
 }

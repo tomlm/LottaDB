@@ -6,7 +6,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_MutatesAndSaves()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         var actor = new Actor { Domain = "change.test", Username = "mutate", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
@@ -25,7 +25,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ActionOverload_MutatesAndSaves()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         var actor = new Actor { Domain = "change.test", Username = "mutate-action", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
@@ -40,7 +40,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ByObject_ExtractsKeys()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         var actor = new Actor { Domain = "change.test", Username = "by-obj", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
@@ -61,7 +61,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ReturnsObjectResult()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         var actor = new Actor { Domain = "change.test", Username = "result", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
@@ -79,7 +79,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_NonExistent_Throws()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             db.ChangeAsync<Actor>("ghost", a =>
             {
@@ -91,7 +91,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_MutationIsPure_CalledAtLeastOnce()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "change.test", Username = "pure", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
@@ -109,7 +109,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ActionOverload_CalledAtLeastOnce()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Domain = "change.test", Username = "pure-action", DisplayName = "Before" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
 
@@ -135,7 +135,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetriesOnEtagConflict_MergesWithConcurrentWrite()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
 
         // V1
@@ -208,7 +208,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_Retry_FiresOnceForCommittedValue()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "handler-once";
 
@@ -273,7 +273,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_ParallelWriters_NoLostUpdates()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "parallel-counter";
         const int N = 10;
@@ -308,7 +308,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetryAfterConflict_LuceneReflectsFinalCommit()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "lucene-final";
 
@@ -363,7 +363,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task ChangeAsync_RetryAfterConflict_MutatorSeesFreshInputOnRetry()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "fresh-input";
 

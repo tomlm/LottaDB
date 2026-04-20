@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using System;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Text;
@@ -102,6 +103,26 @@ internal class TableStorageAdapter
         }
     }
 
+    internal async Task<(object? obj, Type? type)> GetAsync(string tableName, string key)
+    {
+        var table = GetTable(tableName);
+        try
+        {
+            var response = await table.GetEntityAsync<TableEntity>(PK, key, select: new[] { "Type", "Json" });
+            var entity = response.Value;
+            var typeName = entity.GetString("Type");
+            var json = entity.GetString("Json");
+            var type = TypeUtils.ResolveType(typeName);
+            if (type == null) return (null, null);
+            var obj = JsonSerializer.Deserialize(json, type);
+            return (obj, type);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return (null, null);
+        }
+    }
+
     public string? GetETag(string tableName, string key)
     {
         var table = GetTable(tableName);
@@ -141,6 +162,20 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
+    public IAsyncEnumerable<object> QueryAsync(string tableName,
+        IEnumerable<string> keys,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var keyFilter = string.Join(" or ", keys.Select(k => "RowKey eq '" + k + "'"));
+        var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
+        return table.QueryAsync<LottaTableEntity>(query,
+                maxPerPage: maxPerPage,
+                cancellationToken: cancellationToken)
+            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+    }
+
     public IAsyncEnumerable<T> QueryAsync<T>(string tableName,
         Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
@@ -148,7 +183,9 @@ internal class TableStorageAdapter
         where T : class, new()
     {
         var table = GetTable(tableName);
-        var query = GetODataQuery<T>(predicate);
+        var query = (predicate == null) ?
+            $"PartitionKey eq '{PK}'" :
+            GetODataQuery<T>(predicate);
         return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
             .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
     }
@@ -179,6 +216,17 @@ internal class TableStorageAdapter
 
         return table.Query<LottaTableEntity>(query, maxPerPage, cancellationToken: cancellationToken)
             .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+    }
+
+    public IEnumerable<string> QueryKeys<T>(string tableName,
+        Expression<Func<T, bool>>? predicate = null,
+        CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        var table = GetTable(tableName);
+        var query = GetODataQuery<T>(predicate);
+        return table.Query<TableEntity>(query, select: new[] { "RowKey" }, cancellationToken: cancellationToken)
+            .Select(entity => entity.RowKey);
     }
 
     private static string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
@@ -220,6 +268,53 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         await table.DeleteAsync();
+    }
+
+    public async Task ResetTableAsync(string tableName)
+    {
+        var table = GetTable(tableName);
+        await table.DeleteAsync();
+        _tables.Remove(tableName);
+        GetTable(tableName); // re-creates via CreateIfNotExists
+    }
+
+    internal static TableTransactionAction CreateUpsertAction(string key, object obj, TypeMetadata meta)
+    {
+        var entity = BuildEntity(key, obj, meta);
+        return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
+    }
+
+    internal static TableTransactionAction CreateDeleteAction(string key)
+    {
+        return new TableTransactionAction(TableTransactionActionType.Delete,
+            new TableEntity(PK, key) { ETag = ETag.All });
+    }
+
+    internal async Task SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)
+    {
+        if (actions.Count == 0) return;
+        var table = GetTable(tableName);
+        try
+        {
+            await table.SubmitTransactionAsync(actions);
+        }
+        catch (Exception)
+        {
+            // Fallback for providers that don't support transactions (e.g., Spotflow in-memory)
+            foreach (var action in actions)
+            {
+                switch (action.ActionType)
+                {
+                    case TableTransactionActionType.UpsertReplace:
+                        await table.UpsertEntityAsync(action.Entity, TableUpdateMode.Replace);
+                        break;
+                    case TableTransactionActionType.Delete:
+                        try { await table.DeleteEntityAsync(action.Entity.PartitionKey, action.Entity.RowKey); }
+                        catch (RequestFailedException ex) when (ex.Status == 404) { }
+                        break;
+                }
+            }
+        }
     }
 
     private static object ConvertToTableValue(object value)

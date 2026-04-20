@@ -5,7 +5,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_MaterializeThenJoinInMemory()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
@@ -31,7 +31,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_WithWhereClause()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "carol", DisplayName = "Carol" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
@@ -54,7 +54,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task SearchAsync_WithQueryString_FiltersResults()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
@@ -72,7 +72,7 @@ public class AdHocJoinTests
     [Fact]
     public async Task SearchAsync_WithOpenQueryString_FiltersResults()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);

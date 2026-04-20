@@ -7,7 +7,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsKey()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         var result = await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         Assert.NotNull(result);
@@ -16,7 +16,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_CanGetByKey()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor, TestContext.Current.CancellationToken);
         var loaded = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
@@ -27,7 +27,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_WithAttributes_ExtractsTags()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
@@ -41,7 +41,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_SetKey_Works()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -57,7 +57,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_AddQueryable_Works()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -78,7 +78,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_DefaultTableName_WorksForMultipleTypes()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
         await db.SaveAsync(new Actor { Username = "alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
@@ -105,9 +105,22 @@ public class StoreRegistrationTests
     }
 
     [Fact]
+    public async Task Store_UnregisteredType_BulkSave_Throws()
+    {
+        var db = new LottaDB("UnregisteredBulkThrows", "UseDeveloperStorage=true", (c) =>
+        {
+            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
+            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            db.SaveManyAsync(new[] { new Actor { Username = "alice" } }, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Store_AutoKey_GeneratesUlid()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         // LogEntry has [Key(Mode = KeyMode.Auto)] — Id is generated on save
         var entry = new LogEntry { Message = "auto key test", Timestamp = DateTimeOffset.UtcNow };
@@ -127,7 +140,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_AutoKey_MultipleObjects_UniqueKeys()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         var entry1 = new LogEntry { Message = "first" };
         var entry2 = new LogEntry { Message = "second" };
@@ -143,7 +156,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_AutoKey_ExistingValue_NotOverwritten()
     {
-        var db = LottaDBFixture.CreateDb();
+        var db = await LottaDBFixture.CreateDbAsync();
 
         // If Id is already set, Auto mode should use it (upsert)
         var entry = new LogEntry { Id = "my-custom-id", Message = "explicit" };
@@ -158,7 +171,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_Fluent_CustomKey()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
@@ -176,7 +189,7 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_MixedAttributeAndFluent_FluentWins()
     {
-        var db = LottaDBFixture.CreateDb(opts =>
+        var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
             opts.Store<Actor>(s =>
             {
