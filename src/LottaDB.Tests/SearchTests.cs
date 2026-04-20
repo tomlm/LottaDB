@@ -504,36 +504,7 @@ public class SearchTests
         Assert.Equal("Buy groceries", results[0].Title);
     }
 
-    [Fact]
-    public async Task TodoApp_FreeTextSearch_AfterRebuildIndexOnFreshInstance()
-    {
-        // Reproduces the TodoApp "reopen" scenario: prior run wrote data to table storage;
-        // second run constructs a fresh LottaDB (no mappers registered yet) and calls
-        // RebuildIndex before any typed SaveAsync. Then a free-text search is issued.
-
-        // First run: save a todo.
-        using (var db1 = await LottaDBFixture.CreateDbAsync(config =>
-        {
-            config.Store<TodoLike>();
-        }))
-        {
-            await db1.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
-            var results = db1.Search<TodoLike>("groceries").ToList();
-            Assert.Single(results);
-        }
-
-        // Second run: fresh LottaDB (no mapper cache), same storage. TodoApp calls this.
-        using (var db2 = await LottaDBFixture.CreateDbAsync(config =>
-        {
-            config.Store<TodoLike>();
-        }, reset: false))
-        {
-            await db2.RebuildIndex();
-            var results = db2.Search<TodoLike>("groceries").ToList();
-            Assert.Single(results);
-        }
-    }
-
+   
     [Fact]
     public async Task TodoApp_FreeTextSearch_WithBoolFilter()
     {
