@@ -43,7 +43,18 @@ internal sealed class LottaDocumentKeyFieldMapper<T> : IFieldMapper<T>, IDocumen
 
     public string EscapeSpecialCharacters(string str) => _inner.EscapeSpecialCharacters(str);
 
-    public Query CreateQuery(string pattern) => new TermQuery(new Term(LottaDB.KEY_FIELD, pattern));
+    public Query CreateQuery(string pattern)
+    {
+        var queryParser = new Lucene.Net.QueryParsers.Classic.QueryParser(
+            Lucene.Net.Util.LuceneVersion.LUCENE_48,
+            LottaDB.KEY_FIELD,
+            new Lucene.Net.Analysis.Core.KeywordAnalyzer())
+        {
+            AllowLeadingWildcard = true,
+            LowercaseExpandedTerms = false,
+        };
+        return queryParser.Parse(pattern);
+    }
 
     public Query CreateRangeQuery(object lowerBound, object upperBound, RangeType lowerRange, RangeType upperRange)
         => _inner.CreateRangeQuery(lowerBound, upperBound, lowerRange, upperRange);

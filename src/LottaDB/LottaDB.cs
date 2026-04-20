@@ -3,17 +3,12 @@ using Lotta.Internal;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
 using Lucene.Net.Linq;
+using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
-using Lucene.Net.Search;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;
-using System.Numerics;
-using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
-using static Lucene.Net.Search.FieldValueHitQueue;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
 
@@ -35,10 +30,11 @@ public class LottaDB : IDisposable
     private readonly object _luceneLock = new();
     private CancellationTokenSource _searchCT = new CancellationTokenSource();
     private IndexWriter _indexWriter;
+    private volatile bool _indexDirty;
     private bool _disposedValue;
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
-    private readonly ConcurrentDictionary<Type, object> _mappers = new();
+    private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
     private readonly ConcurrentDictionary<Type, List<object>> _handlers = new();
 
     // Cycle detection: tracks object keys being processed in the current call chain
@@ -72,8 +68,17 @@ public class LottaDB : IDisposable
         InitializeMetadata();
         InitializeMappers();
         InitializeHandlers();
+
+        // Build a per-field analyzer that merges all mapper analyzers.
+        // Default is KeywordAnalyzer (matching DocumentMapperBase) so unregistered
+        // fields like _key_ are stored verbatim. Per-type field analyzers are merged below.
+        var perFieldAnalyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+        perFieldAnalyzer.AddAnalyzer(KEY_FIELD, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+        foreach (var mapper in _mappers.Values)
+            perFieldAnalyzer.Merge(mapper.Analyzer);
+
         _indexWriter = new IndexWriter(_directory,
-            new IndexWriterConfig(LuceneVersion.LUCENE_48, _config.Analyzer)
+            new IndexWriterConfig(LuceneVersion.LUCENE_48, perFieldAnalyzer)
             {
                 OpenMode = OpenMode.CREATE_OR_APPEND,
                 UseCompoundFile = true,
@@ -105,7 +110,7 @@ public class LottaDB : IDisposable
 
     private void WarmUpMapper<T>() where T : class, new()
     {
-        //        using var _ = _lucene.OpenSession<T>(GetMapper<T>());
+        GetMapper<T>(); // pre-populate so the per-field analyzer can be merged
     }
 
     public LottaDB(string name, Action<LottaConfiguration>? options = null)
@@ -160,14 +165,14 @@ public class LottaDB : IDisposable
         });
     }
 
-    private object GetMapper(Type type)
+    private IDocumentMapper GetMapper(Type type)
     {
         return _mappers.GetOrAdd(type, static (t, state) =>
         {
             var db = (LottaDB)state!;
             db._metadata.TryGetValue(t, out var meta);
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(t);
-            return Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta)!;
+            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta)!;
         }, this);
     }
 
@@ -195,7 +200,7 @@ public class LottaDB : IDisposable
 
         SaveLuceneObject(key, entity, mapper);
 
-        _lazySearcherTask = ReloadSearcherAsync(lazy: true); // best effort async refresh; handlers will see the new index state on their own reloads
+        _lazySearcherTask = ReloadSearcherAsync(lazy: true);
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
@@ -205,7 +210,7 @@ public class LottaDB : IDisposable
         var errors = _chainErrors.Value ??= new List<Exception>();
         changes.Add(change);
 
-        await RunHandlersAsync(entity, TriggerKind.Saved, errors, ct);
+        await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, ct);
 
         if (isRoot)
         {
@@ -249,7 +254,7 @@ public class LottaDB : IDisposable
 
         DeleteLuceneObject(key);
 
-        _lazySearcherTask = ReloadSearcherAsync(lazy: true); // best effort async refresh; handlers will see the new index state on their own reloads
+        _lazySearcherTask = ReloadSearcherAsync(lazy: true);
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
 
@@ -413,7 +418,7 @@ public class LottaDB : IDisposable
     /// <param name="query">Optional Lucene query string to pre-filter results.</param>
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
-        if (!_lazySearcherTask.IsCompleted)
+        if (_indexDirty || !_lazySearcherTask.IsCompleted)
         {
             _lazySearcherTask = ReloadSearcherAsync();
             _lazySearcherTask.Wait();
@@ -476,6 +481,7 @@ public class LottaDB : IDisposable
             Debug.Print("rebuild searcher...");
             _indexWriter.Commit();
             _lucene.Refresh();
+            _indexDirty = false;
         }
     }
 
@@ -519,7 +525,14 @@ public class LottaDB : IDisposable
         // 1. Delete and recreate table storage
         await _tableAdapter.ResetTableAsync(_name);
 
-        // TODO delete all documents from Lucene AzureDirectory
+        // 2. Delete all documents from Lucene index
+        lock (_indexWriter)
+        {
+            _indexWriter.DeleteAll();
+            _indexWriter.Commit();
+            _lucene.Refresh();
+            _indexDirty = false;
+        }
     }
 
     // === Lucene session helpers ===
@@ -528,27 +541,28 @@ public class LottaDB : IDisposable
     /// Add an entity to the Lucene index. Reuses a shared session if one is active (bulk operations),
     /// otherwise opens and immediately disposes a dedicated session.
     /// </summary>
-    private void SaveLuceneObject(string key, object entity, dynamic mapper)
+    private void SaveLuceneObject(string key, object entity, IDocumentMapper mapper)
     {
         lock (_indexWriter)
         {
             DeleteLuceneObject(key);
 
             var document = new Document();
-            mapper.ToDocument((dynamic)entity, document);
+            mapper.ToDocument(entity, document);
             _indexWriter.AddDocument(document);
+            _indexDirty = true;
         }
     }
 
     /// <summary>
-    /// Delete an entity from the Lucene index. Reuses a shared session if one is active (bulk operations),
-    /// otherwise opens and immediately disposes a dedicated session.
+    /// Delete an entity from the Lucene index.
     /// </summary>
     private void DeleteLuceneObject(string key)
     {
         lock (_indexWriter)
         {
             _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+            _indexDirty = true;
         }
     }
 
@@ -577,7 +591,7 @@ public class LottaDB : IDisposable
 
                 var meta = GetMeta(entity.GetType());
                 var key = meta.GetKey(entity);
-                dynamic mapper = GetMapper(entity.GetType());
+                var mapper = GetMapper(entity.GetType());
                 if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
                     meta.SetKey(entity, key);
 
@@ -609,7 +623,7 @@ public class LottaDB : IDisposable
                 // but do their own individual table storage writes
                 _chainChanges.Value = allChanges;
                 _chainErrors.Value = allErrors;
-                await RunHandlersAsync(entity, TriggerKind.Saved, allErrors, ct);
+                await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, allErrors, ct);
             }
 
             // Flush remaining table storage batch
