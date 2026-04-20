@@ -26,7 +26,7 @@ public class TodoStore
         {
             config.Store<TodoItem>();
         });
-        _db.RebuildIndex().Wait();
+        _db.RebuildSearchIndex().Wait();
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>

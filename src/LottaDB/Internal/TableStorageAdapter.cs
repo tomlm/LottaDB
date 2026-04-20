@@ -260,16 +260,16 @@ internal class TableStorageAdapter
         return JsonSerializer.Deserialize<T>(json);
     }
 
-    public async Task DeleteTableAsync(string tableName)
+    public async Task DeleteTableAsync(string tableName, CancellationToken ct = default)
     {
         var table = GetTable(tableName);
-        await table.DeleteAsync();
+        await table.DeleteAsync(ct);
     }
 
-    public async Task ResetTableAsync(string tableName)
+    public async Task ResetTableAsync(string tableName, CancellationToken ct = default)
     {
         var table = GetTable(tableName);
-        await table.DeleteAsync();
+        await table.DeleteAsync(ct);
         _tables.Remove(tableName);
         GetTable(tableName); // re-creates via CreateIfNotExists
     }

@@ -113,6 +113,25 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
+    public async Task DeleteDatabaseAsync_RemovesTableAndIndex()
+    {
+        using (var db = await LottaDBFixture.CreateDbAsync(reset: true))
+        {
+            await db.SaveAsync(new Actor
+            {
+                Domain = "crud.test",
+                Username = "delete-db",
+                DisplayName = "Delete Database"
+            }, TestContext.Current.CancellationToken);
+
+            Assert.NotNull(await db.GetAsync<Actor>("delete-db", TestContext.Current.CancellationToken));
+            Assert.Single(db.Search<Actor>().Where(a => a.Username == "delete-db"));
+
+            await db.DeleteDatabaseAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task SaveAsync_JsonPreservesFullPoco()
     {
         var db = await LottaDBFixture.CreateDbAsync();

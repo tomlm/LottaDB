@@ -5,6 +5,7 @@ using Lucene.Net.Index;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
+using Lucene.Net.Store;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
@@ -20,14 +21,15 @@ namespace Lotta;
 /// </summary>
 public class LottaDB : IDisposable
 {
+    private readonly object _lock = new object();
     private readonly string _name;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
-    private readonly LuceneDirectory _directory;
-    private readonly ReadOnlyLuceneDataProvider _lucene;
+    private LuceneDirectory _directory;
+    private ReadOnlyLuceneDataProvider _lucene;
     private Task _lazySearcherTask = Task.CompletedTask;
     private CancellationTokenSource _searchCT = new CancellationTokenSource();
-    private readonly IndexWriter _indexWriter;
+    private IndexWriter _indexWriter;
     private volatile bool _indexDirty;
     private bool _disposed;
 
@@ -422,7 +424,7 @@ public class LottaDB : IDisposable
             _lazySearcherTask.Wait();
         }
 
-        lock (_indexWriter)
+        lock (_lock)
         {
             GetMeta<T>();
             var mapper = GetMapper<T>();
@@ -453,7 +455,7 @@ public class LottaDB : IDisposable
     {
         if (!_searchCT.IsCancellationRequested)
         {
-            lock (_indexWriter)
+            lock (_lock)
             {
                 _searchCT.Cancel();
                 _searchCT.Dispose();
@@ -473,7 +475,7 @@ public class LottaDB : IDisposable
             }
         }
 
-        lock (_indexWriter)
+        lock (_lock)
         {
             if (!_disposed)
             {
@@ -506,27 +508,52 @@ public class LottaDB : IDisposable
     /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
-    public async Task RebuildIndex(CancellationToken ct = default)
+    public async Task RebuildSearchIndex(CancellationToken ct = default)
     {
-        var objects = await _tableAdapter.GetAllAsync(_name, cancellationToken: ct).ToListAsync();
-        await SaveManyAsync((IEnumerable<object>)objects);
+        await SaveManyAsync(await _tableAdapter.GetAllAsync(_name, cancellationToken: ct).ToListAsync());
     }
 
     /// <summary>
     /// Reset the database: deletes and recreates the table, clears and reinitializes the Lucene index.
     /// </summary>
-    public async Task ResetAsync(CancellationToken ct = default)
+    public async Task ResetDatabaseAsync(CancellationToken ct = default)
     {
         // 1. Delete and recreate table storage
         await _tableAdapter.ResetTableAsync(_name);
 
         // 2. Delete all documents from Lucene index
-        lock (_indexWriter)
+        lock (_lock)
         {
             _indexWriter.DeleteAll();
             _indexWriter.Commit();
             _lucene.Refresh();
             _indexDirty = false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the table, deletes the index and disposes all resources. Use with caution — this is not reversible.
+    /// This object will not be usable after calling this method. Dispose the LottaDB instance when you're done to free resources. 
+    /// </summary>
+    /// <param name="ct"></param>
+    /// <returns></returns>
+    public async Task DeleteDatabaseAsync(CancellationToken ct = default)
+    {
+        await _tableAdapter.DeleteTableAsync(_name, ct);
+
+        lock (_lock)
+        {
+            _indexWriter.Dispose();
+            _indexWriter = null!;
+            _lucene.Dispose();
+            _lucene = null!;
+
+            // Then delete the directory
+            foreach (var file in _directory.ListAll())
+                _directory.DeleteFile(file);
+
+            _directory.Dispose();
+            _directory = null!;
         }
     }
 
@@ -538,7 +565,7 @@ public class LottaDB : IDisposable
     /// </summary>
     private void SaveLuceneObject(string key, object entity, IDocumentMapper mapper)
     {
-        lock (_indexWriter)
+        lock (_lock)
         {
             DeleteLuceneObject(key);
 
@@ -554,7 +581,7 @@ public class LottaDB : IDisposable
     /// </summary>
     private void DeleteLuceneObject(string key)
     {
-        lock (_indexWriter)
+        lock (_lock)
         {
             _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
             _indexDirty = true;
@@ -769,12 +796,15 @@ public class LottaDB : IDisposable
         {
             if (disposing)
             {
-                lock (_indexWriter)
+                lock (_lock)
                 {
-                    _indexWriter.Commit();
-                    _indexWriter.Dispose();
-                    _lucene.Dispose();
-                    _directory.Dispose();
+                    _indexWriter?.Commit();
+                    _indexWriter?.Dispose();
+                    _indexWriter = null!;
+                    _lucene?.Dispose();
+                    _lucene = null!;
+                    _directory?.Dispose();
+                    _directory = null!;
                 }
             }
 

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Xunit.Sdk;
 
 namespace Lotta.Tests;
 
@@ -35,7 +36,10 @@ public class LottaDBFixture : IDisposable
             configureAction?.Invoke(config);
         });
         if (reset)
-            await db.ResetAsync();
+            await db.ResetDatabaseAsync();
         return db;
     }
+
+    public static string GetTestName([CallerMemberName] string testName = null)
+        => string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
 }

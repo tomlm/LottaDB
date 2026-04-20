@@ -15,7 +15,7 @@ public class RebuildIndexTests
         Assert.Equal(2, before.Count);
 
         // Rebuild the index (simulates recovery after Lucene data loss)
-        await db.RebuildIndex(TestContext.Current.CancellationToken);
+        await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         // Should still find everything
         var after = db.Search<Actor>().ToList();
@@ -28,7 +28,7 @@ public class RebuildIndexTests
         var db = await LottaDBFixture.CreateDbAsync();
 
         // Rebuild with no data — should not throw
-        await db.RebuildIndex(TestContext.Current.CancellationToken);
+        await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>().ToList();
         Assert.Empty(results);
@@ -56,7 +56,7 @@ public class RebuildIndexTests
         Assert.Single(viewBefore);
 
         // Rebuild only Actor index — should not affect NoteViews
-        await db.RebuildIndex(TestContext.Current.CancellationToken);
+        await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         // NoteView should still be searchable (its index wasn't rebuilt/cleared)
         var viewAfter = db.Search<NoteView>().ToList();
@@ -75,7 +75,7 @@ public class RebuildIndexTests
         Assert.NotNull(await db.GetAsync<Actor>("reset1", TestContext.Current.CancellationToken));
         Assert.Equal(1, db.Search<Actor>().Count());
 
-        await db.ResetAsync(TestContext.Current.CancellationToken);
+        await db.ResetDatabaseAsync(TestContext.Current.CancellationToken);
 
         // Table storage cleared
         Assert.Null(await db.GetAsync<Actor>("reset1", TestContext.Current.CancellationToken));
@@ -92,7 +92,7 @@ public class RebuildIndexTests
         var db = await LottaDBFixture.CreateDbAsync();
 
         await db.SaveAsync(new Actor { Username = "before", DisplayName = "Before" }, TestContext.Current.CancellationToken);
-        await db.ResetAsync(TestContext.Current.CancellationToken);
+        await db.ResetDatabaseAsync(TestContext.Current.CancellationToken);
 
         // DB should be fully functional after reset
         await db.SaveAsync(new Actor { Username = "after", DisplayName = "After" }, TestContext.Current.CancellationToken);

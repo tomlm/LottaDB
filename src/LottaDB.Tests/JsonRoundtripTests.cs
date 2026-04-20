@@ -277,7 +277,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string> { ["k"] = "v" }
         }, TestContext.Current.CancellationToken);
 
-        await db.RebuildIndex(TestContext.Current.CancellationToken);
+        await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         var result = db.Search<OrderWithLines>().First();
         Assert.Equal("rebuild-complex", result.OrderId);
