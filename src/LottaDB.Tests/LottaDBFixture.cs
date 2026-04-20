@@ -1,11 +1,5 @@
-using Azure;
 using Azure.Data.Tables;
-using Lotta;
 using Lucene.Net.Store;
-using Lucene.Net.Store.Azure;
-using Lucene.Net.Util;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
 using System.Runtime.CompilerServices;
@@ -29,34 +23,37 @@ public class LottaDBFixture : IDisposable
 
     public static Lucene.Net.Store.Directory CreateMockDirectory(string name)
     {
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
+        var directory = new RAMDirectory();
+        directory.SetLockFactory(NoLockFactory.GetNoLockFactory());
         return directory;
     }
 
-    public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configure = null,
+    public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configureAction = null,
+        bool reset = true,
         [CallerMemberName] string? testName = null)
     {
         testName = string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
-        var db = new LottaDB(testName!, "UseDevelopmentStorage=true", options =>
+        var db = new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
         {
-            options.CreateTableServiceClient = CreateMockTableServiceClient;
-            options.CreateLuceneDirectory = CreateMockDirectory;
-            options.Store<Actor>();
-            options.Store<Note>();
-            options.Store<NoteView>();
-            options.Store<ModerationView>();
-            options.Store<OrderWithLines>();
-            options.Store<CycleA>();
-            options.Store<CycleB>();
-            options.Store<FeedEntry>();
-            options.Store<LogEntry>();
-            options.Store<BaseEntity>();
-            options.Store<Person>();
-            options.Store<Employee>();
-            configure?.Invoke(options);
+            config.ConfigureTestStorage();
+
+            config.Store<Actor>();
+            config.Store<Note>();
+            config.Store<NoteView>();
+            config.Store<ModerationView>();
+            config.Store<OrderWithLines>();
+            config.Store<CycleA>();
+            config.Store<CycleB>();
+            config.Store<FeedEntry>();
+            config.Store<LogEntry>();
+            config.Store<BaseEntity>();
+            config.Store<Person>();
+            config.Store<Employee>();
+
+            configureAction?.Invoke(config);
         });
-        await db.ResetAsync();
+        if (reset)
+            await db.ResetAsync();
         return db;
     }
 }

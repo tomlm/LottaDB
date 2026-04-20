@@ -1,8 +1,10 @@
+using System.Runtime.CompilerServices;
+
 namespace Lotta.Tests;
 
 public class CascadingViewTests
 {
-    private async Task<LottaDB> CreateDbAsync()
+    private async Task<LottaDB> CreateDbAsync([CallerMemberName] string? testName = null)
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
@@ -61,7 +63,7 @@ public class CascadingViewTests
                     Published = nv.Published,
                 });
             });
-        });
+        }, testName: testName);
     }
 
     [Fact]

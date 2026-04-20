@@ -15,24 +15,23 @@ public class FluentConfigTests
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        return new LottaDB(testName!, "UseDeveloperStorage=true", options =>
+        return new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
         {
             // override table storage with mock ram table storage/RamDirectory
-            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            config.ConfigureTestStorage();
 
-            options.Store<BareActor>(s =>
+            config.Store<BareActor>(s =>
             {
                 s.SetKey(a => a.Username);
                 s.AddQueryable(a => a.DisplayName).NotAnalyzed();
             });
-            options.Store<BareNote>(s =>
+            config.Store<BareNote>(s =>
             {
                 s.SetKey(n => n.NoteId);
                 s.AddQueryable(n => n.AuthorId);
                 s.AddQueryable(n => n.Content);
             });
-            extra?.Invoke(options);
+            extra?.Invoke(config);
         });
     }
 
@@ -429,10 +428,9 @@ public class FluentConfigTests
     public async Task Fluent_CompositeKey()
     {
 
-        var db = new LottaDB("FluentCompositeKey", "UseDeveloperStorage=true", options =>
+        var db = new LottaDB("FluentCompositeKey", "UseDevelopmentStorage=true", options =>
         {
-            options.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            options.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            options.ConfigureTestStorage();
 
             options.Store<BareActor>(s =>
             {

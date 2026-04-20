@@ -1,9 +1,6 @@
 using Lotta;
 using Lucene.Net.Linq;
-using Lucene.Net.Store;
 using Microsoft.Extensions.Configuration;
-using Spotflow.InMemory.Azure.Storage;
-using Spotflow.InMemory.Azure.Storage.Tables;
 using System.Diagnostics;
 using TodoApp.Models;
 
@@ -19,15 +16,15 @@ namespace TodoApp.Services;
 /// </summary>
 public class TodoStore
 {
-    private readonly Lotta.LottaDB _db;
+    private readonly LottaDB _db;
 
     public TodoStore(IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("TableStorage");
 
-        _db = new LottaDB("todos", connectionString!, lotta =>
+        _db = new LottaDB("todos", connectionString!, config =>
         {
-            lotta.Store<TodoItem>();
+            config.Store<TodoItem>();
         });
         _db.RebuildIndex().Wait();
     }

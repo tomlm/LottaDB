@@ -1,8 +1,10 @@
+using System.Runtime.CompilerServices;
+
 namespace Lotta.Tests;
 
 public class CreateViewTests
 {
-    private async Task<LottaDB> CreateDbAsync()
+    private async Task<LottaDB> CreateDbAsync([CallerMemberName] string? testName = null)
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
@@ -47,7 +49,7 @@ public class CreateViewTests
                     });
                 }
             });
-        });
+        }, testName: testName);
     }
 
     [Fact]

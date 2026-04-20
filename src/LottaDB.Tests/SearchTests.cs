@@ -321,7 +321,7 @@ public class SearchTests
         await db.SaveAsync(new Note { NoteId = "n3", AuthorId = "carol", Content = "unrelated text" });
 
         // "alice" hits the AuthorId field in n1 and the Content field in n2.
-        var x= db.Search<Note>().ToList();
+        var x = db.Search<Note>().ToList();
         var results = db.Search<Note>().Where(n => n.AnyField() == "alice").ToList();
         Assert.Equal(2, results.Count);
         Assert.Contains(results, r => r.NoteId == "n1");
@@ -510,35 +510,30 @@ public class SearchTests
         // Reproduces the TodoApp "reopen" scenario: prior run wrote data to table storage;
         // second run constructs a fresh LottaDB (no mappers registered yet) and calls
         // RebuildIndex before any typed SaveAsync. Then a free-text search is issued.
-        var provider = new Spotflow.InMemory.Azure.Storage.InMemoryStorageProvider();
-        var account = provider.AddAccount("shared");
-        Azure.Data.Tables.TableServiceClient CreateTable(string _) =>
-            Spotflow.InMemory.Azure.Storage.Tables.InMemoryTableServiceClient.FromAccount(account);
-
-        var directory = new Lucene.Net.Store.RAMDirectory();
-        directory.SetLockFactory(Lucene.Net.Store.NoLockFactory.GetNoLockFactory());
-        Lucene.Net.Store.Directory CreateDir(string _) => directory;
 
         // First run: save a todo.
-        var db1 = new Lotta.LottaDB("shared", opts =>
+        using (var db1 = await LottaDBFixture.CreateDbAsync(config =>
         {
-            opts.CreateTableServiceClient = CreateTable;
-            opts.CreateLuceneDirectory = CreateDir;
-            opts.Store<TodoLike>();
-        });
-        await db1.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
+            config.ConfigureTestStorage();
+            config.Store<TodoLike>();
+        }))
+        {
+            await db1.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" });
+            var results = db1.Search<TodoLike>("groceries").ToList();
+            Assert.Single(results);
+        }
 
         // Second run: fresh LottaDB (no mapper cache), same storage. TodoApp calls this.
-        var db2 = new Lotta.LottaDB("shared", opts =>
+        using (var db2 = await LottaDBFixture.CreateDbAsync(config =>
         {
-            opts.CreateTableServiceClient = CreateTable;
-            opts.CreateLuceneDirectory = CreateDir;
-            opts.Store<TodoLike>();
-        });
-        await db2.RebuildIndex();
-
-        var results = db2.Search<TodoLike>("groceries").ToList();
-        Assert.Single(results);
+            config.ConfigureTestStorage();
+            config.Store<TodoLike>();
+        }, reset: false))
+        {
+            await db2.RebuildIndex();
+            var results = db2.Search<TodoLike>("groceries").ToList();
+            Assert.Single(results);
+        }
     }
 
     [Fact]

@@ -9,8 +9,8 @@ namespace Lotta;
 /// </summary>
 public interface ILottaConfiguration
 {
-    Func<string, TableServiceClient> CreateTableServiceClient { get; set; }
-    Func<string, LuceneDirectory> CreateLuceneDirectory { get; set; }
+    Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
+    Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
 
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>

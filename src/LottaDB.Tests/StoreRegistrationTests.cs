@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Configuration;
-
 namespace Lotta.Tests;
 
 public class StoreRegistrationTests
@@ -94,10 +92,9 @@ public class StoreRegistrationTests
     {
         // Create a DB without registering Actor
         // deliberately NOT registering Actor
-        var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDeveloperStorage=true", (c) =>
+        var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDevelopmentStorage=true", (config) =>
         {
-            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            config.ConfigureTestStorage();
         });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -107,10 +104,9 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_UnregisteredType_BulkSave_Throws()
     {
-        var db = new LottaDB("UnregisteredBulkThrows", "UseDeveloperStorage=true", (c) =>
+        var db = new LottaDB("UnregisteredBulkThrows", "UseDevelopmentStorage=true", (c) =>
         {
-            c.CreateTableServiceClient = LottaDBFixture.CreateMockTableServiceClient;
-            c.CreateLuceneDirectory = LottaDBFixture.CreateMockDirectory;
+            c.ConfigureTestStorage();
         });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

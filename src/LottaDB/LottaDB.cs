@@ -25,13 +25,12 @@ public class LottaDB : IDisposable
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private readonly LuceneDirectory _directory;
-    private ReadOnlyLuceneDataProvider _lucene;
+    private readonly ReadOnlyLuceneDataProvider _lucene;
     private Task _lazySearcherTask = Task.CompletedTask;
-    private readonly object _luceneLock = new();
     private CancellationTokenSource _searchCT = new CancellationTokenSource();
-    private IndexWriter _indexWriter;
+    private readonly IndexWriter _indexWriter;
     private volatile bool _indexDirty;
-    private bool _disposedValue;
+    private bool _disposed;
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
@@ -62,8 +61,8 @@ public class LottaDB : IDisposable
     {
         _name = name;
         _config = config;
-        _tableAdapter = new TableStorageAdapter(config.CreateTableServiceClient(name));
-        _directory = config.CreateLuceneDirectory(name);
+        _tableAdapter = new TableStorageAdapter(config.TableServiceClientFactory(name));
+        _directory = config.LuceneDirectoryFactory(name);
 
         InitializeMetadata();
         InitializeMappers();
@@ -424,7 +423,7 @@ public class LottaDB : IDisposable
             _lazySearcherTask.Wait();
         }
 
-        lock (_luceneLock)
+        lock (_indexWriter)
         {
             GetMeta<T>();
             var mapper = GetMapper<T>();
@@ -455,7 +454,7 @@ public class LottaDB : IDisposable
     {
         if (!_searchCT.IsCancellationRequested)
         {
-            lock (_luceneLock)
+            lock (_indexWriter)
             {
                 Debug.Print("Cancelling previous searcher refresh...");
                 _searchCT.Cancel();
@@ -476,12 +475,15 @@ public class LottaDB : IDisposable
             }
         }
 
-        lock (_luceneLock)
+        lock (_indexWriter)
         {
             Debug.Print("rebuild searcher...");
-            _indexWriter.Commit();
-            _lucene.Refresh();
-            _indexDirty = false;
+            if (!_disposed)
+            {
+                _indexWriter.Commit();
+                _lucene.Refresh();
+                _indexDirty = false;
+            }
         }
     }
 
@@ -770,18 +772,22 @@ public class LottaDB : IDisposable
 
     protected virtual void Dispose(bool disposing)
     {
-        if (!_disposedValue)
+        if (!_disposed)
         {
             if (disposing)
             {
-                _lucene.IndexWriter.Commit();
-                _lucene.Dispose();
-                _directory.Dispose();
+                lock (_indexWriter)
+                {
+                    _indexWriter.Commit();
+                    _indexWriter.Dispose();
+                    _lucene.Dispose();
+                    _directory.Dispose();
+                }
             }
 
             // TODO: free unmanaged resources (unmanaged objects) and override finalizer
             // TODO: set large fields to null
-            _disposedValue = true;
+            _disposed = true;
         }
     }
 

@@ -1,8 +1,10 @@
+using System.Runtime.CompilerServices;
+
 namespace Lotta.Tests;
 
 public class CycleDetectionTests
 {
-    private async Task<LottaDB> CreateDbAsync()
+    private async Task<LottaDB> CreateDbAsync([CallerMemberName] string? testName = null)
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
@@ -17,7 +19,7 @@ public class CycleDetectionTests
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleA { Id = $"ca-{b.Id}", Value = $"from-b-{b.Value}" });
             });
-        });
+        }, testName: testName);
     }
 
     [Fact]

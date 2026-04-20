@@ -1,7 +1,6 @@
 using Azure.Data.Tables;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.En;
-using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Store;
 using Lucene.Net.Store.Azure;
 
@@ -17,36 +16,35 @@ public class LottaConfiguration : ILottaConfiguration
 
     public LottaConfiguration()
     {
-        CreateTableServiceClient = name => throw new InvalidOperationException("LottaConfiguration.CreateTableServiceClient is not configured.");
-        CreateLuceneDirectory = name => throw new InvalidOperationException("LottaConfiguration.CreateLuceneDirectory is not configured.");
+        TableServiceClientFactory = name => throw new InvalidOperationException("LottaConfiguration.CreateTableServiceClient is not configured.");
+        LuceneDirectoryFactory = name => throw new InvalidOperationException("LottaConfiguration.CreateLuceneDirectory is not configured.");
     }
 
     public LottaConfiguration(string connectionString)
         : this()
     {
-        if (!String.IsNullOrEmpty(connectionString))
-        {
-            CreateTableServiceClient = name => new TableServiceClient(connectionString);
-            CreateLuceneDirectory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
-        }
+        connectionString = connectionString ?? "UseDevelopmentStorage=true";
+
+        TableServiceClientFactory = name => new TableServiceClient(connectionString);
+        LuceneDirectoryFactory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
     }
 
     /// <summary>
     /// Factory for creating tableservice client. Default if there is a connectionstring is Azure TableServiceClient
     /// otherwise throws an exception. You can override this to provide your own implementation of TableServiceClient
     /// </summary>
-    public Func<string, TableServiceClient> CreateTableServiceClient { get; set; }
+    public Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
 
     /// <summary>
     /// Factory for creating tableservice client. Default if there is a connectionstring is AzureDirectory
     /// otherwise throws an exception. You can override this to provide your own implementation of Directory
     /// </summary>
-    public Func<string, Lucene.Net.Store.Directory> CreateLuceneDirectory { get; set; }
+    public Func<string, Lucene.Net.Store.Directory> LuceneDirectoryFactory { get; set; }
 
     /// <summary>
     /// Default Analyzer to use for indexing/querying
     /// </summary>
-    public Analyzer Analyzer{ get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
+    public Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
 
     /// <summary>
     /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database, 
