@@ -604,6 +604,8 @@ public class LottaDB : IDisposable
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
+        // Buffer Lucene updates until table batch commits successfully
+        var pendingLucene = new List<(string key, object entity, IDocumentMapper mapper)>();
 
         try
         {
@@ -621,46 +623,54 @@ public class LottaDB : IDisposable
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    ApplyPendingLuceneSaves(pendingLucene);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
                 pendingActions.Add(TableStorageAdapter.CreateUpsertAction(key, entity, meta));
                 pendingKeys.Add(key);
+                pendingLucene.Add((key, entity, mapper));
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    ApplyPendingLuceneSaves(pendingLucene);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
-                SaveLuceneObject(key, entity, mapper);
-
                 var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
                 allChanges.Add(change);
 
-                // Run handlers — their writes share our Lucene session via AsyncLocal
-                // but do their own individual table storage writes
                 _chainChanges.Value = allChanges;
                 _chainErrors.Value = allErrors;
                 await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, allErrors, ct);
             }
 
-            // Flush remaining table storage batch
+            // Flush remaining table storage batch, then apply Lucene
             if (pendingActions.Count > 0)
+            {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                ApplyPendingLuceneSaves(pendingLucene);
+            }
         }
         finally
         {
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true); // best effort async refresh; handlers will see the new index state on their own reloads
-
+            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
             _chainChanges.Value = null;
             _chainErrors.Value = null;
         }
 
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
+    }
+
+    private void ApplyPendingLuceneSaves(List<(string key, object entity, IDocumentMapper mapper)> pending)
+    {
+        foreach (var (key, entity, mapper) in pending)
+            SaveLuceneObject(key, entity, mapper);
+        pending.Clear();
     }
 
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> enities, CancellationToken ct = default)
@@ -682,6 +692,8 @@ public class LottaDB : IDisposable
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
+        // Buffer Lucene deletes until table batch commits successfully
+        var pendingLuceneDeletes = new List<string>();
 
         try
         {
@@ -696,21 +708,22 @@ public class LottaDB : IDisposable
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    ApplyPendingLuceneDeletes(pendingLuceneDeletes);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
                 pendingActions.Add(TableStorageAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
+                pendingLuceneDeletes.Add(key);
 
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    ApplyPendingLuceneDeletes(pendingLuceneDeletes);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
-
-                DeleteLuceneObject(key);
 
                 var change = new ObjectChange { Type = entityType!, Key = key, Kind = ChangeKind.Deleted, Object = existing };
                 allChanges.Add(change);
@@ -722,16 +735,26 @@ public class LottaDB : IDisposable
             }
 
             if (pendingActions.Count > 0)
+            {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                ApplyPendingLuceneDeletes(pendingLuceneDeletes);
+            }
         }
         finally
         {
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true); // best effort async refresh; handlers will see the new index state on their own reloads
+            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
             _chainChanges.Value = null;
             _chainErrors.Value = null;
         }
 
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
+    }
+
+    private void ApplyPendingLuceneDeletes(List<string> pending)
+    {
+        foreach (var key in pending)
+            DeleteLuceneObject(key);
+        pending.Clear();
     }
 
     // === On<T> handler engine ===
