@@ -56,7 +56,7 @@ public class Actor
     public string AvatarUrl { get; set; } = "";
 }
 
-using var db = new LottaDB("myapp", tableServiceClient, luceneDirectory, config =>
+using var db = new LottaDB("myapp", "<your Azure Storage connection string>", luceneDirectory, config =>
 {
     config.Store<Actor>();
 });

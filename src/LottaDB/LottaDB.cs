@@ -513,6 +513,11 @@ public class LottaDB : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public async Task RebuildSearchIndex(CancellationToken ct = default)
     {
+        lock(_lock)
+        {
+            _indexWriter.DeleteAll();
+            _indexDirty = true;
+        }
         await SaveManyAsync(await _tableAdapter.GetAllAsync(_name, cancellationToken: ct).ToListAsync());
     }
 

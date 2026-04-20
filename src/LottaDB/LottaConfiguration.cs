@@ -16,8 +16,8 @@ public class LottaConfiguration : ILottaConfiguration
 
     public LottaConfiguration()
     {
-        TableServiceClientFactory = name => throw new InvalidOperationException("LottaConfiguration.CreateTableServiceClient is not configured.");
-        LuceneDirectoryFactory = name => throw new InvalidOperationException("LottaConfiguration.CreateLuceneDirectory is not configured.");
+        TableServiceClientFactory = name => throw new InvalidOperationException("LottaConfiguration.TableServiceClientFactory is not configured.");
+        LuceneDirectoryFactory = name => throw new InvalidOperationException("LottaConfiguration.LuceneDirectoryFactory is not configured.");
     }
 
     public LottaConfiguration(string connectionString)
