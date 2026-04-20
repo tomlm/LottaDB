@@ -162,7 +162,7 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
-    public IAsyncEnumerable<object> QueryAsync(string tableName,
+    public IAsyncEnumerable<object> QueryKeysAsync(string tableName,
         IEnumerable<string> keys,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
@@ -183,19 +183,17 @@ internal class TableStorageAdapter
         where T : class, new()
     {
         var table = GetTable(tableName);
-        var query = (predicate == null) ?
-            $"PartitionKey eq '{PK}'" :
-            GetODataQuery<T>(predicate);
+        var query = GetODataQuery<T>(predicate);
         return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
             .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
     }
 
-    public IEnumerable<object> Query(string tableName,
+    public IAsyncEnumerable<object> GetAllAsync(string tableName,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.Query<LottaTableEntity>(e => e.PartitionKey == PK, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 

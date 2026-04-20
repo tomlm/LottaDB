@@ -514,7 +514,6 @@ public class SearchTests
         // First run: save a todo.
         using (var db1 = await LottaDBFixture.CreateDbAsync(config =>
         {
-            config.ConfigureTestStorage();
             config.Store<TodoLike>();
         }))
         {
@@ -526,7 +525,6 @@ public class SearchTests
         // Second run: fresh LottaDB (no mapper cache), same storage. TodoApp calls this.
         using (var db2 = await LottaDBFixture.CreateDbAsync(config =>
         {
-            config.ConfigureTestStorage();
             config.Store<TodoLike>();
         }, reset: false))
         {

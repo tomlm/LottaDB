@@ -14,20 +14,6 @@ public class LottaDBFixture : IDisposable
 
     public void Dispose() { }
 
-    public static TableServiceClient CreateMockTableServiceClient(string name)
-    {
-        var provider = new InMemoryStorageProvider();
-        var account = provider.AddAccount(name);
-        return InMemoryTableServiceClient.FromAccount(account);
-    }
-
-    public static Lucene.Net.Store.Directory CreateMockDirectory(string name)
-    {
-        var directory = new RAMDirectory();
-        directory.SetLockFactory(NoLockFactory.GetNoLockFactory());
-        return directory;
-    }
-
     public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configureAction = null,
         bool reset = true,
         [CallerMemberName] string? testName = null)

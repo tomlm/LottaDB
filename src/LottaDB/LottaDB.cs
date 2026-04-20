@@ -511,11 +511,7 @@ public class LottaDB : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public async Task RebuildIndex(CancellationToken ct = default)
     {
-        lock (_indexWriter)
-        {
-            _indexWriter.DeleteAll();
-        }
-        var objects = await _tableAdapter.QueryAsync<object>(_name).ToListAsync(ct);
+        var objects = await _tableAdapter.GetAllAsync(_name, cancellationToken: ct).ToListAsync();
         await SaveManyAsync((IEnumerable<object>)objects);
     }
 
