@@ -9,7 +9,27 @@ namespace Lotta;
 /// </summary>
 public interface ILottaConfiguration
 {
+    /// <summary>
+    /// Gets or sets the interval, in milliseconds, at which automatic search commits are performed.
+    /// </summary>
+    /// <remarks>
+    /// This setting controls how frequently the search index is updated with recent changes. 
+    /// A shorter interval means more up-to-date search results but may impact performance, 
+    /// while a longer interval can improve performance at the cost of search freshness. 
+    /// The default value is 1000 milliseconds (1 second), which is a good starting point
+    /// for most applications. Adjust this value based on your application's needs and workload characteristics.
+    /// </remarks>
+    public int AutoCommitDelay { get; set; }
+
+    /// <summary>
+    /// Factory for instantiating a TableServiceClient with a given connection string. The default factory creates a new client per database instance, 
+    /// which is suitable for most scenarios. Override this to implement custom client caching or dependency injection.
+    /// </summary>
     Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
+
+    /// <summary>
+    /// Factory for instantiating a Lucene Directory with a given name. The default factory creates a new AzureDirectory per database instance
+    /// </summary>
     Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
 
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>

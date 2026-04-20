@@ -45,6 +45,11 @@ public class LottaConfiguration : ILottaConfiguration
     /// Default Analyzer to use for indexing/querying
     /// </summary>
     public Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
+    
+    /// <summary>
+    /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
+    /// </summary>
+    public int AutoCommitDelay { get; set; } = 1000;
 
     /// <summary>
     /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database, 

@@ -27,7 +27,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\Lucene.Net.Linq\source\Lucene.Net.Linq\Lucene.Net.Linq.csproj" />
     <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
   </ItemGroup>
 

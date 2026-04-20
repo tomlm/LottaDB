@@ -28,7 +28,7 @@ public class LottaDB : IDisposable
     private LuceneDirectory _directory;
     private ReadOnlyLuceneDataProvider _lucene;
     private Task _lazySearcherTask = Task.CompletedTask;
-    private CancellationTokenSource _searchCT = new CancellationTokenSource();
+    private CancellationTokenSource _autoCommitCancelToken = new CancellationTokenSource();
     private IndexWriter _indexWriter;
     private volatile bool _indexDirty;
     private bool _disposed;
@@ -453,13 +453,13 @@ public class LottaDB : IDisposable
 
     protected virtual async Task ReloadSearcherAsync(bool lazy)
     {
-        if (!_searchCT.IsCancellationRequested)
+        if (!_autoCommitCancelToken.IsCancellationRequested)
         {
             lock (_lock)
             {
-                _searchCT.Cancel();
-                _searchCT.Dispose();
-                _searchCT = new CancellationTokenSource();
+                _autoCommitCancelToken.Cancel();
+                _autoCommitCancelToken.Dispose();
+                _autoCommitCancelToken = new CancellationTokenSource();
             }
         }
 
@@ -467,7 +467,7 @@ public class LottaDB : IDisposable
         {
             try
             {
-                await Task.Delay(500, _searchCT.Token);
+                await Task.Delay(_config.AutoCommitDelay, _autoCommitCancelToken.Token);
             }
             catch (TaskCanceledException)
             {
@@ -799,7 +799,7 @@ public class LottaDB : IDisposable
             {
                 lock (_lock)
                 {
-                    _searchCT.Cancel();
+                    _autoCommitCancelToken.Cancel();
                     _indexWriter?.Commit();
                     _indexWriter?.Dispose();
                     _lucene?.Dispose();
