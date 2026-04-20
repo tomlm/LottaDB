@@ -94,14 +94,6 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         return Expression.Lambda<Func<T, object>>(boxed, param);
     }
 
-    public override void MapFieldsToDocument(T source, Document target)
-    {
-
-        base.MapFieldsToDocument(source, target);
-
-        //        target.Add(new StringField(KEY_FIELD, key), Field.Store.YES));
-    }
-
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
     {

@@ -5,7 +5,6 @@ using Lucene.Net.Index;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
-using Lucene.Net.Store;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
@@ -411,6 +410,8 @@ public class LottaDB : IDisposable
     {
         return _tableAdapter.GetManyAsync<T>(_name, predicate, maxPerPage, cancellationToken);
     }
+
+    internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _name);
 
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity

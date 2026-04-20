@@ -32,6 +32,10 @@
     <None Include="../../icon.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="LottaDB.Tests" />
+  </ItemGroup>
+
 
   <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />

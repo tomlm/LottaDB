@@ -165,8 +165,13 @@ internal class TableStorageAdapter
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
     {
+        var keyList = keys as IList<string> ?? keys.ToList();
+        if (keyList.Count == 0)
+            return AsyncEnumerable.Empty<object>();
+
         var table = GetTable(tableName);
-        var keyFilter = string.Join(" or ", keys.Select(k => "RowKey eq '" + k + "'"));
+
+        var keyFilter = string.Join(" or ", keyList.Select(k => TableClient.CreateQueryFilter<LottaTableEntity>(e => e.RowKey == k)));
         var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
         return table.QueryAsync<LottaTableEntity>(query,
                 maxPerPage: maxPerPage,
@@ -191,8 +196,12 @@ internal class TableStorageAdapter
         IEnumerable<string> keys,
         CancellationToken cancellationToken = default)
     {
+        var keyList = keys as IList<string> ?? keys.ToList();
+        if (keyList.Count == 0)
+            return AsyncEnumerable.Empty<(string key, object obj, Type type)>();
+
         var table = GetTable(tableName);
-        var keyFilter = string.Join(" or ", keys.Select(k => "RowKey eq '" + k + "'"));
+        var keyFilter = string.Join(" or ", keyList.Select(k => "RowKey eq '" + k + "'"));
         var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
         return table.QueryAsync<LottaTableEntity>(query, cancellationToken: cancellationToken)
             .Select(entity =>
