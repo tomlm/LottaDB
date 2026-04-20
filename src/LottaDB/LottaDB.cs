@@ -286,7 +286,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync<T>(Expression<Func<T, bool>> predicate, CancellationToken ct = default) where T : class, new()
     {
-        var matches = Query<T>(predicate).ToList();
+        var matches = await GetManyAsync<T>(predicate).ToListAsync(ct);
         if (matches.Count == 0)
             return new ObjectResult();
 
@@ -397,18 +397,24 @@ public class LottaDB : IDisposable
     /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
     /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query. Defaults to 1000. Set to null for no limit (use with caution).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public IAsyncEnumerable<T> QueryAsync<T>(Expression<Func<T, bool>>? predicate = null,
+    /// <summary>
+    /// Get many objects from Azure Table Storage with an optional predicate filter.
+    /// Returns an <see cref="IAsyncEnumerable{T}"/> supporting polymorphic queries and LINQ joins.
+    /// </summary>
+    /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
+    /// <param name="predicate">Optional filter expression.</param>
+    /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public IAsyncEnumerable<T> GetManyAsync<T>(Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default) where T : class, new()
     {
-        return _tableAdapter.QueryAsync<T>(_name, predicate, maxPerPage, cancellationToken);
+        return _tableAdapter.GetManyAsync<T>(_name, predicate, maxPerPage, cancellationToken);
     }
 
-    /// <summary>Query Azure Table Storage with a predicate filter.</summary>
-    /// <typeparam name="T">The object type.</typeparam>
-    /// <param name="predicate">Filter expression.</param>
-    public IEnumerable<T> Query<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
-        => _tableAdapter.Query<T>(_name, predicate);
+    /// <summary>Synchronous convenience wrapper over <see cref="GetManyAsync{T}"/>.</summary>
+    public IEnumerable<T> GetMany<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
+        => _tableAdapter.GetMany<T>(_name, predicate);
 
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
@@ -448,7 +454,7 @@ public class LottaDB : IDisposable
     public async Task ReloadSearcherAsync()
     {
         _lazySearcherTask = ReloadSearcherAsync(lazy: false);
-        await _lazySearcherTask;
+        await _lazySearcherTask.ConfigureAwait(false);
     }
 
     protected virtual async Task ReloadSearcherAsync(bool lazy)
@@ -467,7 +473,7 @@ public class LottaDB : IDisposable
         {
             try
             {
-                await Task.Delay(_config.AutoCommitDelay, _autoCommitCancelToken.Token);
+                await Task.Delay(_config.AutoCommitDelay, _autoCommitCancelToken.Token).ConfigureAwait(false);
             }
             catch (TaskCanceledException)
             {
@@ -673,9 +679,11 @@ public class LottaDB : IDisposable
         pending.Clear();
     }
 
-    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> enities, CancellationToken ct = default)
+    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, new()
     {
-        throw new NotImplementedException();
+        var meta = GetMeta<T>();
+        var keys = entities.Select(e => meta.GetKey(e));
+        return await DeleteManyAsync(keys, ct);
     }
 
     /// <summary>
@@ -692,17 +700,25 @@ public class LottaDB : IDisposable
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
-        // Buffer Lucene deletes until table batch commits successfully
         var pendingLuceneDeletes = new List<string>();
+
+        // Single query to fetch all entities (for handlers) instead of N point reads
+        var keyList = keys.ToList();
+        var entityLookup = new Dictionary<string, (object obj, Type type)>();
+        if (keyList.Count > 0)
+        {
+            await foreach (var (key, obj, type) in _tableAdapter.GetManyRawAsync(_name, keyList, ct))
+                entityLookup[key] = (obj, type);
+        }
 
         try
         {
-            foreach (var key in keys)
+            foreach (var key in keyList)
             {
                 ct.ThrowIfCancellationRequested();
 
-                // Lightweight lookup: get the object and its runtime type
-                var (existing, entityType) = await _tableAdapter.GetAsync(_name, key);
+                entityLookup.TryGetValue(key, out var entry);
+                var (existing, entityType) = (entry.obj, entry.type);
 
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
@@ -725,7 +741,7 @@ public class LottaDB : IDisposable
                     pendingKeys.Clear();
                 }
 
-                var change = new ObjectChange { Type = entityType!, Key = key, Kind = ChangeKind.Deleted, Object = existing };
+                var change = new ObjectChange { Type = entityType, Key = key, Kind = ChangeKind.Deleted, Object = existing };
                 allChanges.Add(change);
 
                 _chainChanges.Value = allChanges;

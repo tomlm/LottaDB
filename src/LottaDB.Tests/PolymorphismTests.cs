@@ -12,7 +12,7 @@ public class PolymorphismTests
         await db.SaveAsync(new Employee { Id = "emp1", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<BaseEntity> should return all three
-        var all = db.Query<BaseEntity>().ToList();
+        var all = db.GetMany<BaseEntity>().ToList();
         Assert.Equal(3, all.Count);
     }
 
@@ -26,7 +26,7 @@ public class PolymorphismTests
         await db.SaveAsync(new Employee { Id = "emp2", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<Person> should return Person + Employee, not BaseEntity
-        var people = db.Query<Person>().ToList();
+        var people = db.GetMany<Person>().ToList();
         Assert.Equal(2, people.Count);
     }
 
@@ -40,7 +40,7 @@ public class PolymorphismTests
         await db.SaveAsync(new Employee { Id = "emp3", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, TestContext.Current.CancellationToken);
 
         // Query<Employee> should return only Employee
-        var employees = db.Query<Employee>().ToList();
+        var employees = db.GetMany<Employee>().ToList();
         Assert.Single(employees);
         Assert.Equal("emp3", employees[0].Id);
     }
@@ -53,7 +53,7 @@ public class PolymorphismTests
         await db.SaveAsync(new Employee { Id = "emp4", Name = "Carol", Email = "carol@test.com", Department = "Sales" }, TestContext.Current.CancellationToken);
 
         // Query<BaseEntity> should return an Employee with all properties intact
-        var all = db.Query<BaseEntity>().ToList();
+        var all = db.GetMany<BaseEntity>().ToList();
         Assert.Single(all);
 
         var item = all[0];
@@ -73,7 +73,7 @@ public class PolymorphismTests
         await db.SaveAsync(new Employee { Id = "emp5", Name = "Dave", Email = "dave@test.com", Department = "HR" }, TestContext.Current.CancellationToken);
 
         // Query<Person> should return Employee with Department intact
-        var people = db.Query<Person>().ToList();
+        var people = db.GetMany<Person>().ToList();
         Assert.Single(people);
         Assert.IsType<Employee>(people[0]);
         Assert.Equal("HR", ((Employee)people[0]).Department);

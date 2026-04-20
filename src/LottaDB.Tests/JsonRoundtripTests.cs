@@ -30,7 +30,7 @@ public class JsonRoundtripTests
         };
         await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = db.GetMany<OrderWithLines>().ToList();
         Assert.Single(results);
 
         var loaded = results[0];
@@ -71,7 +71,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string> { ["key"] = "val2" }
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = db.GetMany<OrderWithLines>().ToList();
         Assert.Equal(2, results.Count);
 
         var order1 = results.First(o => o.OrderId == "q-multi-1");
@@ -140,7 +140,7 @@ public class JsonRoundtripTests
         };
         await db.SaveAsync(order, TestContext.Current.CancellationToken);
 
-        var fromQuery = db.Query<OrderWithLines>().First();
+        var fromQuery = db.GetMany<OrderWithLines>().First();
         var fromSearch = db.Search<OrderWithLines>().First();
 
         // Deep equality: both paths should produce identical objects
@@ -212,7 +212,7 @@ public class JsonRoundtripTests
             Metadata = new Dictionary<string, string>()
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<OrderWithLines>().ToList();
+        var results = db.GetMany<OrderWithLines>().ToList();
         Assert.Single(results);
         Assert.Empty(results[0].Lines);
         Assert.Empty(results[0].Metadata);
@@ -232,7 +232,7 @@ public class JsonRoundtripTests
             Tags = new List<string> { "csharp", "dotnet", "lucene" }
         }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<Note>().ToList();
+        var results = db.GetMany<Note>().ToList();
         Assert.Single(results);
         Assert.Equal(3, results[0].Tags.Count);
         Assert.Contains("csharp", results[0].Tags);

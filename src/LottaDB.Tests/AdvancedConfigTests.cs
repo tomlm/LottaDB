@@ -82,7 +82,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<TagOnlyModel>()
+        var results = db.GetMany<TagOnlyModel>()
             .Where(x => x.Category == "A")
             .ToList();
         Assert.Single(results);
@@ -143,7 +143,7 @@ public class AdvancedConfigTests
 
         // Query returns the object (via _json), but Status is not a table storage tag,
         // so it's only filterable client-side not server-side
-        var all = db.Query<FieldOnlyModel>().ToList();
+        var all = db.GetMany<FieldOnlyModel>().ToList();
         Assert.Single(all);
         Assert.Equal("active", all[0].Status);
     }
@@ -159,7 +159,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.Query<MixedModel>()
+        var byCategory = db.GetMany<MixedModel>()
             .Where(x => x.Category == "news")
             .ToList();
         Assert.Single(byCategory);
@@ -190,7 +190,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "1", Category = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareModel { Id = "2", Category = "B" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<BareModel>()
+        var results = db.GetMany<BareModel>()
             .Where(x => x.Category == "A")
             .ToList();
         Assert.Single(results);
@@ -262,7 +262,7 @@ public class AdvancedConfigTests
         await db.SaveAsync(new BareModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
 
         // Query by tag
-        var byCategory = db.Query<BareModel>()
+        var byCategory = db.GetMany<BareModel>()
             .Where(x => x.Category == "news")
             .ToList();
         Assert.Single(byCategory);

@@ -149,7 +149,7 @@ internal class TableStorageAdapter
         }
     }
 
-    public IAsyncEnumerable<object> QueryAsync(string tableName,
+    public IAsyncEnumerable<object> GetManyAsync(string tableName,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
     {
@@ -160,7 +160,7 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
-    public IAsyncEnumerable<object> QueryKeysAsync(string tableName,
+    public IAsyncEnumerable<object> GetManyAsync(string tableName,
         IEnumerable<string> keys,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
@@ -174,16 +174,33 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
-    public IAsyncEnumerable<T> QueryAsync<T>(string tableName,
-        Expression<Func<T, bool>>? predicate = null,
-        int? maxPerPage = null,
-        CancellationToken cancellationToken = default)
-        where T : class, new()
+    public IAsyncEnumerable<T> GetManyAsync<T>(string tableName,
+    Expression<Func<T, bool>>? predicate = null,
+    int? maxPerPage = null,
+    CancellationToken cancellationToken = default)
+    where T : class, new()
     {
         var table = GetTable(tableName);
         var query = GetODataQuery<T>(predicate);
         return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
             .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+    }
+
+
+    public IAsyncEnumerable<(string key, object obj, Type type)> GetManyRawAsync(string tableName,
+        IEnumerable<string> keys,
+        CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var keyFilter = string.Join(" or ", keys.Select(k => "RowKey eq '" + k + "'"));
+        var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
+        return table.QueryAsync<LottaTableEntity>(query, cancellationToken: cancellationToken)
+            .Select(entity =>
+            {
+                var type = TypeUtils.ResolveType(entity.Type);
+                var obj = JsonSerializer.Deserialize(entity.Json, type!);
+                return (entity.RowKey, obj!, type!);
+            });
     }
 
     public IAsyncEnumerable<object> GetAllAsync(string tableName,
@@ -199,7 +216,7 @@ internal class TableStorageAdapter
     /// Query all objects whose _type hierarchy contains the given type name.
     /// Deserializes using the concrete type from _type so derived properties are preserved.
     /// </summary>
-    public IEnumerable<T> Query<T>(string tableName,
+    public IEnumerable<T> GetMany<T>(string tableName,
         Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
         CancellationToken cancellationToken = default)
@@ -214,7 +231,7 @@ internal class TableStorageAdapter
             .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
     }
 
-    public IEnumerable<string> QueryKeys<T>(string tableName,
+    public IEnumerable<string> GetManyKeys<T>(string tableName,
         Expression<Func<T, bool>>? predicate = null,
         CancellationToken cancellationToken = default)
         where T : class, new()

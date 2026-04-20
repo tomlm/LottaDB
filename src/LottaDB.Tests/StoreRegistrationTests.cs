@@ -29,7 +29,7 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var aliceOnly = db.Query<Actor>()
+        var aliceOnly = db.GetMany<Actor>()
             .Where(a => a.DisplayName == "Alice")
             .ToList();
         Assert.Single(aliceOnly);
@@ -67,7 +67,7 @@ public class StoreRegistrationTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
 
-        var results = db.Query<Actor>()
+        var results = db.GetMany<Actor>()
             .Where(a => a.DisplayName == "Alice")
             .ToList();
         Assert.Single(results);
@@ -83,7 +83,7 @@ public class StoreRegistrationTests
         var actor = await db.GetAsync<Actor>("alice", TestContext.Current.CancellationToken);
         Assert.NotNull(actor);
 
-        var notes = db.Query<Note>().ToList();
+        var notes = db.GetMany<Note>().ToList();
         Assert.Single(notes);
     }
 
@@ -145,7 +145,7 @@ public class StoreRegistrationTests
 
         Assert.NotEqual(entry1.Id, entry2.Id);
 
-        var all = db.Query<LogEntry>().ToList();
+        var all = db.GetMany<LogEntry>().ToList();
         Assert.Equal(2, all.Count);
     }
 

@@ -13,7 +13,7 @@ public class ToAsyncEnumerableTests
         await db.SaveAsync(new Actor { Domain = "async.test", Username = "bob" }, TestContext.Current.CancellationToken);
 
         var results = new List<Actor>();
-        await foreach (var item in db.QueryAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var item in db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken))
             results.Add(item);
 
         Assert.Equal(2, results.Count);
@@ -27,7 +27,7 @@ public class ToAsyncEnumerableTests
             await db.SaveAsync(new Actor { Domain = "async.test", Username = $"user-{i}" }, TestContext.Current.CancellationToken);
 
         var results = new List<Actor>();
-        await foreach (var item in db.QueryAsync<Actor>(maxPerPage: 3, cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var item in db.GetManyAsync<Actor>(maxPerPage: 3, cancellationToken: TestContext.Current.CancellationToken))
             results.Add(item);
 
         Assert.Equal(10, results.Count);
@@ -39,7 +39,7 @@ public class ToAsyncEnumerableTests
         using var db = await LottaDBFixture.CreateDbAsync();
 
         var results = new List<Actor>();
-        await foreach (var item in db.QueryAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var item in db.GetManyAsync<Actor>(cancellationToken: TestContext.Current.CancellationToken))
             results.Add(item);
 
         Assert.Empty(results);
@@ -54,7 +54,7 @@ public class ToAsyncEnumerableTests
         await db.SaveAsync(new Note { Domain = "async.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
         var results = new List<Note>();
-        await foreach (var item in db.QueryAsync<Note>(n => n.AuthorId == "alice", maxPerPage: 10, cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var item in db.GetManyAsync<Note>(n => n.AuthorId == "alice", maxPerPage: 10, cancellationToken: TestContext.Current.CancellationToken))
             results.Add(item);
 
         Assert.Single(results);
@@ -69,7 +69,7 @@ public class ToAsyncEnumerableTests
             await db.SaveAsync(new Actor { Domain = "async.test", Username = $"user-{i}" }, TestContext.Current.CancellationToken);
 
         var results = new List<Actor>();
-        await foreach (var item in db.QueryAsync<Actor>(maxPerPage: 5, cancellationToken: TestContext.Current.CancellationToken))
+        await foreach (var item in db.GetManyAsync<Actor>(maxPerPage: 5, cancellationToken: TestContext.Current.CancellationToken))
             results.Add(item);
 
         Assert.Equal(5, results.Count);
