@@ -332,23 +332,6 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Delete all objects matching a predicate. Queries table storage, deletes each match,
-    /// removes from Lucene, and runs On&lt;T&gt; handlers for each deletion.
-    /// </summary>
-    /// <typeparam name="T">The object type.</typeparam>
-    /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
-    public async Task<ObjectResult> DeleteAsync<T>(Expression<Func<T, bool>> predicate, CancellationToken ct = default) where T : class, new()
-    {
-        var matches = await GetManyAsync<T>(predicate).ToListAsync(ct);
-        if (matches.Count == 0)
-            return new ObjectResult();
-
-        return await DeleteManyAsync(matches.Select(m => GetMeta<T>().GetKey(m)), ct);
-    }
-
-    /// <summary>
     /// Read-modify-write with optimistic concurrency. Fetches the object by key (capturing its
     /// ETag), applies the mutation, and commits with an <c>If-Match</c> condition. If another
     /// writer changed the row in between, the read-modify-write is retried against the latest
@@ -541,8 +524,8 @@ public class LottaDB : IDisposable
                 }
                 if (_indexDirty)
                 {
-                    _indexWriter.Commit();
-                    _lucene.Refresh();
+                    _indexWriter?.Commit();
+                    _lucene?.Refresh();
                     _indexDirty = false;
                 }
 
@@ -689,11 +672,29 @@ public class LottaDB : IDisposable
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
     }
 
+    /// <summary>
+    /// Delete all objects matching a predicate. Queries table storage, deletes each match,
+    /// removes from Lucene, and runs On&lt;T&gt; handlers for each deletion.
+    /// </summary>
+    /// <typeparam name="T">The object type.</typeparam>
+    /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
+    public async Task<ObjectResult> DeleteManyAsync<T>(Expression<Func<T, bool>>? predicate=null, CancellationToken ct = default) where T : class, new()
+    {
+        var matches = await GetManyAsync<T>(predicate).ToListAsync(ct);
+        if (matches.Count == 0)
+            return new ObjectResult();
+
+        return await DeleteManyAsync<T>(matches, ct);
+    }
+
+
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, new()
     {
         var meta = GetMeta<T>();
-        var keys = entities.Select(e => meta.GetKey(e));
-        return await DeleteManyAsync(keys, ct);
+        var typed = entities.Select(e => ((object)e, typeof(T), meta.GetKey(e)));
+        return await DeleteManyAsyncCore(typed, ct);
     }
 
     /// <summary>
@@ -706,29 +707,22 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync(IEnumerable<string> keys, CancellationToken ct = default)
     {
+        return await DeleteManyAsyncCore(keys.Select(k => ((object?)null, (Type?)null, k)), ct);
+    }
+
+    private async Task<ObjectResult> DeleteManyAsyncCore(IEnumerable<(object? entity, Type? type, string key)> items, CancellationToken ct = default)
+    {
         var allChanges = new List<ObjectChange>();
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
         var pendingEntities = new List<(object? entity, Type? type, string key)>();
 
-        // Single query to fetch all entities (for handlers) instead of N point reads
-        var keyList = keys.ToList();
-        var entityLookup = new Dictionary<string, (object obj, Type type)>();
-        if (keyList.Count > 0)
-        {
-            await foreach (var (key, obj, type) in _tableAdapter.GetManyRawAsync(_name, keyList, ct))
-                entityLookup[key] = (obj, type);
-        }
-
         try
         {
-            foreach (var key in keyList)
+            foreach (var (entity, type, key) in items)
             {
                 ct.ThrowIfCancellationRequested();
-
-                entityLookup.TryGetValue(key, out var entry);
-                var (existing, entityType) = (entry.obj, entry.type);
 
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
@@ -741,7 +735,7 @@ public class LottaDB : IDisposable
 
                 pendingActions.Add(TableStorageAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
-                pendingEntities.Add((existing, entityType, key));
+                pendingEntities.Add((entity, type, key));
 
                 if (pendingActions.Count >= 100)
                 {

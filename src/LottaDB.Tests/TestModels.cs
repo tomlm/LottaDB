@@ -235,6 +235,18 @@ public class BareArticle
     public string Content { get => $"{Title} {Body}"; }
 }
 
+// Model with int key
+public class Product
+{
+    [Key]
+    public int ProductId { get; set; }
+
+    [Queryable]
+    public string Name { get; set; } = "";
+
+    public decimal Price { get; set; }
+}
+
 // Model with invalid DefaultSearch for validation testing
 [DefaultSearch(nameof(NotIndexed))]
 public class BadDefaultSearch

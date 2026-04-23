@@ -214,7 +214,8 @@ The referenced property must be indexed via `[Queryable]`, `[Field]`, or the flu
 | -------------------- | ------------------------------------------------- |
 | **SaveAsync<T>()**   | Save T instance using Upsert semantics            |
 | **ChangeAsync<T>()** | Apply changes to T instance via lamda             |
-| **DeleteAsync<T>()** | Delete T instance object                          |
+| **DeleteAsync<T>()** | Delete a single object by key or entity            |
+| **DeleteManyAsync<T>()** | Delete by predicate, by entities, or all of a type |
 | **QueryAsync<T>()**  | Query against table storage for objects of type T |
 | **SearchAsync<T>()** | Search against lucene for objects of type T       |
 
@@ -236,11 +237,26 @@ await db.ChangeAsync<Actor>(key, actor => actor.Movies++);
 
 ### DeleteAsync<T>()
 
-Delete an object from a Lotta DB.
+Delete a single object from a Lotta DB by key or entity.
 
 ```csharp
 await db.DeleteAsync<Note>(key);
 await db.DeleteAsync<Note>(note);
+```
+
+### DeleteManyAsync<T>()
+
+Delete multiple objects. Pass a predicate to delete matching objects, entities to delete specific ones, or no arguments to delete all objects of that type.
+
+```csharp
+// Delete all notes by a specific author
+await db.DeleteManyAsync<Note>(n => n.AuthorId == "alice");
+
+// Delete specific entities
+await db.DeleteManyAsync<Note>(notesToDelete);
+
+// Delete ALL objects of a type
+await db.DeleteManyAsync<Note>();
 ```
 
 ### QueryAsync<T>()
@@ -435,7 +451,7 @@ options.On<Note>(async (note, kind, db) =>
     // maintain NoteView as materialized view that's updated when Note changes.
     if (kind == TriggerKind.Deleted)
     {
-        await db.DeleteAsync<NoteView>(nv => nv.NoteId == note.NoteId);
+        await db.DeleteManyAsync<NoteView>(nv => nv.NoteId == note.NoteId);
         return;
     }
 

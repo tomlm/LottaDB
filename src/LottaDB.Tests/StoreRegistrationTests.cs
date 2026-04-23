@@ -182,6 +182,71 @@ public class StoreRegistrationTests
         Assert.Equal("Alice", loaded.DisplayName);
     }
 
+    // =====================================================================
+    // Int key
+    // =====================================================================
+
+    [Fact]
+    public async Task Store_IntKey_SaveAndGet()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Product { ProductId = 42, Name = "Widget", Price = 9.99m }, TestContext.Current.CancellationToken);
+
+        var loaded = await db.GetAsync<Product>("42", TestContext.Current.CancellationToken);
+        Assert.NotNull(loaded);
+        Assert.Equal(42, loaded.ProductId);
+        Assert.Equal("Widget", loaded.Name);
+        Assert.Equal(9.99m, loaded.Price);
+    }
+
+    [Fact]
+    public async Task Store_IntKey_Upsert()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Product { ProductId = 1, Name = "Before", Price = 5m }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Product { ProductId = 1, Name = "After", Price = 10m }, TestContext.Current.CancellationToken);
+
+        var all = await db.GetManyAsync<Product>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Single(all);
+        Assert.Equal("After", all[0].Name);
+    }
+
+    [Fact]
+    public async Task Store_IntKey_Delete()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Product { ProductId = 99, Name = "Gone" }, TestContext.Current.CancellationToken);
+        Assert.NotNull(await db.GetAsync<Product>("99", TestContext.Current.CancellationToken));
+
+        await db.DeleteAsync<Product>("99", TestContext.Current.CancellationToken);
+        Assert.Null(await db.GetAsync<Product>("99", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Store_IntKey_Search()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Product { ProductId = 1, Name = "Lucene Widget" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Product { ProductId = 2, Name = "Azure Gadget" }, TestContext.Current.CancellationToken);
+
+        var results = db.Search<Product>("lucene").ToList();
+        Assert.Single(results);
+        Assert.Equal(1, results[0].ProductId);
+    }
+
+    [Fact]
+    public async Task Store_IntKey_MultipleObjects()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        for (int i = 1; i <= 5; i++)
+            await db.SaveAsync(new Product { ProductId = i, Name = $"Product {i}" }, TestContext.Current.CancellationToken);
+
+        var all = await db.GetManyAsync<Product>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(5, all.Count);
+    }
+
+    // =====================================================================
+
     [Fact]
     public async Task Store_MixedAttributeAndFluent_FluentWins()
     {
