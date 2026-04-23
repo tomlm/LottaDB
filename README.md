@@ -1,3 +1,6 @@
+[![Build and Test](https://github.com/tomlm/LottaDB/actions/workflows/BuildAndRunTests.yml/badge.svg)](https://github.com/tomlm/LottaDB/actions/workflows/BuildAndRunTests.yml)
+[![NuGet](https://img.shields.io/nuget/v/LottaDB.svg)](https://www.nuget.org/packages/LottaDB)
+
 ![Logo](https://raw.githubusercontent.com/tomlm/LottaDB/refs/heads/main/icon.png)
 
 # LottaDB
