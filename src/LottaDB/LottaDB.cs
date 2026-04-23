@@ -7,6 +7,7 @@ using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq.Expressions;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -26,8 +27,8 @@ public class LottaDB : IDisposable
     private readonly TableStorageAdapter _tableAdapter;
     private LuceneDirectory _directory;
     private ReadOnlyLuceneDataProvider _lucene;
-    private Task _lazySearcherTask = Task.CompletedTask;
-    private CancellationTokenSource _autoCommitCancelToken = new CancellationTokenSource();
+    private long _lastWriteTimestamp;
+    private Task? _refreshTask;
     private IndexWriter _indexWriter;
     private volatile bool _indexDirty;
     private bool _disposed;
@@ -170,9 +171,8 @@ public class LottaDB : IDisposable
                     mapper.ToDocument(entity, document);
                     _indexWriter.AddDocument(document);
                 }
-                _indexDirty = true;
             }
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
+            ScheduleRefresh();
             return Task.CompletedTask;
         }));
     }
@@ -187,6 +187,7 @@ public class LottaDB : IDisposable
         lock (_lock)
         {
             _indexWriter.DeleteAll();
+            _indexDirty = true;
         }
 
         await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: ct))
@@ -199,15 +200,11 @@ public class LottaDB : IDisposable
             lock (_lock)
             {
                 _indexWriter.AddDocument(document);
+                _indexDirty = true;
             }
         }
-
-        lock (_lock)
-        {
-            _indexWriter.Commit();
-            _lucene.Refresh();
-            _indexDirty = false;
-        }
+        
+        ReloadSearcher();
     }
 
     internal TypeMetadata GetMeta(Type type)
@@ -469,11 +466,7 @@ public class LottaDB : IDisposable
     /// <param name="query">Optional Lucene query string to pre-filter results.</param>
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
-        if (_indexDirty || !_lazySearcherTask.IsCompleted)
-        {
-            _lazySearcherTask = ReloadSearcherAsync();
-            _lazySearcherTask.Wait();
-        }
+        ReloadSearcher();
 
         lock (_lock)
         {
@@ -496,44 +489,74 @@ public class LottaDB : IDisposable
     public IQueryable<T> Search<T>(Expression<Func<T, bool>> predicate) where T : class, new()
         => Search<T>().Where(predicate);
 
-    public async Task ReloadSearcherAsync()
+    public void ReloadSearcher()
     {
-        _lazySearcherTask = ReloadSearcherAsync(lazy: false);
-        await _lazySearcherTask.ConfigureAwait(false);
-    }
-
-    protected virtual async Task ReloadSearcherAsync(bool lazy)
-    {
-        if (!_autoCommitCancelToken.IsCancellationRequested)
-        {
-            lock (_lock)
-            {
-                _autoCommitCancelToken.Cancel();
-                _autoCommitCancelToken.Dispose();
-                _autoCommitCancelToken = new CancellationTokenSource();
-            }
-        }
-
-        if (lazy)
-        {
-            try
-            {
-                await Task.Delay(_config.AutoCommitDelay, _autoCommitCancelToken.Token).ConfigureAwait(false);
-            }
-            catch (TaskCanceledException)
-            {
-                return;
-            }
-        }
-
         lock (_lock)
         {
             if (!_disposed)
             {
-                _indexWriter.Commit();
-                _lucene.Refresh();
-                _indexDirty = false;
+                if (_indexDirty)
+                {
+                    _indexWriter.Commit();
+                    _lucene.Refresh();
+                    _indexDirty = false;
+                }
             }
+        }
+    }
+
+    private void ScheduleRefresh()
+    {
+        lock (_lock)
+        {
+            _indexDirty = true;
+            _lastWriteTimestamp = Stopwatch.GetTimestamp();
+
+            if (_refreshTask == null || _refreshTask.IsCompleted)
+            {
+                _refreshTask = RefreshLoopAsync();
+            }
+        }
+    }
+
+    private async Task RefreshLoopAsync()
+    {
+        var delayMs = _config.AutoCommitDelay;
+
+        while (!_disposed)
+        {
+            await Task.Delay(delayMs).ConfigureAwait(false);
+
+            lock (_lock)
+            {
+                if (_disposed) return;
+
+                var elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
+                var remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
+                if (remaining > 0)
+                {
+                    // A write arrived during our wait -- only wait the remaining delta
+                    delayMs = remaining;
+                    continue;
+                }
+                if (_indexDirty)
+                {
+                    _indexWriter.Commit();
+                    _lucene.Refresh();
+                    _indexDirty = false;
+                }
+
+                // Re-check: did a write arrive while we were committing?
+                elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
+                remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
+                if (remaining > 0)
+                {
+                    delayMs = remaining;
+                    continue;
+                }
+            }
+
+            return; // Done -- no more pending writes
         }
     }
 
@@ -659,7 +682,6 @@ public class LottaDB : IDisposable
         }
         finally
         {
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
             _chainChanges.Value = null;
             _chainErrors.Value = null;
         }
@@ -738,7 +760,6 @@ public class LottaDB : IDisposable
         }
         finally
         {
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
             _chainChanges.Value = null;
             _chainErrors.Value = null;
         }
@@ -854,7 +875,6 @@ public class LottaDB : IDisposable
             {
                 lock (_lock)
                 {
-                    _autoCommitCancelToken.Cancel();
                     _indexWriter?.Commit();
                     _indexWriter?.Dispose();
                     _lucene?.Dispose();
