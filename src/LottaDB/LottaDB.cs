@@ -30,7 +30,7 @@ public class LottaDB : IDisposable
     private long _lastWriteTimestamp;
     private Task? _refreshTask;
     private IndexWriter _indexWriter;
-    private volatile bool _indexDirty;
+    private bool _indexDirty;
     private bool _disposed;
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
