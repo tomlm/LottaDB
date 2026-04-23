@@ -208,3 +208,38 @@ public class BareVectorNote
     public string Title { get; set; } = "";
     public string Category { get; set; } = "";
 }
+
+// Model with user-defined default search property
+[DefaultSearch(nameof(Content))]
+public class Article
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Title { get; set; } = "";
+
+    [Queryable]
+    public string Body { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Content { get => $"{Title} {Body}"; }
+}
+
+// Bare model for fluent DefaultSearch testing
+public class BareArticle
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public string Content { get => $"{Title} {Body}"; }
+}
+
+// Model with invalid DefaultSearch for validation testing
+[DefaultSearch(nameof(NotIndexed))]
+public class BadDefaultSearch
+{
+    [Key]
+    public string Id { get; set; } = "";
+    public string NotIndexed { get; set; } = "";
+}

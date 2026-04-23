@@ -474,7 +474,7 @@ public class LottaDB : IDisposable
             var mapper = GetMapper<T>();
             if (!String.IsNullOrEmpty(query))
             {
-                var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, LottaDB.CONTENT_FIELD, mapper);
+                var parser = new FieldMappingQueryParser<T>(_lucene.LuceneVersion, mapper.DefaultSearchProperty, mapper);
                 return _lucene.AsQueryable<T>(mapper)
                     .Where(parser.Parse(query));
             }

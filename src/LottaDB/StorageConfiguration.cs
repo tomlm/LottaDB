@@ -10,6 +10,7 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
     internal List<LambdaExpression> TagProperties { get; } = new();
     internal List<FieldPropertyConfig> FieldProperties { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
+    internal LambdaExpression? DefaultSearchExpression { get; private set; }
 
     public IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
     {
@@ -46,6 +47,12 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
     public IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property)
     {
         IgnoredProperties.Add(property);
+        return this;
+    }
+
+    public IStorageConfiguration<T> DefaultSearch<TProp>(Expression<Func<T, TProp>> property)
+    {
+        DefaultSearchExpression = property;
         return this;
     }
 }

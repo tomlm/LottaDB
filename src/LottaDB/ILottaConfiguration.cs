@@ -94,6 +94,14 @@ public interface IStorageConfiguration<T> where T : class, new()
     /// <typeparam name="TProp">The property type.</typeparam>
     /// <param name="property">Expression selecting the property to exclude.</param>
     IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property);
+
+    /// <summary>
+    /// Set the default search property for free-text queries and object-level
+    /// <c>.Query()</c> / <c>.Similar()</c>. When set, the automatic <c>_content_</c>
+    /// composite field is not created. The property must be indexed via
+    /// <see cref="AddQueryable{TProp}"/> or <see cref="AddField{TProp}"/>.
+    /// </summary>
+    IStorageConfiguration<T> DefaultSearch<TProp>(Expression<Func<T, TProp>> property);
 }
 
 /// <summary>

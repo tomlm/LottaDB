@@ -89,18 +89,27 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         }
         AddField(new JsonFieldMapper<T>(version, analyzer));
 
-        var contentProps = meta.IndexedProperties
-            .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
-            .Select(p => p.Property);
-
-        IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, contentProps);
-        if (embeddingGenerator != null)
+        if (meta.DefaultSearchProperty != null)
         {
-            contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator);
+            // User-defined default search property — skip _content_ composite field
+            DefaultSearchProperty = meta.DefaultSearchProperty.Name;
         }
-        AddField(contentMapper);
+        else
+        {
+            // No user default — create _content_ composite field
+            var contentProps = meta.IndexedProperties
+                .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
+                .Select(p => p.Property);
 
-        DefaultSearchProperty = LottaDB.CONTENT_FIELD;
+            IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, contentProps);
+            if (embeddingGenerator != null)
+            {
+                contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator);
+            }
+            AddField(contentMapper);
+
+            DefaultSearchProperty = LottaDB.CONTENT_FIELD;
+        }
     }
 
     private static Expression<Func<T, object>> PropExpr(PropertyInfo prop)

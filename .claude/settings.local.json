@@ -17,7 +17,8 @@
       "Bash(grep -r \"class VectorQuery\" --include=\"*.cs\" -rn)",
       "Bash(grep -r \"class VectorIndexOptions\" --include=\"*.cs\" -rn)",
       "Bash(dotnet tool:*)",
-      "Bash(ls -la /s/github/LottaDB/src/LottaDB.Tests/*.cs)"
+      "Bash(ls -la /s/github/LottaDB/src/LottaDB.Tests/*.cs)",
+      "Bash(xargs cat:*)"
     ]
   }
 }

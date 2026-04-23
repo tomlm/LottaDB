@@ -165,4 +165,127 @@ public class QueryMethodTests
         Assert.NotEmpty(results);
         Assert.Equal("2", results[0].Id);
     }
+
+    // =====================================================================
+    // [DefaultSearch] — user-defined default search property
+    // =====================================================================
+
+    [Fact]
+    public async Task DefaultSearch_SearchString_UsesUserDefinedProperty()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" });
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" });
+
+        // Search("Lucene") should target the Content property (which is Title + Body)
+        var results = db.Search<Article>("lucene").ToList();
+        Assert.Single(results);
+        Assert.Equal("a1", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_QueryOnObject_UsesUserDefinedProperty()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" });
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" });
+
+        // t.Query("...") on object should target Content property
+        var results = db.Search<Article>(a => a.Query("lucene")).ToList();
+        Assert.Single(results);
+        Assert.Equal("a1", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_QueryOnProperty_StillWorks()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene search", Body = "engine" });
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure cloud", Body = "Lucene compatible" });
+
+        // Property-level query targets Title specifically, not Content
+        var results = db.Search<Article>(a => a.Title.Query("lucene*")).ToList();
+        Assert.Single(results);
+        Assert.Equal("a1", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_ComposedContent_SearchesAcrossFields()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "Intro", Body = "Lucene is a search engine" });
+
+        // "lucene" is only in Body, but Content = Title + Body, so it should match
+        var results = db.Search<Article>("lucene").ToList();
+        Assert.Single(results);
+        Assert.Equal("a1", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_Fluent_UsesUserDefinedProperty()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        {
+            config.Store<BareArticle>(s =>
+            {
+                s.SetKey(x => x.Id);
+                s.AddQueryable(x => x.Title);
+                s.AddQueryable(x => x.Body);
+                s.AddQueryable(x => x.Content);
+                s.DefaultSearch(x => x.Content);
+            });
+        });
+        await db.SaveAsync(new BareArticle { Id = "a1", Title = "Lucene", Body = "search engine" });
+        await db.SaveAsync(new BareArticle { Id = "a2", Title = "Azure", Body = "cloud platform" });
+
+        var results = db.Search<BareArticle>("lucene").ToList();
+        Assert.Single(results);
+        Assert.Equal("a1", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_Similar_OnObject_UsesUserDefinedProperty()
+    {
+        using var db = await CreateVectorDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox", Body = "jumps over the lazy dog" });
+        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten", Body = "sleeping on a warm blanket" });
+        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics", Body = "string theory research" });
+
+        // a.Similar("...") should target Content (the DefaultSearch property)
+        var results = db.Search<Article>(a => a.Similar("cute cat napping")).ToList();
+        Assert.NotEmpty(results);
+        Assert.Equal("a2", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_Similar_OnProperty_StillWorks()
+    {
+        using var db = await CreateVectorDbAsync();
+        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox jumps over the lazy dog", Body = "nature documentary" });
+        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten sleeping on a warm blanket", Body = "pet care" });
+        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics and string theory research", Body = "science journal" });
+
+        // a.Title.Similar("...") targets Title specifically, not Content
+        var results = db.Search<Article>(a => a.Title.Similar("a cute cat napping")).ToList();
+        Assert.NotEmpty(results);
+        Assert.Equal("a2", results[0].Id);
+    }
+
+    [Fact]
+    public async Task DefaultSearch_InvalidProperty_ThrowsAtInit()
+    {
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            using var db = await LottaDBFixture.CreateDbAsync(config =>
+            {
+                config.Store<BadDefaultSearch>();
+            });
+        });
+
+        // The InvalidOperationException may be wrapped in TargetInvocationException
+        // due to reflection-based initialization
+        var inner = ex is System.Reflection.TargetInvocationException tie ? tie.InnerException! : ex;
+        Assert.IsType<InvalidOperationException>(inner);
+        Assert.Contains("NotIndexed", inner.Message);
+    }
 }

@@ -20,6 +20,9 @@ internal class TypeMetadata
     /// <summary>Properties indexed in Lucene for search.</summary>
     public List<IndexedPropertyInfo> IndexedProperties { get; } = new();
 
+    /// <summary>User-defined default search property. When set, the _content_ composite field is not created.</summary>
+    public PropertyInfo? DefaultSearchProperty { get; set; }
+
     public TypeMetadata(Type type)
     {
         Type = type;
@@ -137,7 +140,21 @@ internal class TypeMetadata
             }
         }
 
-        if (fluent == null) return;
+        // [DefaultSearch] attribute on the class
+        var defaultSearchAttr = typeof(T).GetCustomAttribute<DefaultSearchAttribute>();
+        if (defaultSearchAttr != null)
+        {
+            var prop = typeof(T).GetProperty(defaultSearchAttr.PropertyName)
+                ?? throw new InvalidOperationException(
+                    $"[DefaultSearch(\"{defaultSearchAttr.PropertyName}\")] on {typeof(T).Name}: property '{defaultSearchAttr.PropertyName}' not found.");
+            meta.DefaultSearchProperty = prop;
+        }
+
+        if (fluent == null)
+        {
+            ValidateDefaultSearch<T>(meta);
+            return;
+        }
 
         // Fluent AddQueryable → both Tag + Lucene index
         foreach (var config in fluent.QueryableProperties)
@@ -168,6 +185,26 @@ internal class TypeMetadata
                     IsVectorField = config.IsVectorField,
                 });
             }
+        }
+
+        // Fluent DefaultSearch overrides attribute
+        if (fluent.DefaultSearchExpression != null)
+        {
+            var propInfo = ExtractPropertyInfo(fluent.DefaultSearchExpression);
+            if (propInfo != null)
+                meta.DefaultSearchProperty = propInfo;
+        }
+
+        ValidateDefaultSearch<T>(meta);
+    }
+
+    private static void ValidateDefaultSearch<T>(TypeMetadata meta)
+    {
+        if (meta.DefaultSearchProperty != null
+            && !meta.IndexedProperties.Any(i => i.Property == meta.DefaultSearchProperty))
+        {
+            throw new InvalidOperationException(
+                $"DefaultSearch property '{meta.DefaultSearchProperty.Name}' on {typeof(T).Name} must be indexed via [Queryable], [Field], or the fluent API.");
         }
     }
 
