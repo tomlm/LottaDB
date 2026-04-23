@@ -99,6 +99,8 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator);
         }
         AddField(contentMapper);
+
+        DefaultSearchProperty = LottaDB.CONTENT_FIELD;
     }
 
     private static Expression<Func<T, object>> PropExpr(PropertyInfo prop)
