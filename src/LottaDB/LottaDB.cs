@@ -15,8 +15,8 @@ namespace Lotta;
 
 /// <summary>
 /// A LottaDB database: one Azure table, one Lucene index.
-/// Each write opens a Lucene session, commits, and the IndexSearcher refreshes.
-/// On&lt;T&gt; handlers run inline after each write.
+/// Each write commits to table storage, then runs On&lt;T&gt; handlers inline.
+/// Lucene indexing is a built-in On&lt;T&gt; handler auto-registered for each stored type.
 /// </summary>
 public class LottaDB : IDisposable
 {
@@ -67,6 +67,7 @@ public class LottaDB : IDisposable
         InitializeMetadata();
         InitializeMappers();
         InitializeHandlers();
+        InitializeLuceneHandlers();
 
         // Build a per-field analyzer that merges all mapper analyzers.
         // Default is KeywordAnalyzer (matching DocumentMapperBase) so unregistered
@@ -143,6 +144,72 @@ public class LottaDB : IDisposable
         }
     }
 
+    // ===== LUCENE HANDLER ===
+    private void InitializeLuceneHandlers()
+    {
+        var method = typeof(LottaDB).GetMethod(nameof(RegisterLuceneHandler),
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        foreach (var type in _metadata.Keys)
+            method.MakeGenericMethod(type).Invoke(this, null);
+    }
+
+    private void RegisterLuceneHandler<T>() where T : class, new()
+    {
+        var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
+        list.Add((Func<T, TriggerKind, LottaDB, Task>)((entity, kind, db) =>
+        {
+            var meta = GetMeta<T>();
+            var key = meta.GetKey(entity);
+            lock (_lock)
+            {
+                _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+                if (kind == TriggerKind.Saved)
+                {
+                    var mapper = GetMapper<T>();
+                    var document = new Document();
+                    mapper.ToDocument(entity, document);
+                    _indexWriter.AddDocument(document);
+                }
+                _indexDirty = true;
+            }
+            _lazySearcherTask = ReloadSearcherAsync(lazy: true);
+            return Task.CompletedTask;
+        }));
+    }
+
+    /// <summary>
+    /// Rebuild the entire Lucene index from Azure Table Storage.
+    /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task RebuildSearchIndex(CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _indexWriter.DeleteAll();
+        }
+
+        await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: ct))
+        {
+            var meta = GetMeta(entity.GetType());
+            var key = meta.GetKey(entity);
+            var mapper = GetMapper(entity.GetType());
+            var document = new Document();
+            mapper.ToDocument(entity, document);
+            lock (_lock)
+            {
+                _indexWriter.AddDocument(document);
+            }
+        }
+
+        lock (_lock)
+        {
+            _indexWriter.Commit();
+            _lucene.Refresh();
+            _indexDirty = false;
+        }
+    }
+
     internal TypeMetadata GetMeta(Type type)
     {
         if (_metadata.TryGetValue(type, out var meta)) return meta;
@@ -181,7 +248,7 @@ public class LottaDB : IDisposable
 
     /// <summary>
     /// Save (upsert) an object. Key extracted from [Key] attribute.
-    /// Writes to table storage, indexes into Lucene, then runs On&lt;T&gt; handlers inline.
+    /// Writes to table storage, then runs On&lt;T&gt; handlers (including Lucene indexing).
     /// </summary>
     /// <param name="entity">The object to save.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -190,7 +257,6 @@ public class LottaDB : IDisposable
     {
         var meta = GetMeta(entity.GetType());
         var key = meta.GetKey(entity);
-        var mapper = GetMapper(entity.GetType());
 
         // For Auto keys, set the generated key back on the entity
         // so subsequent GetKey calls return the same value
@@ -198,10 +264,6 @@ public class LottaDB : IDisposable
             meta.SetKey(entity, key);
 
         await _tableAdapter.UpsertAsync(_name, key, entity, meta);
-
-        SaveLuceneObject(key, entity, mapper);
-
-        _lazySearcherTask = ReloadSearcherAsync(lazy: true);
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
@@ -225,7 +287,7 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Delete an object by key. Removes from table storage and Lucene, then runs On&lt;T&gt; handlers.
+    /// Delete an object by key. Removes from table storage, then runs On&lt;T&gt; handlers (including Lucene cleanup).
     /// </summary>
     /// <param name="key">The unique key of the object to delete.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -249,13 +311,8 @@ public class LottaDB : IDisposable
         }
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
-        var mapper = GetMapper<T>();
 
         await _tableAdapter.DeleteAsync(_name, key);
-
-        DeleteLuceneObject(key);
-
-        _lazySearcherTask = ReloadSearcherAsync(lazy: true);
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
 
@@ -329,54 +386,43 @@ public class LottaDB : IDisposable
     {
         const int maxAttempts = 16;
         var meta = GetMeta<T>();
-        var mapper = GetMapper<T>();
 
-        try
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
+            ct.ThrowIfCancellationRequested();
 
-            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key);
+            if (current == null || string.IsNullOrEmpty(etag))
+                throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
+
+            var mutated = mutate(current);
+
+            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag);
+            if (!committed)
+                continue; // someone else wrote between our read and write — re-read and retry
+
+            var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, ct);
+
+            if (isRoot)
             {
-                ct.ThrowIfCancellationRequested();
-
-                var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key);
-                if (current == null || string.IsNullOrEmpty(etag))
-                    throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
-
-                var mutated = mutate(current);
-
-                var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag);
-                if (!committed)
-                    continue; // someone else wrote between our read and write — re-read and retry
-
-                SaveLuceneObject(key, mutated, mapper);
-
-                var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
-
-                var isRoot = _chainChanges.Value == null;
-                var changes = _chainChanges.Value ??= new List<ObjectChange>();
-                var errors = _chainErrors.Value ??= new List<Exception>();
-                changes.Add(change);
-
-                await RunHandlersAsync(mutated, TriggerKind.Saved, errors, ct);
-
-                if (isRoot)
-                {
-                    var result = new ObjectResult { Changes = changes, Errors = errors };
-                    _chainChanges.Value = null;
-                    _chainErrors.Value = null;
-                    return result;
-                }
-
-                return new ObjectResult { Changes = new[] { change }, Errors = errors };
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
             }
 
-            throw new InvalidOperationException(
-                $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts.");
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
         }
-        finally
-        {
-            _lazySearcherTask = ReloadSearcherAsync(lazy: true); // best effort async refresh; handlers will see the new index state on their own reloads
-        }
+
+        throw new InvalidOperationException(
+            $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts.");
     }
 
     // === Read ===
@@ -509,21 +555,6 @@ public class LottaDB : IDisposable
     // === Maintain ===
 
     /// <summary>
-    /// Rebuild the entire Lucene index from Azure Table Storage.
-    /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
-    /// </summary>
-    /// <param name="ct">Cancellation token.</param>
-    public async Task RebuildSearchIndex(CancellationToken ct = default)
-    {
-        lock(_lock)
-        {
-            _indexWriter.DeleteAll();
-            _indexDirty = true;
-        }
-        await SaveManyAsync(await _tableAdapter.GetAllAsync(_name, cancellationToken: ct).ToListAsync());
-    }
-
-    /// <summary>
     /// Reset the database: deletes and recreates the table, clears and reinitializes the Lucene index.
     /// </summary>
     public async Task ResetDatabaseAsync(CancellationToken ct = default)
@@ -567,43 +598,12 @@ public class LottaDB : IDisposable
         }
     }
 
-    // === Lucene session helpers ===
-
-    /// <summary>
-    /// Add an entity to the Lucene index. Reuses a shared session if one is active (bulk operations),
-    /// otherwise opens and immediately disposes a dedicated session.
-    /// </summary>
-    private void SaveLuceneObject(string key, object entity, IDocumentMapper mapper)
-    {
-        lock (_lock)
-        {
-            DeleteLuceneObject(key);
-
-            var document = new Document();
-            mapper.ToDocument(entity, document);
-            _indexWriter.AddDocument(document);
-            _indexDirty = true;
-        }
-    }
-
-    /// <summary>
-    /// Delete an entity from the Lucene index.
-    /// </summary>
-    private void DeleteLuceneObject(string key)
-    {
-        lock (_lock)
-        {
-            _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
-            _indexDirty = true;
-        }
-    }
-
     // === Bulk operations ===
 
     /// <summary>
     /// Save (upsert) multiple objects in bulk. Table storage writes are batched transactionally
-    /// (auto-flushed at 100 ops or on duplicate key). The Lucene IndexSearcher refreshes once
-    /// at the end. On&lt;T&gt; handlers run inline and share the Lucene session.
+    /// (auto-flushed at 100 ops or on duplicate key). On&lt;T&gt; handlers (including Lucene indexing)
+    /// run after each batch commit succeeds.
     /// </summary>
     /// <param name="entities">The objects to save.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -614,8 +614,7 @@ public class LottaDB : IDisposable
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
-        // Buffer Lucene updates until table batch commits successfully
-        var pendingLucene = new List<(string key, object entity, IDocumentMapper mapper)>();
+        var pendingEntities = new List<(object entity, Type type)>();
 
         try
         {
@@ -625,7 +624,6 @@ public class LottaDB : IDisposable
 
                 var meta = GetMeta(entity.GetType());
                 var key = meta.GetKey(entity);
-                var mapper = GetMapper(entity.GetType());
                 if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
                     meta.SetKey(entity, key);
 
@@ -633,37 +631,30 @@ public class LottaDB : IDisposable
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    ApplyPendingLuceneSaves(pendingLucene);
+                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
                 pendingActions.Add(TableStorageAdapter.CreateUpsertAction(key, entity, meta));
                 pendingKeys.Add(key);
-                pendingLucene.Add((key, entity, mapper));
+                pendingEntities.Add((entity, entity.GetType()));
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    ApplyPendingLuceneSaves(pendingLucene);
+                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
-
-                var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
-                allChanges.Add(change);
-
-                _chainChanges.Value = allChanges;
-                _chainErrors.Value = allErrors;
-                await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, allErrors, ct);
             }
 
-            // Flush remaining table storage batch, then apply Lucene
+            // Flush remaining
             if (pendingActions.Count > 0)
             {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                ApplyPendingLuceneSaves(pendingLucene);
+                await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
             }
         }
         finally
@@ -676,13 +667,6 @@ public class LottaDB : IDisposable
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
     }
 
-    private void ApplyPendingLuceneSaves(List<(string key, object entity, IDocumentMapper mapper)> pending)
-    {
-        foreach (var (key, entity, mapper) in pending)
-            SaveLuceneObject(key, entity, mapper);
-        pending.Clear();
-    }
-
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, new()
     {
         var meta = GetMeta<T>();
@@ -692,8 +676,8 @@ public class LottaDB : IDisposable
 
     /// <summary>
     /// Delete multiple objects by key in bulk. Table storage writes are batched transactionally
-    /// (auto-flushed at 100 ops or on duplicate key). The Lucene IndexSearcher refreshes once
-    /// at the end. On&lt;T&gt; handlers run inline and share the Lucene session.
+    /// (auto-flushed at 100 ops or on duplicate key). On&lt;T&gt; handlers (including Lucene cleanup)
+    /// run after each batch commit succeeds.
     /// </summary>
     /// <param name="keys">The keys of the objects to delete.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -704,7 +688,7 @@ public class LottaDB : IDisposable
         var allErrors = new List<Exception>();
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
-        var pendingLuceneDeletes = new List<string>();
+        var pendingEntities = new List<(object? entity, Type? type, string key)>();
 
         // Single query to fetch all entities (for handlers) instead of N point reads
         var keyList = keys.ToList();
@@ -728,36 +712,28 @@ public class LottaDB : IDisposable
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    ApplyPendingLuceneDeletes(pendingLuceneDeletes);
+                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
                 pendingActions.Add(TableStorageAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
-                pendingLuceneDeletes.Add(key);
+                pendingEntities.Add((existing, entityType, key));
 
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    ApplyPendingLuceneDeletes(pendingLuceneDeletes);
+                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
-
-                var change = new ObjectChange { Type = entityType, Key = key, Kind = ChangeKind.Deleted, Object = existing };
-                allChanges.Add(change);
-
-                _chainChanges.Value = allChanges;
-                _chainErrors.Value = allErrors;
-                if (existing != null && entityType != null)
-                    await RunHandlersAsync(existing, entityType, TriggerKind.Deleted, allErrors, ct);
             }
 
             if (pendingActions.Count > 0)
             {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                ApplyPendingLuceneDeletes(pendingLuceneDeletes);
+                await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
             }
         }
         finally
@@ -770,10 +746,46 @@ public class LottaDB : IDisposable
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
     }
 
-    private void ApplyPendingLuceneDeletes(List<string> pending)
+    private async Task RunPendingHandlersAsync(
+        List<(object entity, Type type)> pending,
+        TriggerKind kind,
+        List<ObjectChange> allChanges,
+        List<Exception> allErrors,
+        CancellationToken ct)
     {
-        foreach (var key in pending)
-            DeleteLuceneObject(key);
+        foreach (var (entity, type) in pending)
+        {
+            var meta = GetMeta(type);
+            var key = meta.GetKey(entity);
+            var changeKind = kind == TriggerKind.Saved ? ChangeKind.Saved : ChangeKind.Deleted;
+            var change = new ObjectChange { Type = type, Key = key, Kind = changeKind, Object = entity };
+            allChanges.Add(change);
+
+            _chainChanges.Value = allChanges;
+            _chainErrors.Value = allErrors;
+            await RunHandlersAsync(entity, type, kind, allErrors, ct);
+        }
+        pending.Clear();
+    }
+
+    private async Task RunPendingDeleteHandlersAsync(
+        List<(object? entity, Type? type, string key)> pending,
+        List<ObjectChange> allChanges,
+        List<Exception> allErrors,
+        CancellationToken ct)
+    {
+        foreach (var (entity, type, key) in pending)
+        {
+            var change = new ObjectChange { Type = type!, Key = key, Kind = ChangeKind.Deleted, Object = entity };
+            allChanges.Add(change);
+
+            if (entity != null && type != null)
+            {
+                _chainChanges.Value = allChanges;
+                _chainErrors.Value = allErrors;
+                await RunHandlersAsync(entity, type, TriggerKind.Deleted, allErrors, ct);
+            }
+        }
         pending.Clear();
     }
 
