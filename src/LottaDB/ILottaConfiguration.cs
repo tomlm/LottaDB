@@ -1,4 +1,5 @@
 using Azure.Data.Tables;
+using Microsoft.Extensions.AI;
 using System.Linq.Expressions;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 
@@ -31,6 +32,14 @@ public interface ILottaConfiguration
     /// Factory for instantiating a Lucene Directory with a given name. The default factory creates a new AzureDirectory per database instance
     /// </summary>
     Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
+
+    /// <summary>
+    /// Embedding generator for vector similarity search. Used to convert text into
+    /// vector embeddings for properties marked with <see cref="QueryableMode.Vector"/>.
+    /// Defaults to ElBruno.LocalEmbeddings with SmartComponents/bge-micro-v2 model.
+    /// Set to <c>null</c> to disable vector support.
+    /// </summary>
+    IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
 
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
@@ -96,6 +105,8 @@ public interface IQueryableConfiguration
     IQueryableConfiguration Analyzed();
     /// <summary>Index as-is for exact match filtering only.</summary>
     IQueryableConfiguration NotAnalyzed();
+    /// <summary>Enable vector embeddings for similarity search. Composable with any analysis mode.</summary>
+    IQueryableConfiguration Vector();
 }
 
 /// <summary>
@@ -107,4 +118,6 @@ public interface IFieldConfiguration
     IFieldConfiguration Analyzed();
     /// <summary>Index as-is for exact match filtering only.</summary>
     IFieldConfiguration NotAnalyzed();
+    /// <summary>Enable vector embeddings for similarity search. Composable with any analysis mode.</summary>
+    IFieldConfiguration Vector();
 }

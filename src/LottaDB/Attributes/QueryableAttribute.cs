@@ -14,6 +14,12 @@ public class QueryableAttribute : Attribute
     /// <summary>How the property is indexed in Lucene.</summary>
     public QueryableMode Mode { get; }
 
+    /// <summary>
+    /// When <c>true</c>, vector embeddings are generated for this property,
+    /// enabling <c>.Similar()</c> queries. Composable with any <see cref="QueryableMode"/>.
+    /// </summary>
+    public bool Vector { get; set; }
+
     /// <summary>Queryable with smart defaults based on property type.</summary>
     public QueryableAttribute()
     {

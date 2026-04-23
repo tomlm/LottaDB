@@ -3,6 +3,7 @@ using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.En;
 using Lucene.Net.Store;
 using Lucene.Net.Store.Azure;
+using Microsoft.Extensions.AI;
 
 namespace Lotta;
 
@@ -46,6 +47,14 @@ public class LottaConfiguration : ILottaConfiguration
     /// </summary>
     public Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
     
+    /// <summary>
+    /// Embedding generator for vector similarity search. When set, properties marked with
+    /// <see cref="QueryableMode.Vector"/> will have embeddings generated at index time and
+    /// support <c>.Similar()</c> queries. When <c>null</c> (the default), vector fields are
+    /// indexed for full-text search only — no embeddings are generated.
+    /// </summary>
+    public IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
+
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
     /// </summary>

@@ -39,9 +39,14 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.2-beta00017" />
+    <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.3-beta00017" />
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
     <PackageReference Include="Ulid" Version="1.4.1" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Lucene.Net.Linq\source\Lucene.Net.Linq\Lucene.Net.Linq.csproj" />
   </ItemGroup>
 
 </Project>

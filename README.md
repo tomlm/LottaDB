@@ -34,6 +34,7 @@ dotnet add package LottaDB
 - **Plain POCOs** -- no base classes, no interfaces. Have an object? Store an object.
 - **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
 - **LINQ** -- Rich Linq against typed objects makes it so easy.
+- **Vector similarity search** -- mark properties with `QueryableMode.Vector` for semantic search via `.Similar()`. Built-in local embeddings, no API calls needed.
 - **Polymorphic queries** -- `Query<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
 - **Triggers** -- `On<T>` triggers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
 - **Fluent or attribute configuration** -- annotate your models, or configure foreign POCOs entirely via fluent API.
@@ -110,6 +111,9 @@ public class Note
 
     [Queryable]                              // full-text search (string default)
     public string Content { get; set; } = "";
+
+    [Queryable(Vector = true)]                // full-text + vector similarity search
+    public string Summary { get; set; } = "";
 
     public DateTimeOffset Published { get; set; }  // stored in JSON, not indexed
     public List<string> Tags { get; set; } = new(); // complex types just work
@@ -247,6 +251,90 @@ var results = db.Search<Note>("foo bar").ToList();
 // Lucene Query syntax
 var results = db.Search<Note>("Title:foo AND bar").ToList();
 ```
+
+## Vector Similarity Search
+
+LottaDB supports **vector similarity search** using embeddings. Mark string properties with `QueryableMode.Vector` and LottaDB will automatically generate embeddings at index time and support `.Similar()` queries for semantic search.
+
+By default, LottaDB uses [ElBruno.LocalEmbeddings](https://github.com/elbruno/LocalEmbeddings) with the `SmartComponents/bge-micro-v2` model -- no external API calls needed. You can override this by setting `EmbeddingGenerator` on the configuration.
+
+### Making a property vector-searchable
+
+**Attribute-based:**
+```csharp
+public class Article
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable(Vector = true)]                              // analyzed (default) + vector
+    public string Title { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Body { get; set; } = "";
+
+    [Queryable(QueryableMode.NotAnalyzed, Vector = true)]   // exact match + vector
+    public string Slug { get; set; } = "";
+
+    [Queryable]                                              // full-text only, no embeddings
+    public string Category { get; set; } = "";
+}
+```
+
+**Fluent:**
+```csharp
+options.Store<Article>(s =>
+{
+    s.SetKey(a => a.Id);
+    s.AddQueryable(a => a.Title).Vector();              // analyzed + vector
+    s.AddQueryable(a => a.Body).Vector();
+    s.AddQueryable(a => a.Slug).NotAnalyzed().Vector(); // exact match + vector
+    s.AddQueryable(a => a.Category);                     // full-text only
+});
+```
+
+`Vector` is composable with any `QueryableMode` -- it adds vector embeddings on top of whatever analysis mode you choose.
+
+### Querying with `.Similar()`
+
+**Property-level** -- search against a specific field's embeddings:
+```csharp
+// Find articles with titles semantically similar to "cute cat napping"
+var results = db.Search<Article>(a => a.Title.Similar("cute cat napping")).ToList();
+```
+
+**Object-level** -- search against the combined content of all analyzed string fields:
+```csharp
+// Semantic search across all text content (Title + Body + Category)
+var results = db.Search<Article>(a => a.Similar("machine learning breakthroughs")).ToList();
+```
+
+**Hybrid** -- combine vector similarity with filters:
+```csharp
+// Semantic search + exact filter
+var results = db.Search<Article>(a => a.Title.Similar("furry animals") && a.Category == "pets")
+    .ToList();
+```
+
+**Limit results:**
+```csharp
+var top5 = db.Search<Article>(a => a.Similar("quantum physics"))
+    .Take(5)
+    .ToList();
+```
+
+### Custom embedding generator
+
+To use a different embedding model or an external API:
+```csharp
+var db = new LottaDB("myapp", connectionString, config =>
+{
+    config.EmbeddingGenerator = myCustomEmbeddingGenerator; // IEmbeddingGenerator<string, Embedding<float>>
+    config.Store<Article>();
+});
+```
+
+Set `EmbeddingGenerator` to `null` to disable vector support entirely.
 
 ## Triggers via `On<T>`
 

@@ -54,6 +54,7 @@ internal class QueryablePropertyConfig : IQueryableConfiguration
 {
     internal LambdaExpression Expression { get; }
     internal QueryableMode Mode { get; private set; } = QueryableMode.Auto;
+    internal bool IsVectorField { get; private set; }
 
     public QueryablePropertyConfig(LambdaExpression expression)
     {
@@ -62,12 +63,14 @@ internal class QueryablePropertyConfig : IQueryableConfiguration
 
     public IQueryableConfiguration Analyzed() { Mode = QueryableMode.Analyzed; return this; }
     public IQueryableConfiguration NotAnalyzed() { Mode = QueryableMode.NotAnalyzed; return this; }
+    public IQueryableConfiguration Vector() { IsVectorField = true; return this; }
 }
 
 internal class FieldPropertyConfig : IFieldConfiguration
 {
     internal LambdaExpression Expression { get; }
     internal bool IsNotAnalyzed { get; private set; }
+    internal bool IsVectorField { get; private set; }
 
     public FieldPropertyConfig(LambdaExpression expression)
     {
@@ -76,4 +79,5 @@ internal class FieldPropertyConfig : IFieldConfiguration
 
     public IFieldConfiguration Analyzed() { IsNotAnalyzed = false; return this; }
     public IFieldConfiguration NotAnalyzed() { IsNotAnalyzed = true; return this; }
+    public IFieldConfiguration Vector() { IsVectorField = true; return this; }
 }

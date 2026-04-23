@@ -16,8 +16,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.6" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
+    <PackageReference Include="ElBruno.LocalEmbeddings" Version="1.4.3" />
     <PackageReference Include="Spotflow.InMemory.Azure.Storage" Version="0.16.3" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">

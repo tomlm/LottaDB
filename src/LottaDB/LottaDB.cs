@@ -84,11 +84,13 @@ public class LottaDB : IDisposable
             });
         _indexWriter.Commit();
         _lucene = new ReadOnlyLuceneDataProvider(_directory, LuceneVersion.LUCENE_48);
+        if (_config.EmbeddingGenerator != null)
+            _lucene.Settings.EmbeddingGenerator = _config.EmbeddingGenerator;
         _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
             _metadata.TryGetValue(type, out var meta);
-            return Activator.CreateInstance(mapperType, version, _config.Analyzer, meta)!;
+            return Activator.CreateInstance(mapperType, version, _config.Analyzer, meta, _config.EmbeddingGenerator)!;
         };
     }
 
@@ -160,7 +162,7 @@ public class LottaDB : IDisposable
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             _metadata.TryGetValue(typeof(T), out var meta);
-            return new LottaDocumentMapper<T>(Version.LUCENE_48, _config.Analyzer, meta);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, _config.Analyzer, meta, _config.EmbeddingGenerator);
         });
     }
 
@@ -171,7 +173,7 @@ public class LottaDB : IDisposable
             var db = (LottaDB)state!;
             db._metadata.TryGetValue(t, out var meta);
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(t);
-            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta)!;
+            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta, db._config.EmbeddingGenerator)!;
         }, this);
     }
 

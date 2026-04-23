@@ -108,7 +108,7 @@ internal class TypeMetadata
             var queryableAttr = prop.GetCustomAttribute<QueryableAttribute>();
             if (queryableAttr != null)
             {
-                AddQueryable(meta, prop, queryableAttr.Mode);
+                AddQueryable(meta, prop, queryableAttr.Mode, queryableAttr.Vector);
                 continue;
             }
 
@@ -125,11 +125,13 @@ internal class TypeMetadata
                 var fieldAttr = prop.GetCustomAttribute<Lucene.Net.Linq.Mapping.FieldAttribute>(true);
                 if (fieldAttr != null)
                 {
+                    var vectorAttr = prop.GetCustomAttribute<Lucene.Net.Linq.Mapping.VectorFieldAttribute>();
                     meta.IndexedProperties.Add(new IndexedPropertyInfo
                     {
                         Property = prop,
                         IsNotAnalyzed = fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzed
                                      || fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzedNoNorms,
+                        IsVectorField = vectorAttr != null,
                     });
                 }
             }
@@ -142,7 +144,7 @@ internal class TypeMetadata
         {
             var propInfo = ExtractPropertyInfo(config.Expression);
             if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
-                AddQueryable(meta, propInfo, config.Mode);
+                AddQueryable(meta, propInfo, config.Mode, config.IsVectorField);
         }
 
         // Fluent AddTag → Table Storage column only
@@ -163,6 +165,7 @@ internal class TypeMetadata
                 {
                     Property = propInfo,
                     IsNotAnalyzed = config.IsNotAnalyzed,
+                    IsVectorField = config.IsVectorField,
                 });
             }
         }
@@ -178,7 +181,7 @@ internal class TypeMetadata
         });
     }
 
-    private static void AddQueryable(TypeMetadata meta, PropertyInfo prop, QueryableMode mode)
+    private static void AddQueryable(TypeMetadata meta, PropertyInfo prop, QueryableMode mode, bool vector = false)
     {
         // Table Storage tag
         meta.Tags.Add(new TagInfo
@@ -201,6 +204,7 @@ internal class TypeMetadata
         {
             Property = prop,
             IsNotAnalyzed = isNotAnalyzed,
+            IsVectorField = vector,
         });
     }
 
@@ -226,4 +230,5 @@ internal class IndexedPropertyInfo
 {
     public required PropertyInfo Property { get; init; }
     public bool IsNotAnalyzed { get; init; }
+    public bool IsVectorField { get; init; }
 }

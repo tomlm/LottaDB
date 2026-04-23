@@ -132,6 +132,19 @@ public class OrderLine
     public decimal Price { get; set; }
 }
 
+// Model using Lucene.Net.Linq's [Field, VectorField] attributes directly
+public class LuceneVectorDoc
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Lucene.Net.Linq.Mapping.Field, Lucene.Net.Linq.Mapping.VectorField]
+    public string Title { get; set; } = "";
+
+    [Lucene.Net.Linq.Mapping.Field]
+    public string Category { get; set; } = "";
+}
+
 // === Bare models (no attributes at all) — configured entirely via fluent API ===
 
 public class BareActor
@@ -170,4 +183,28 @@ public class Employee : Person
 {
     [Queryable]
     public string Department { get; set; } = "";
+}
+
+// Vector search test model
+public class VectorNote
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Title { get; set; } = "";
+
+    [Queryable]
+    public string Category { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Body { get; set; } = "";
+}
+
+// Bare vector model for fluent-only config
+public class BareVectorNote
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Category { get; set; } = "";
 }
