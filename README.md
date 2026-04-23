@@ -98,7 +98,8 @@ When you instantiate a DB you tell the data base about your type:
 If it's a POCO object you own you can add attributes to describe metadata on how to store the object in Lotta.
 
 * **`[Key]`** marks the unique identity property. Supports manual values or auto-generated ULIDs.
-* **`[Queryable]`** makes a property as queryable via Linq. .
+* **`[Queryable]`** makes a property queryable via Linq.
+* **`[DefaultSearch]`** (class-level) sets which property is the default target for free-text queries and `.Query()`/`.Similar()`.
 
 ```csharp
 public class Note
@@ -146,6 +147,63 @@ public class BareNote
  }
 ```
 
+
+### Default Search Property
+
+Automatically LottaDB creates a synthetic content field that concatenates all analyzed string properties for free-text search. When you call `Search<T>("some text")` or use `.Query("...")` on the object, it searches this combined field.
+
+You can override this behavior by adding the **`[DefaultSearch(nameof(MyContent)]`** attribute to your class or callilng `s.DefaultSearch(a => a.MyContent)` to set that a specific property should be used instead. 
+When set, the automatic property is not created -- your chosen property becomes the default search target for object operatations.
+
+This is especially powerful with **computed properties** that compose exactly the content you want searchable:
+
+**Attribute-based:**
+```csharp
+[DefaultSearch(nameof(Content))]
+public class Article
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable]
+    public string Title { get; set; } = "";
+
+    [Queryable]
+    public string Body { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Content { get => $"{Title} {Body}"; }  // composed search field
+}
+```
+
+**Fluent:**
+```csharp
+options.Store<Article>(s =>
+{
+    s.SetKey(a => a.Id);
+    s.AddQueryable(a => a.Title);
+    s.AddQueryable(a => a.Body);
+    s.AddQueryable(a => a.Content).Vector();
+    s.DefaultSearch(a => a.Content);
+});
+```
+
+Now `Search<Article>("lucene")` and `a.Query("lucene")` target the `Content` property, while `a.Title.Query("lucene")` still targets `Title` directly:
+
+```csharp
+// Free-text search targets Content (Title + Body)
+var results = db.Search<Article>("lucene").ToList();
+
+// Object-level Query/Similar also targets Content
+var results = db.Search<Article>(a => a.Query("lucene")).ToList();
+var results = db.Search<Article>(a => a.Similar("search engines")).ToList();
+
+// Property-level queries still target the named field
+var results = db.Search<Article>(a => a.Title.Query("lucene")).ToList();
+var results = db.Search<Article>(a => a.Title.Similar("search engines")).ToList();
+```
+
+The referenced property must be indexed via `[Queryable]`, `[Field]`, or the fluent API. An invalid reference throws at initialization.
 
 ## Lotta Operations
 
@@ -303,9 +361,9 @@ options.Store<Article>(s =>
 var results = db.Search<Article>(a => a.Title.Similar("cute cat napping")).ToList();
 ```
 
-**Object-level** -- search against the combined content of all analyzed string fields:
+**Object-level** -- search against the default search property (the `_content_` composite field, or your `[DefaultSearch]` property):
 ```csharp
-// Semantic search across all text content (Title + Body + Category)
+// Semantic search across default search content
 var results = db.Search<Article>(a => a.Similar("machine learning breakthroughs")).ToList();
 ```
 
