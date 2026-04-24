@@ -210,34 +210,64 @@ The referenced property must be indexed via `[Queryable]`, `[Field]`, or the flu
 
 ## Lotta Operations
 
-| Operation            | Description                                       |
-| -------------------- | ------------------------------------------------- |
-| **SaveAsync<T>()**   | Save T instance using Upsert semantics            |
-| **ChangeAsync<T>()** | Apply changes to T instance via lamda             |
-| **DeleteAsync<T>()** | Delete a single object by key or entity            |
+| Operation | Description |
+| --- | --- |
+| **SaveAsync()** | Save (upsert) a single object |
+| **SaveManyAsync()** | Save (upsert) multiple objects in bulk |
+| **ChangeAsync<T>()** | Read-modify-write with optimistic concurrency |
+| **GetAsync<T>()** | Point-read a single object by key |
+| **GetManyAsync<T>()** | Get multiple items from table storage |
+| **DeleteAsync<T>()** | Delete a single object by key or entity |
 | **DeleteManyAsync<T>()** | Delete by predicate, by entities, or all of a type |
-| **QueryAsync<T>()**  | Query against table storage for objects of type T |
-| **SearchAsync<T>()** | Search against lucene for objects of type T       |
+| **Search<T>()** | Full-text search via Lucene with LINQ |
 
-### SaveAsync<T>() 
+### SaveAsync()
 
-Save a POCO object into a Lotta DB using it's Key
+Save a POCO object using upsert semantics.
 
 ```csharp
-await db.SaveAsync<Actor>(actor);
+await db.SaveAsync(actor);
+```
+
+### SaveManyAsync()
+
+Save multiple objects in bulk. Table storage writes are batched transactionally (auto-flushed at 100 ops). On<T> handlers run after each batch commit.
+
+```csharp
+await db.SaveManyAsync([actor1, actor2, note1 ]);
 ```
 
 ### ChangeAsync<T>()
 
-Apply change to T with ETag concurrency. It will fetch the object, call the lamda to change and attempt to save it with ETag concurrency. If the object fails, it will loop until it succeeds to mutate it.
+Read-modify-write with optimistic concurrency. Fetches the object, applies the mutation, and commits with ETag concurrency. Retries automatically on conflicts.
 
 ```csharp
-await db.ChangeAsync<Actor>(key, actor => actor.Movies++);
+await db.ChangeAsync<Actor>(key, actor => actor.Counter++);
+```
+
+### GetAsync<T>()
+
+Point-read a single object by key from table storage.
+
+```csharp
+var actor = await db.GetAsync<Actor>("alice");
+```
+
+### GetManyAsync<T>()
+
+Query table storage with an optional predicate filter. Filters on `[Queryable]` properties are executed server-side.
+
+```csharp
+// All actors
+await foreach (var actor in db.GetManyAsync<Actor>()) { ... }
+
+// Server-side filter
+await foreach (var note in db.GetManyAsync<Note>(n => n.AuthorId == "alice")) { ... }
 ```
 
 ### DeleteAsync<T>()
 
-Delete a single object from a Lotta DB by key or entity.
+Delete a single object by key or entity.
 
 ```csharp
 await db.DeleteAsync<Note>(key);
@@ -259,28 +289,19 @@ await db.DeleteManyAsync<Note>(notesToDelete);
 await db.DeleteManyAsync<Note>();
 ```
 
-### QueryAsync<T>()
-Search table storage using linq
-> NOTE: only filter passed to QueryAsync is processed server side by table storage and it needs to be on [Queryable] properties. 
-> All other linq operations are processed client side after fetching the data from table storage.
+### Search<T>()
+
+Full-text search against the Lucene index. Returns `IQueryable<T>` with full LINQ support.
 
 ```csharp
-foreach(var actor in db.QueryAsync<Actor>(actor => actor.Age > 50)
-{
-    ...
-}
-```
+// Free-text query
+var results = db.Search<Note>("lucene").ToList();
 
-### SearchAsync<T>()
-Search lucene index using linq search syntax. 
-> NOTE: only [Queryable] properties are searchable in lucene and string properties support full text search with Contains.
+// LINQ predicate
+var results = db.Search<Note>(n => n.Content.Contains("lucene")).ToList();
 
-```csharp
-foreach(var actor in db.SearchAsync<Actor>("name:bob*")
-                       .Where(actor => actor.Age > 50)
-{
-    ...
-}
+// Lucene query syntax with field qualifier
+var results = db.Search<Note>("AuthorId:alice AND Content:lucene").ToList();
 ```
 
 
