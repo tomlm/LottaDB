@@ -343,17 +343,17 @@ public class FluentConfigTests
         Assert.Equal(ChangeKind.Saved, result.Changes[0].Kind);
     }
 
-    // === DeleteAsync with predicate ===
+    // === DeleteManyAsync with predicate ===
 
     [Fact]
-    public async Task Fluent_DeleteByPredicate()
+    public async Task Fluent_DeleteManyByPredicate()
     {
         using var db = CreateFluentDb();
         await db.SaveAsync(new BareNote { NoteId = "n1", AuthorId = "alice", Content = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n2", AuthorId = "alice", Content = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new BareNote { NoteId = "n3", AuthorId = "bob", Content = "C" }, TestContext.Current.CancellationToken);
 
-        await db.DeleteAsync<BareNote>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
+        await db.DeleteManyAsync<BareNote>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
         var remaining = await db.GetManyAsync<BareNote>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(remaining);

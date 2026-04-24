@@ -32,6 +32,9 @@ public class LottaDBFixture : IDisposable
             config.Store<BaseEntity>();
             config.Store<Person>();
             config.Store<Employee>();
+            config.Store<VectorNote>();
+            config.Store<Article>();
+            config.Store<Product>();
 
             configureAction?.Invoke(config);
         });

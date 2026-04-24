@@ -163,7 +163,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task DeleteAsync_WithPredicate_DeletesMatchingObjects()
+    public async Task DeleteManyAsync_WithPredicate_DeletesMatchingObjects()
     {
         using var db = await LottaDBFixture.CreateDbAsync();
 
@@ -174,7 +174,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         Assert.NotNull(await db.GetAsync<Note>("pred1", TestContext.Current.CancellationToken));
         Assert.NotNull(await db.GetAsync<Note>("pred2", TestContext.Current.CancellationToken));
 
-        var result = await db.DeleteAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
+        var result = await db.DeleteManyAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
         // Alice's notes gone
         Assert.Null(await db.GetAsync<Note>("pred1", TestContext.Current.CancellationToken));
@@ -186,7 +186,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task DeleteAsync_WithPredicate_RunsOnHandlers()
+    public async Task DeleteManyAsync_WithPredicate_RunsOnHandlers()
     {
         int deleteCount = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
@@ -201,7 +201,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         await db.SaveAsync(new Note { NoteId = "h1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "h2", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
 
-        await db.DeleteAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
+        await db.DeleteManyAsync<Note>(n => n.AuthorId == "alice", TestContext.Current.CancellationToken);
 
         Assert.Equal(2, deleteCount);
     }

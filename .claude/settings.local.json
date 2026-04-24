@@ -13,7 +13,12 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(v\\) for v in d['versions'][-10:]]\")",
       "Bash(dotnet add:*)",
       "Bash(sed:*)",
-      "Bash(dotnet list:*)"
+      "Bash(dotnet list:*)",
+      "Bash(grep -r \"class VectorQuery\" --include=\"*.cs\" -rn)",
+      "Bash(grep -r \"class VectorIndexOptions\" --include=\"*.cs\" -rn)",
+      "Bash(dotnet tool:*)",
+      "Bash(ls -la /s/github/LottaDB/src/LottaDB.Tests/*.cs)",
+      "Bash(xargs cat:*)"
     ]
   }
 }

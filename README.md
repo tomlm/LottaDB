@@ -1,3 +1,6 @@
+[![Build and Test](https://github.com/tomlm/LottaDB/actions/workflows/BuildAndRunTests.yml/badge.svg)](https://github.com/tomlm/LottaDB/actions/workflows/BuildAndRunTests.yml)
+[![NuGet](https://img.shields.io/nuget/v/LottaDB.svg)](https://www.nuget.org/packages/LottaDB)
+
 ![Logo](https://raw.githubusercontent.com/tomlm/LottaDB/refs/heads/main/icon.png)
 
 # LottaDB
@@ -34,6 +37,7 @@ dotnet add package LottaDB
 - **Plain POCOs** -- no base classes, no interfaces. Have an object? Store an object.
 - **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
 - **LINQ** -- Rich Linq against typed objects makes it so easy.
+- **Vector similarity search** -- mark properties with `QueryableMode.Vector` for semantic search via `.Similar()`. Built-in local embeddings, no API calls needed.
 - **Polymorphic queries** -- `Query<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
 - **Triggers** -- `On<T>` triggers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
 - **Fluent or attribute configuration** -- annotate your models, or configure foreign POCOs entirely via fluent API.
@@ -97,7 +101,8 @@ When you instantiate a DB you tell the data base about your type:
 If it's a POCO object you own you can add attributes to describe metadata on how to store the object in Lotta.
 
 * **`[Key]`** marks the unique identity property. Supports manual values or auto-generated ULIDs.
-* **`[Queryable]`** makes a property as queryable via Linq. .
+* **`[Queryable]`** makes a property queryable via Linq.
+* **`[DefaultSearch]`** (class-level) sets which property is the default target for free-text queries and `.Query()`/`.Similar()`.
 
 ```csharp
 public class Note
@@ -110,6 +115,9 @@ public class Note
 
     [Queryable]                              // full-text search (string default)
     public string Content { get; set; } = "";
+
+    [Queryable(Vector = true)]                // full-text + vector similarity search
+    public string Summary { get; set; } = "";
 
     public DateTimeOffset Published { get; set; }  // stored in JSON, not indexed
     public List<string> Tags { get; set; } = new(); // complex types just work
@@ -143,13 +151,71 @@ public class BareNote
 ```
 
 
+### Default Search Property
+
+Automatically LottaDB creates a synthetic content field that concatenates all analyzed string properties for free-text search. When you call `Search<T>("some text")` or use `.Query("...")` on the object, it searches this combined field.
+
+You can override this behavior by adding the **`[DefaultSearch(nameof(MyContent)]`** attribute to your class or callilng `s.DefaultSearch(a => a.MyContent)` to set that a specific property should be used instead. 
+When set, the automatic property is not created -- your chosen property becomes the default search target for object operatations.
+
+This is especially powerful with **computed properties** that compose exactly the content you want searchable:
+
+**Attribute-based:**
+```csharp
+[DefaultSearch(nameof(Content))]
+public class Article
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable]
+    public string Title { get; set; } = "";
+
+    [Queryable]
+    public string Body { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Content { get => $"{Title} {Body}"; }  // composed search field
+}
+```
+
+**Fluent:**
+```csharp
+options.Store<Article>(s =>
+{
+    s.SetKey(a => a.Id);
+    s.AddQueryable(a => a.Title);
+    s.AddQueryable(a => a.Body);
+    s.AddQueryable(a => a.Content).Vector();
+    s.DefaultSearch(a => a.Content);
+});
+```
+
+Now `Search<Article>("lucene")` and `a.Query("lucene")` target the `Content` property, while `a.Title.Query("lucene")` still targets `Title` directly:
+
+```csharp
+// Free-text search targets Content (Title + Body)
+var results = db.Search<Article>("lucene").ToList();
+
+// Object-level Query/Similar also targets Content
+var results = db.Search<Article>(a => a.Query("lucene")).ToList();
+var results = db.Search<Article>(a => a.Similar("search engines")).ToList();
+
+// Property-level queries still target the named field
+var results = db.Search<Article>(a => a.Title.Query("lucene")).ToList();
+var results = db.Search<Article>(a => a.Title.Similar("search engines")).ToList();
+```
+
+The referenced property must be indexed via `[Queryable]`, `[Field]`, or the fluent API. An invalid reference throws at initialization.
+
 ## Lotta Operations
 
 | Operation            | Description                                       |
 | -------------------- | ------------------------------------------------- |
 | **SaveAsync<T>()**   | Save T instance using Upsert semantics            |
 | **ChangeAsync<T>()** | Apply changes to T instance via lamda             |
-| **DeleteAsync<T>()** | Delete T instance object                          |
+| **DeleteAsync<T>()** | Delete a single object by key or entity            |
+| **DeleteManyAsync<T>()** | Delete by predicate, by entities, or all of a type |
 | **QueryAsync<T>()**  | Query against table storage for objects of type T |
 | **SearchAsync<T>()** | Search against lucene for objects of type T       |
 
@@ -171,11 +237,26 @@ await db.ChangeAsync<Actor>(key, actor => actor.Movies++);
 
 ### DeleteAsync<T>()
 
-Delete an object from a Lotta DB.
+Delete a single object from a Lotta DB by key or entity.
 
 ```csharp
 await db.DeleteAsync<Note>(key);
 await db.DeleteAsync<Note>(note);
+```
+
+### DeleteManyAsync<T>()
+
+Delete multiple objects. Pass a predicate to delete matching objects, entities to delete specific ones, or no arguments to delete all objects of that type.
+
+```csharp
+// Delete all notes by a specific author
+await db.DeleteManyAsync<Note>(n => n.AuthorId == "alice");
+
+// Delete specific entities
+await db.DeleteManyAsync<Note>(notesToDelete);
+
+// Delete ALL objects of a type
+await db.DeleteManyAsync<Note>();
 ```
 
 ### QueryAsync<T>()
@@ -248,6 +329,90 @@ var results = db.Search<Note>("foo bar").ToList();
 var results = db.Search<Note>("Title:foo AND bar").ToList();
 ```
 
+## Vector Similarity Search
+
+LottaDB supports **vector similarity search** using embeddings. Mark string properties with `QueryableMode.Vector` and LottaDB will automatically generate embeddings at index time and support `.Similar()` queries for semantic search.
+
+By default, LottaDB uses [ElBruno.LocalEmbeddings](https://github.com/elbruno/LocalEmbeddings) with the `SmartComponents/bge-micro-v2` model -- no external API calls needed. You can override this by setting `EmbeddingGenerator` on the configuration.
+
+### Making a property vector-searchable
+
+**Attribute-based:**
+```csharp
+public class Article
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable(Vector = true)]                              // analyzed (default) + vector
+    public string Title { get; set; } = "";
+
+    [Queryable(Vector = true)]
+    public string Body { get; set; } = "";
+
+    [Queryable(QueryableMode.NotAnalyzed, Vector = true)]   // exact match + vector
+    public string Slug { get; set; } = "";
+
+    [Queryable]                                              // full-text only, no embeddings
+    public string Category { get; set; } = "";
+}
+```
+
+**Fluent:**
+```csharp
+options.Store<Article>(s =>
+{
+    s.SetKey(a => a.Id);
+    s.AddQueryable(a => a.Title).Vector();              // analyzed + vector
+    s.AddQueryable(a => a.Body).Vector();
+    s.AddQueryable(a => a.Slug).NotAnalyzed().Vector(); // exact match + vector
+    s.AddQueryable(a => a.Category);                     // full-text only
+});
+```
+
+`Vector` is composable with any `QueryableMode` -- it adds vector embeddings on top of whatever analysis mode you choose.
+
+### Querying with `.Similar()`
+
+**Property-level** -- search against a specific field's embeddings:
+```csharp
+// Find articles with titles semantically similar to "cute cat napping"
+var results = db.Search<Article>(a => a.Title.Similar("cute cat napping")).ToList();
+```
+
+**Object-level** -- search against the default search property (the `_content_` composite field, or your `[DefaultSearch]` property):
+```csharp
+// Semantic search across default search content
+var results = db.Search<Article>(a => a.Similar("machine learning breakthroughs")).ToList();
+```
+
+**Hybrid** -- combine vector similarity with filters:
+```csharp
+// Semantic search + exact filter
+var results = db.Search<Article>(a => a.Title.Similar("furry animals") && a.Category == "pets")
+    .ToList();
+```
+
+**Limit results:**
+```csharp
+var top5 = db.Search<Article>(a => a.Similar("quantum physics"))
+    .Take(5)
+    .ToList();
+```
+
+### Custom embedding generator
+
+To use a different embedding model or an external API:
+```csharp
+var db = new LottaDB("myapp", connectionString, config =>
+{
+    config.EmbeddingGenerator = myCustomEmbeddingGenerator; // IEmbeddingGenerator<string, Embedding<float>>
+    config.Store<Article>();
+});
+```
+
+Set `EmbeddingGenerator` to `null` to disable vector support entirely.
+
 ## Triggers via `On<T>`
 
 You can have code run when an object is saved/changed/deleted. That trigger can create new objects for cascading views.
@@ -286,7 +451,7 @@ options.On<Note>(async (note, kind, db) =>
     // maintain NoteView as materialized view that's updated when Note changes.
     if (kind == TriggerKind.Deleted)
     {
-        await db.DeleteAsync<NoteView>(nv => nv.NoteId == note.NoteId);
+        await db.DeleteManyAsync<NoteView>(nv => nv.NoteId == note.NoteId);
         return;
     }
 

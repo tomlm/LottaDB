@@ -4,6 +4,7 @@ using Lucene.Net.Documents;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Fluent;
 using Lucene.Net.Linq.Mapping;
+using Microsoft.Extensions.AI;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
@@ -24,7 +25,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
     public const string KEY_FIELD = "_key_";
 
-    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta = null)
+    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta = null, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null)
         : base(version, analyzer)
     {
         if (meta == null) return;
@@ -60,6 +61,15 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
             }
 
             propMap.NotStored(); // we don't store any of the propertiies as we have the _json_
+
+            if (indexed.IsVectorField)
+            {
+                // Vector field: analyzed for full-text + vector embeddings for similarity search.
+                // AsVectorField() creates a new VectorPropertyMap replacing this one in the ClassMap,
+                // so we chain all config on the returned instance.
+                propMap.AsVectorField()
+                    .WithEmbeddingGenerator(embeddingGenerator);
+            }
         }
 
         // Build the mapper via ClassMap, then extract its fields into ourselves
@@ -79,11 +89,27 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         }
         AddField(new JsonFieldMapper<T>(version, analyzer));
 
-        var contentProps = meta.IndexedProperties
-            .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
-            .Select(p => p.Property);
+        if (meta.DefaultSearchProperty != null)
+        {
+            // User-defined default search property — skip _content_ composite field
+            DefaultSearchProperty = meta.DefaultSearchProperty.Name;
+        }
+        else
+        {
+            // No user default — create _content_ composite field
+            var contentProps = meta.IndexedProperties
+                .Where(p => !p.IsNotAnalyzed && p.Property.PropertyType == typeof(string))
+                .Select(p => p.Property);
 
-        AddField(new ContentFieldMapper<T>(version, analyzer, contentProps));
+            IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, contentProps);
+            if (embeddingGenerator != null)
+            {
+                contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator);
+            }
+            AddField(contentMapper);
+
+            DefaultSearchProperty = LottaDB.CONTENT_FIELD;
+        }
     }
 
     private static Expression<Func<T, object>> PropExpr(PropertyInfo prop)

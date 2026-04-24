@@ -30,23 +30,23 @@ public class TodoStore : IDisposable
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>
-    public Task<ObjectResult> SaveAsync(TodoItem todo, CancellationToken ct = default)
-        => _db.SaveAsync(todo, ct);
+    public Task<ObjectResult> SaveAsync(TodoItem todo, CancellationToken cancellationToken = default)
+        => _db.SaveAsync(todo, cancellationToken);
 
     /// <summary>
     /// Toggle the done flag using the ETag-aware ChangeAsync so concurrent edits
     /// to Title/Notes never clobber (or get clobbered by) a checkbox toggle.
     /// </summary>
-    public Task<ObjectResult> ToggleDoneAsync(string id, bool isDone, CancellationToken ct = default)
+    public Task<ObjectResult> ToggleDoneAsync(string id, bool isDone, CancellationToken cancellationTokent = default)
         => _db.ChangeAsync<TodoItem>(id, t =>
         {
             t.IsDone = isDone;
             t.CompletedAt = isDone ? DateTimeOffset.UtcNow : null;
             return t;
-        }, ct);
+        }, cancellationTokent);
 
-    public Task<ObjectResult> DeleteAsync(string id, CancellationToken ct = default)
-        => _db.DeleteAsync<TodoItem>(id, ct);
+    public Task<ObjectResult> DeleteAsync(string id, CancellationToken cancellationToken = default)
+        => _db.DeleteAsync<TodoItem>(id, cancellationToken);
 
     /// <summary>
     /// Lucene-backed live search. Empty query returns everything (still through the
