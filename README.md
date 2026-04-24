@@ -309,23 +309,23 @@ var results = db.Search<Note>("AuthorId:alice AND Content:lucene").ToList();
 
 Lotta stores 2 representations of every object, one in **table storage** (for the truth), and one a **Lucene** index (for fast access). **Query()** gives you a Linq query over table storage and **.Search()** uses the **Linq To Lucene** library to query the search engine with linq expressions
 
-### Query (Table Storage)
+### GetManyAsync (Table Storage)
 
 Filters on `[Queryable]` properties are executed by table storage server-side. 
 
 ```csharp
 // All actors
-var all = db.GetManyAsyncActor>().ToList();
+var all = db.GetManyAsync<Actor>().ToList();
 
 // Server-side filter (AuthorId is [Queryable])
-var aliceNotes = db.GetManyAsyncActor<Note>(n => n.AuthorId == "alice")
+var aliceNotes = db.GetManyAsync<Note>(n => n.AuthorId == "alice")
     .ToList();
 
 // Predicate shorthand
-var aliceNotes = db.GetManyAsyncActor<Note>(n => n.AuthorId == "alice").ToList();
+var aliceNotes = db.GetManyAsync<Note>(n => n.AuthorId == "alice").ToList();
 
 // Polymorphic query -- returns Person and Employee
-var people = db.GetManyAsyncActor<Person>().ToList();
+var people = db.GetManyAsync<Person>().ToList();
 ```
 
 ### Search (Lucene)
