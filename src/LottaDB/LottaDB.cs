@@ -181,8 +181,8 @@ public class LottaDB : IDisposable
     /// Rebuild the entire Lucene index from Azure Table Storage.
     /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
     /// </summary>
-    /// <param name="ct">Cancellation token.</param>
-    public async Task RebuildSearchIndex(CancellationToken ct = default)
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task RebuildSearchIndex(CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
@@ -190,7 +190,7 @@ public class LottaDB : IDisposable
             _indexDirty = true;
         }
 
-        await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: ct))
+        await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: cancellationToken))
         {
             var meta = GetMeta(entity.GetType());
             var key = meta.GetKey(entity);
@@ -203,7 +203,7 @@ public class LottaDB : IDisposable
                 _indexDirty = true;
             }
         }
-        
+
         ReloadSearcher();
     }
 
@@ -248,9 +248,9 @@ public class LottaDB : IDisposable
     /// Writes to table storage, then runs On&lt;T&gt; handlers (including Lucene indexing).
     /// </summary>
     /// <param name="entity">The object to save.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
-    public async Task<ObjectResult> SaveAsync(object entity, CancellationToken ct = default)
+    public async Task<ObjectResult> SaveAsync(object entity, CancellationToken cancellationToken = default)
     {
         var meta = GetMeta(entity.GetType());
         var key = meta.GetKey(entity);
@@ -270,7 +270,7 @@ public class LottaDB : IDisposable
         var errors = _chainErrors.Value ??= new List<Exception>();
         changes.Add(change);
 
-        await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, ct);
+        await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
 
         if (isRoot)
         {
@@ -287,20 +287,20 @@ public class LottaDB : IDisposable
     /// Delete an object by key. Removes from table storage, then runs On&lt;T&gt; handlers (including Lucene cleanup).
     /// </summary>
     /// <param name="key">The unique key of the object to delete.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
-    public async Task<ObjectResult> DeleteAsync<T>(string key, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> DeleteAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (existing, _) = await _tableAdapter.GetAsync<T>(_name, key);
+        var (existing, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
 
-        return await DeleteAsync<T>(existing!, ct);
+        return await DeleteAsync<T>(existing!, cancellationToken);
     }
 
     /// <summary>Delete an object. Key extracted from [Key] attribute.</summary>
     /// <param name="entity">The object to delete.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
-    public async Task<ObjectResult> DeleteAsync<T>(T entity, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> DeleteAsync<T>(T entity, CancellationToken cancellationToken = default) where T : class, new()
     {
         if (entity == null)
         {
@@ -318,7 +318,7 @@ public class LottaDB : IDisposable
         var errors = _chainErrors.Value ??= new List<Exception>();
         changes.Add(change);
 
-        await RunHandlersAsync(entity, TriggerKind.Deleted, errors, ct);
+        await RunHandlersAsync(entity, TriggerKind.Deleted, errors, cancellationToken);
 
         if (isRoot)
         {
@@ -341,14 +341,14 @@ public class LottaDB : IDisposable
     /// </summary>
     /// <param name="key">The unique key of the object to modify.</param>
     /// <param name="mutate">A function that receives the current object to be mutated</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
-    public Task<ObjectResult> ChangeAsync<T>(string key, Action<T> mutate, CancellationToken ct = default) where T : class, new()
+    public Task<ObjectResult> ChangeAsync<T>(string key, Action<T> mutate, CancellationToken cancellationToken = default) where T : class, new()
         => ChangeAsync<T>(key, entity =>
         {
             mutate(entity);
             return entity;
-        }, ct);
+        }, cancellationToken);
 
     /// <summary>
     /// Read-modify-write with optimistic concurrency. Fetches the object by key (capturing its
@@ -360,24 +360,24 @@ public class LottaDB : IDisposable
     /// </summary>
     /// <param name="key">The unique key of the object to modify.</param>
     /// <param name="mutate">A function that receives the current object and returns the modified version.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
-    public async Task<ObjectResult> ChangeAsync<T>(string key, Func<T, T> mutate, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> ChangeAsync<T>(string key, Func<T, T> mutate, CancellationToken cancellationToken = default) where T : class, new()
     {
         const int maxAttempts = 16;
         var meta = GetMeta<T>();
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
-            ct.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
 
-            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key);
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
             if (current == null || string.IsNullOrEmpty(etag))
                 throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
 
             var mutated = mutate(current);
 
-            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag);
+            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
             if (!committed)
                 continue; // someone else wrote between our read and write — re-read and retry
 
@@ -388,7 +388,7 @@ public class LottaDB : IDisposable
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
 
-            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, ct);
+            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
 
             if (isRoot)
             {
@@ -409,11 +409,11 @@ public class LottaDB : IDisposable
 
     /// <summary>Point-read an object by key from Azure Table Storage.</summary>
     /// <param name="key">The unique key of the object.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The object, or null if not found.</returns>
-    public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default) where T : class, new()
+    public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (result, _) = await _tableAdapter.GetAsync<T>(_name, key);
+        var (result, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
         return result;
     }
 
@@ -563,10 +563,10 @@ public class LottaDB : IDisposable
     /// <summary>
     /// Reset the database: deletes and recreates the table, clears and reinitializes the Lucene index.
     /// </summary>
-    public async Task ResetDatabaseAsync(CancellationToken ct = default)
+    public async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
     {
         // 1. Delete and recreate table storage
-        await _tableAdapter.ResetTableAsync(_name);
+        await _tableAdapter.ResetTableAsync(_name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
@@ -582,11 +582,11 @@ public class LottaDB : IDisposable
     /// Deletes the table, deletes the index and disposes all resources. Use with caution — this is not reversible.
     /// This object will not be usable after calling this method. Dispose the LottaDB instance when you're done to free resources. 
     /// </summary>
-    /// <param name="ct"></param>
+    /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    public async Task DeleteDatabaseAsync(CancellationToken ct = default)
+    public async Task DeleteDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        await _tableAdapter.DeleteTableAsync(_name, ct);
+        await _tableAdapter.DeleteTableAsync(_name, cancellationToken);
 
         lock (_lock)
         {
@@ -612,9 +612,9 @@ public class LottaDB : IDisposable
     /// run after each batch commit succeeds.
     /// </summary>
     /// <param name="entities">The objects to save.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
-    public async Task<ObjectResult> SaveManyAsync(IEnumerable<object> entities, CancellationToken ct = default)
+    public async Task<ObjectResult> SaveManyAsync(IEnumerable<object> entities, CancellationToken cancellationToken = default)
     {
         var allChanges = new List<ObjectChange>();
         var allErrors = new List<Exception>();
@@ -626,7 +626,7 @@ public class LottaDB : IDisposable
         {
             foreach (var entity in entities)
             {
-                ct.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
 
                 var meta = GetMeta(entity.GetType());
                 var key = meta.GetKey(entity);
@@ -637,7 +637,7 @@ public class LottaDB : IDisposable
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
+                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
@@ -650,7 +650,7 @@ public class LottaDB : IDisposable
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
+                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
@@ -660,7 +660,7 @@ public class LottaDB : IDisposable
             if (pendingActions.Count > 0)
             {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, ct);
+                await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
             }
         }
         finally
@@ -678,23 +678,22 @@ public class LottaDB : IDisposable
     /// </summary>
     /// <typeparam name="T">The object type.</typeparam>
     /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and handler-triggered changes.</returns>
-    public async Task<ObjectResult> DeleteManyAsync<T>(Expression<Func<T, bool>>? predicate=null, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> DeleteManyAsync<T>(Expression<Func<T, bool>>? predicate = null, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var matches = await GetManyAsync<T>(predicate).ToListAsync(ct);
+        var matches = await GetManyAsync<T>(predicate).ToListAsync(cancellationToken);
         if (matches.Count == 0)
             return new ObjectResult();
 
-        return await DeleteManyAsync<T>(matches, ct);
+        return await DeleteManyAsync<T>(matches, cancellationToken);
     }
 
 
-    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, new()
+    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var meta = GetMeta<T>();
-        var typed = entities.Select(e => ((object)e, typeof(T), meta.GetKey(e)));
-        return await DeleteManyAsyncCore(typed, ct);
+        return await DeleteManyAsyncCore(entities.Select(e => GetDeleteTruple(e))
+            .ToAsyncEnumerable(), cancellationToken);
     }
 
     /// <summary>
@@ -703,14 +702,21 @@ public class LottaDB : IDisposable
     /// run after each batch commit succeeds.
     /// </summary>
     /// <param name="keys">The keys of the objects to delete.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
-    public async Task<ObjectResult> DeleteManyAsync(IEnumerable<string> keys, CancellationToken ct = default)
+    public async Task<ObjectResult> DeleteManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default)
     {
-        return await DeleteManyAsyncCore(keys.Select(k => ((object?)null, (Type?)null, k)), ct);
+        return await DeleteManyAsyncCore(_tableAdapter.GetManyAsync(_name, keys, cancellationToken: cancellationToken)
+            .Select(e => GetDeleteTruple(e)), cancellationToken);
     }
 
-    private async Task<ObjectResult> DeleteManyAsyncCore(IEnumerable<(object? entity, Type? type, string key)> items, CancellationToken ct = default)
+    private (object?, Type?, string) GetDeleteTruple(object e)
+    {
+        return ((object?)e, (Type?)e.GetType(), GetMeta(e.GetType()).GetKey(e))!;
+    }
+
+
+    private async Task<ObjectResult> DeleteManyAsyncCore(IAsyncEnumerable<(object? entity, Type? type, string key)> items, CancellationToken cancellationToken = default)
     {
         var allChanges = new List<ObjectChange>();
         var allErrors = new List<Exception>();
@@ -720,15 +726,15 @@ public class LottaDB : IDisposable
 
         try
         {
-            foreach (var (entity, type, key) in items)
+            await foreach (var (entity, type, key) in items)
             {
-                ct.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
 
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
+                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
@@ -740,7 +746,7 @@ public class LottaDB : IDisposable
                 if (pendingActions.Count >= 100)
                 {
                     await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
+                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
@@ -749,7 +755,7 @@ public class LottaDB : IDisposable
             if (pendingActions.Count > 0)
             {
                 await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
-                await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, ct);
+                await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
             }
         }
         finally
@@ -766,7 +772,7 @@ public class LottaDB : IDisposable
         TriggerKind kind,
         List<ObjectChange> allChanges,
         List<Exception> allErrors,
-        CancellationToken ct)
+        CancellationToken cancellationToken)
     {
         foreach (var (entity, type) in pending)
         {
@@ -778,7 +784,7 @@ public class LottaDB : IDisposable
 
             _chainChanges.Value = allChanges;
             _chainErrors.Value = allErrors;
-            await RunHandlersAsync(entity, type, kind, allErrors, ct);
+            await RunHandlersAsync(entity, type, kind, allErrors, cancellationToken);
         }
         pending.Clear();
     }
@@ -787,7 +793,7 @@ public class LottaDB : IDisposable
         List<(object? entity, Type? type, string key)> pending,
         List<ObjectChange> allChanges,
         List<Exception> allErrors,
-        CancellationToken ct)
+        CancellationToken cancellationToken)
     {
         foreach (var (entity, type, key) in pending)
         {
@@ -798,7 +804,7 @@ public class LottaDB : IDisposable
             {
                 _chainChanges.Value = allChanges;
                 _chainErrors.Value = allErrors;
-                await RunHandlersAsync(entity, type, TriggerKind.Deleted, allErrors, ct);
+                await RunHandlersAsync(entity, type, TriggerKind.Deleted, allErrors, cancellationToken);
             }
         }
         pending.Clear();
@@ -807,7 +813,7 @@ public class LottaDB : IDisposable
     // === On<T> handler engine ===
 
     private async Task RunHandlersAsync<T>(T entity, TriggerKind kind,
-        List<Exception> errors, CancellationToken ct) where T : class, new()
+        List<Exception> errors, CancellationToken cancellationToken) where T : class, new()
     {
         // Cycle detection: if this type is already being processed in the current chain, stop.
         // This prevents A→B→A infinite loops regardless of key values.
@@ -849,7 +855,7 @@ public class LottaDB : IDisposable
     /// Dispatches to the generic RunHandlersAsync&lt;T&gt; via reflection.
     /// </summary>
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
-        List<Exception> errors, CancellationToken ct)
+        List<Exception> errors, CancellationToken cancellationToken)
     {
         if (!_handlers.ContainsKey(entityType)) return;
 
@@ -857,7 +863,7 @@ public class LottaDB : IDisposable
             .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod)
             .MakeGenericMethod(entityType);
 
-        await (Task)method.Invoke(this, new[] { entity, kind, errors, ct })!;
+        await (Task)method.Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
     }
 
     protected virtual void Dispose(bool disposing)

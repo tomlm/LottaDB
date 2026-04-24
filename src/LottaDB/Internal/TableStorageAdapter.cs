@@ -36,11 +36,11 @@ internal class TableStorageAdapter
         return client;
     }
 
-    public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta)
+    public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
-        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace);
+        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -48,13 +48,13 @@ internal class TableStorageAdapter
     /// changed the row since it was read (HTTP 412 Precondition Failed) so the caller
     /// can re-read and retry. A missing row (404) bubbles up as an exception.
     /// </summary>
-    public async Task<bool> TryReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag)
+    public async Task<bool> TryReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
         try
         {
-            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace);
+            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
             return true;
         }
         catch (RequestFailedException ex) when (ex.Status == 412)
@@ -79,41 +79,19 @@ internal class TableStorageAdapter
         return entity;
     }
 
-    public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key) where T : class, new()
+    public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var table = GetTable(tableName);
-        try
-        {
-            var response = await table.GetEntityAsync<LottaTableEntity>(PK, key);
-            var entity = response.Value;
-            var entityType = TypeUtils.ResolveType(entity.Type);
-            if (!entityType.IsAssignableTo(typeof(T)))
-                return (null, null);
-            var obj = JsonSerializer.Deserialize<T>(entity.Json);
-            // Prefer the entity's ETag (Azure SDK assigns it via the ITableEntity.ETag setter);
-            // fall back to the raw HTTP ETag header if the property round-trip produced nothing.
-            var etag = entity.ETag == default ? response.GetRawResponse().Headers.ETag?.ToString() : entity.ETag.ToString();
-            return (obj, etag);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404)
-        {
-            return (null, null);
-        }
+        var (entity, etag) = await GetAsync(tableName, key, cancellationToken);
+        return (entity as T, etag);
     }
 
-    internal async Task<(object? obj, Type? type)> GetAsync(string tableName, string key)
+    internal async Task<(object? obj, string? etag)> GetAsync(string tableName, string key, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         try
         {
-            var response = await table.GetEntityAsync<TableEntity>(PK, key, select: new[] { "Type", "Json" });
-            var entity = response.Value;
-            var typeName = entity.GetString("Type");
-            var json = entity.GetString("Json");
-            var type = TypeUtils.ResolveType(typeName);
-            if (type == null) return (null, null);
-            var obj = JsonSerializer.Deserialize(json, type);
-            return (obj, type);
+            var response = await table.GetEntityAsync<LottaTableEntity>(PK, key, cancellationToken: cancellationToken);
+            return (TypeUtils.DeserializePolymorphic<object>(response.Value.Json, response.Value.Type), response.Value.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
@@ -157,26 +135,32 @@ internal class TableStorageAdapter
         return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK,
                 maxPerPage: maxPerPage,
                 cancellationToken: cancellationToken)
-            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
-    public IAsyncEnumerable<object> GetManyAsync(string tableName,
+    public async IAsyncEnumerable<object> GetManyAsync(string tableName,
         IEnumerable<string> keys,
         int? maxPerPage = null,
-        CancellationToken cancellationToken = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var keyList = keys as IList<string> ?? keys.ToList();
         if (keyList.Count == 0)
-            return AsyncEnumerable.Empty<object>();
+            yield break;
 
         var table = GetTable(tableName);
 
-        var keyFilter = string.Join(" or ", keyList.Select(k => TableClient.CreateQueryFilter<LottaTableEntity>(e => e.RowKey == k)));
-        var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
-        return table.QueryAsync<LottaTableEntity>(query,
-                maxPerPage: maxPerPage,
-                cancellationToken: cancellationToken)
-            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+        for (int offset = 0; offset < keyList.Count; offset += 100)
+        {
+            var batch = keyList.Skip(offset).Take(100);
+            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<LottaTableEntity>(e => e.RowKey == k)));
+            var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
+            await foreach (var entity in table.QueryAsync<LottaTableEntity>(query,
+                    maxPerPage: maxPerPage,
+                    cancellationToken: cancellationToken))
+            {
+                yield return TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!;
+            }
+        }
     }
 
     public IAsyncEnumerable<T> GetManyAsync<T>(string tableName,
@@ -188,18 +172,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         var query = GetODataQuery<T>(predicate);
         return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => DeserializePolymorphic<T>(entity.Json, entity.Type)!);
-    }
-
-    public IAsyncEnumerable<string> GetKeysAsync<T>(string tableName,
-        Expression<Func<T, bool>>? predicate = null,
-        CancellationToken cancellationToken = default)
-        where T : class, new()
-    {
-        var table = GetTable(tableName);
-        var query = GetODataQuery<T>(predicate);
-        return table.QueryAsync<TableEntity>(query, select: new[] { "RowKey" }, cancellationToken: cancellationToken)
-            .Select(entity => entity.RowKey);
+            .Select(entity => TypeUtils.DeserializePolymorphic<T>(entity.Json, entity.Type)!);
     }
 
     public IAsyncEnumerable<object> GetAllAsync(string tableName,
@@ -208,7 +181,7 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
     }
 
     private static string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
@@ -228,34 +201,16 @@ internal class TableStorageAdapter
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Deserialize JSON using the concrete type from _type field.
-    /// Falls back to T if the concrete type can't be resolved.
-    /// </summary>
-    private static T? DeserializePolymorphic<T>(string json, string typeName) where T : class
-    {
-        // Try to find the concrete type in loaded assemblies
-        var concreteType = TypeUtils.ResolveType(typeName);
-        if (concreteType != null)
-        {
-            var obj = JsonSerializer.Deserialize(json, concreteType);
-            return obj as T;
-        }
-
-        // Fallback: deserialize as T directly
-        return JsonSerializer.Deserialize<T>(json);
-    }
-
-    public async Task DeleteTableAsync(string tableName, CancellationToken ct = default)
+    public async Task DeleteTableAsync(string tableName, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        await table.DeleteAsync(ct);
+        await table.DeleteAsync(cancellationToken);
     }
 
-    public async Task ResetTableAsync(string tableName, CancellationToken ct = default)
+    public async Task ResetTableAsync(string tableName, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        await table.DeleteAsync(ct);
+        await table.DeleteAsync(cancellationToken);
         _tables.Remove(tableName);
         GetTable(tableName); // re-creates via CreateIfNotExists
     }

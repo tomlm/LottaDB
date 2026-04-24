@@ -234,12 +234,12 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task DeleteManyAsync_NonExistent_NoError()
+    public async Task DeleteManyAsync_NonExistent_SkipsSilently()
     {
         using var db = await LottaDBFixture.CreateDbAsync();
         var result = await db.DeleteManyAsync(new[] { "no-exist-1", "no-exist-2" }, TestContext.Current.CancellationToken);
-        Assert.Equal(2, result.Changes.Count);
-        Assert.All(result.Changes, c => Assert.Null(c.Object));
+        Assert.Empty(result.Changes);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
         // Other type should not be affected
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
 
-        var result = await db.DeleteManyAsync<Note>(ct: TestContext.Current.CancellationToken);
+        var result = await db.DeleteManyAsync<Note>(cancellationToken: TestContext.Current.CancellationToken);
 
         // All notes gone
         var remainingNotes = await db.GetManyAsync<Note>(cancellationToken: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);

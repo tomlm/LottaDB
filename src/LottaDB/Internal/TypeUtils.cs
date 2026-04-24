@@ -1,4 +1,6 @@
-﻿namespace Lotta.Internal
+﻿using System.Text.Json;
+
+namespace Lotta.Internal
 {
     internal static class TypeUtils
     {
@@ -17,12 +19,32 @@
         static readonly Dictionary<Type, List<Type>> _derivedTypes = new();
 
         /// <summary>
+        /// Deserialize JSON using the concrete type from _type field.
+        /// Falls back to T if the concrete type can't be resolved.
+        /// </summary>
+        internal static T? DeserializePolymorphic<T>(string json, string typeName) where T : class
+        {
+            // Try to find the concrete type in loaded assemblies
+            var concreteType = TypeUtils.ResolveType(typeName);
+            if (concreteType != null)
+            {
+                var obj = JsonSerializer.Deserialize(json, concreteType);
+                return obj as T;
+            }
+
+            // Fallback: deserialize as T directly
+            return JsonSerializer.Deserialize<T>(json);
+        }
+
+        /// <summary>
         /// Resolve Type.FullName => Type
         /// </summary>
         /// <param name="fullName"></param>
         /// <returns></returns>
-        internal static Type ResolveType(string fullName)
+        internal static Type? ResolveType(string? fullName)
         {
+            if (fullName == null)
+                return null;
             lock (_fullNameToType)
             {
                 if (_fullNameToType.TryGetValue(fullName, out var t))
