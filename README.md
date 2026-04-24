@@ -16,7 +16,7 @@
 ## Why LottaDB?
 
 - **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
-- **A lotta LINQ.** `Query<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
+- **A lotta LINQ.** `GetManyAsync<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
 - **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives. 
 - **A lotta views.** `On<T>` triggers build materialized views with plain C#. No event buses, no eventual consistency -- just inline code.
 - **A lotta tenants.** One instance per tenant. Natural isolation, simple backup, no noisy neighbors.
@@ -38,7 +38,7 @@ dotnet add package LottaDB
 - **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
 - **LINQ** -- Rich Linq against typed objects makes it so easy.
 - **Vector similarity search** -- mark properties with `QueryableMode.Vector` for semantic search via `.Similar()`. Built-in local embeddings, no API calls needed.
-- **Polymorphic queries** -- `Query<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
+- **Polymorphic queries** -- `GetAsync<Base>()/GetManyAsync<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
 - **Triggers** -- `On<T>` triggers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
 - **Fluent or attribute configuration** -- annotate your models, or configure foreign POCOs entirely via fluent API.
 - **Per-tenant scaling** -- one LottaDB instance per tenant. 
