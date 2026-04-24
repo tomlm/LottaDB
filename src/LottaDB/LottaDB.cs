@@ -116,11 +116,23 @@ public class LottaDB : IDisposable
         GetMapper<T>(); // pre-populate so the per-field analyzer can be merged
     }
 
+    /// <summary>
+    /// Create a LottaDB instance without a connection string. Requires a custom
+    /// <see cref="LottaConfiguration.TableServiceClientFactory"/> via <paramref name="options"/>.
+    /// </summary>
+    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
+    /// <param name="options">Optional configuration callback.</param>
     public LottaDB(string name, Action<LottaConfiguration>? options = null)
     : this(name, CreateConfig(null!, options))
     {
     }
 
+    /// <summary>
+    /// Create a LottaDB instance with an Azure Storage connection string.
+    /// </summary>
+    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
+    /// <param name="connectionString">Azure Storage connection string.</param>
+    /// <param name="options">Optional configuration callback for registering types, handlers, etc.</param>
     public LottaDB(string name, string connectionString, Action<LottaConfiguration>? options = null)
         : this(name, CreateConfig(connectionString, options))
     {
@@ -418,15 +430,8 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Query Azure Table Storage. Returns an <see cref="IQueryable{T}"/> filtered by type.
-    /// Supports polymorphic queries and LINQ joins.
-    /// </summary>
-    /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
-    /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query. Defaults to 1000. Set to null for no limit (use with caution).</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <summary>
     /// Get many objects from Azure Table Storage with an optional predicate filter.
-    /// Returns an <see cref="IAsyncEnumerable{T}"/> supporting polymorphic queries and LINQ joins.
+    /// Returns an <see cref="IAsyncEnumerable{T}"/> supporting polymorphic queries.
     /// </summary>
     /// <typeparam name="T">The object type. Returns objects of this type and all derived types.</typeparam>
     /// <param name="predicate">Optional filter expression.</param>
@@ -472,6 +477,10 @@ public class LottaDB : IDisposable
     public IQueryable<T> Search<T>(Expression<Func<T, bool>> predicate) where T : class, new()
         => Search<T>().Where(predicate);
 
+    /// <summary>
+    /// Force a Lucene index commit and refresh the searcher if there are pending writes.
+    /// Normally this happens automatically via <see cref="LottaConfiguration.AutoCommitDelay"/>.
+    /// </summary>
     public void ReloadSearcher()
     {
         lock (_lock)
@@ -690,6 +699,13 @@ public class LottaDB : IDisposable
     }
 
 
+    /// <summary>
+    /// Delete multiple objects by entity. Runs On&lt;T&gt; handlers (including Lucene cleanup) for each deletion.
+    /// </summary>
+    /// <typeparam name="T">The object type.</typeparam>
+    /// <param name="entities">The objects to delete.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class, new()
     {
         return await DeleteManyAsyncCore(entities.Select(e => GetDeleteTruple(e))
@@ -891,9 +907,9 @@ public class LottaDB : IDisposable
     //     Dispose(disposing: false);
     // }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
-        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
         Dispose(disposing: true);
         GC.SuppressFinalize(this);
     }
