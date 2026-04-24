@@ -69,8 +69,8 @@ await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
 // Point read
 var actor = await db.GetAsync<Actor>("alice");
 
-// Query (Table Storage -- server-side filter on [Queryable] properties)
-var results = db.Query<Actor>(a => a.DisplayName == "Alice")
+// fetch with (Table Storage -- server-side filter on [Queryable] properties)
+var results = db.GetManyAsync<Actor>(a => a.DisplayName == "Alice")
     .ToList();
 
 // Search (Lucene -- full-text search on [Queryable] properties)
@@ -315,17 +315,17 @@ Filters on `[Queryable]` properties are executed by table storage server-side.
 
 ```csharp
 // All actors
-var all = db.Query<Actor>().ToList();
+var all = db.GetManyAsyncActor>().ToList();
 
 // Server-side filter (AuthorId is [Queryable])
-var aliceNotes = db.Query<Note>(n => n.AuthorId == "alice")
+var aliceNotes = db.GetManyAsyncActor<Note>(n => n.AuthorId == "alice")
     .ToList();
 
 // Predicate shorthand
-var aliceNotes = db.Query<Note>(n => n.AuthorId == "alice").ToList();
+var aliceNotes = db.GetManyAsyncActor<Note>(n => n.AuthorId == "alice").ToList();
 
 // Polymorphic query -- returns Person and Employee
-var people = db.Query<Person>().ToList();
+var people = db.GetManyAsyncActor<Person>().ToList();
 ```
 
 ### Search (Lucene)
