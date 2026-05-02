@@ -17,7 +17,7 @@ public partial class MainViewModel : ObservableObject
         AddCommand = new RelayCommand(AddNewTodo, () => !string.IsNullOrWhiteSpace(NewTodoTitle));
         ClearSearchCommand = new RelayCommand(() => SearchText = string.Empty);
         DeleteCommand = new AsyncRelayCommand<TodoItemViewModel>(DeleteAsync);
-        Reload();
+        ReloadAsync();
     }
 
     public ObservableCollection<TodoItemViewModel> Items { get; }
@@ -39,8 +39,8 @@ public partial class MainViewModel : ObservableObject
     public IRelayCommand ClearSearchCommand { get; }
     public IAsyncRelayCommand<TodoItemViewModel> DeleteCommand { get; }
 
-    partial void OnSearchTextChanged(string value) => Reload();
-    partial void OnFilterIndexChanged(int value) => Reload();
+    partial void OnSearchTextChanged(string value) => ReloadAsync();
+    partial void OnFilterIndexChanged(int value) => ReloadAsync();
 
     private void AddNewTodo()
     {
@@ -56,20 +56,20 @@ public partial class MainViewModel : ObservableObject
     private async Task AddAndReloadAsync(TodoItem todo)
     {
         await _store.SaveAsync(todo);
-        Reload();
+        await ReloadAsync();
     }
 
     private async Task DeleteAsync(TodoItemViewModel? vm)
     {
         if (vm is null) return;
         await _store.DeleteAsync(vm.Id);
-        Reload();
+        await ReloadAsync();
     }
 
-    private void Reload()
+    private async Task ReloadAsync()
     {
         var filter = (TodoFilter)FilterIndex;
-        var results = _store.Search(SearchText, filter);
+        var results = await _store.SearchAsync(SearchText, filter);
 
         Items.Clear();
         foreach (var t in results)

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.Json;
 
 namespace Lotta.Internal;
 
@@ -243,6 +244,56 @@ internal class TypeMetadata
             IsNotAnalyzed = isNotAnalyzed,
             IsVectorField = vector,
         });
+    }
+
+    /// <summary>
+    /// Serializes the index-relevant parts of a set of TypeMetadata into a deterministic JSON string.
+    /// Used to detect schema changes that require a Lucene index rebuild.
+    /// </summary>
+    internal static string ComputeSchemaJson(IEnumerable<TypeMetadata> metadatas)
+    {
+        var schema = metadatas
+            .OrderBy(m => m.Type.FullName)
+            .Select(m => new
+            {
+                Type = m.Type.FullName,
+                KeyMode = m.KeyMode.ToString(),
+                KeyProperty = m.KeyProperty?.Name,
+                DefaultSearchProperty = m.DefaultSearchProperty?.Name,
+                IndexedProperties = m.IndexedProperties
+                    .OrderBy(p => p.Property.Name)
+                    .Select(p => new
+                    {
+                        Name = p.Property.Name,
+                        PropertyType = p.Property.PropertyType.FullName,
+                        p.IsNotAnalyzed,
+                        p.IsVectorField,
+                    }),
+                Tags = m.Tags
+                    .OrderBy(t => t.Name)
+                    .Select(t => new
+                    {
+                        t.Name,
+                        PropertyType = t.Property.PropertyType.FullName,
+                    }),
+            });
+
+        return JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = false });
+    }
+
+    /// <summary>
+    /// Computes schema JSON directly from a LottaConfiguration without building a full LottaDB.
+    /// Used to detect conflicting configurations on duplicate GetDatabaseAsync calls.
+    /// </summary>
+    internal static string ComputeSchemaFromConfig(LottaConfiguration config)
+    {
+        var metadatas = new List<TypeMetadata>();
+        foreach (var (type, configObj) in config.StorageConfigurations)
+        {
+            var m = typeof(TypeMetadata).GetMethod(nameof(Build))!.MakeGenericMethod(type);
+            metadatas.Add((TypeMetadata)m.Invoke(null, new[] { configObj })!);
+        }
+        return ComputeSchemaJson(metadatas);
     }
 
     private static PropertyInfo? ExtractPropertyInfo(LambdaExpression expr)

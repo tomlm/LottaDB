@@ -11,15 +11,6 @@ namespace Lotta.Internal
         {
         }
 
-        internal LottaTableEntity(string rowKey, object obj)
-        {
-            PartitionKey = TableStorageAdapter.PK;
-            RowKey = rowKey;
-            Timestamp = DateTimeOffset.UtcNow;
-            Type = obj.GetType().FullName!;
-            Json = JsonSerializer.Serialize(obj, obj.GetType());
-        }
-
         /// <summary>
         /// the realized type of the stored object, used for deserialization. Stored as a separate field to allow querying by type.
         /// </summary>

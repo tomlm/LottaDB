@@ -1,4 +1,4 @@
-﻿using Azure.Data.Tables;
+using Azure.Data.Tables;
 using Lucene.Net.Store;
 using Spotflow.InMemory.Azure.Storage;
 using Spotflow.InMemory.Azure.Storage.Tables;
@@ -7,11 +7,11 @@ namespace Lotta.Tests
 {
     public static class Extensions
     {
-        public static ILottaConfiguration ConfigureTestStorage(this ILottaConfiguration config)
+        public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            config.TableServiceClientFactory = CreateMockTableServiceClient;
-            config.LuceneDirectoryFactory = CreateMockDirectory;
-            return config;
+            catalog.TableServiceClientFactory = CreateMockTableServiceClient;
+            catalog.LuceneDirectoryFactory = CreateMockDirectory;
+            return catalog;
         }
 
         public static TableServiceClient CreateMockTableServiceClient(string name)

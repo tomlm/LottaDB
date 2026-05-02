@@ -23,10 +23,9 @@ public class QueryMethodTests
 
     private static Task<LottaDB> CreateVectorDbAsync([System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {
-        return LottaDBFixture.CreateDbAsync(config =>
-        {
-            config.EmbeddingGenerator = _generator.Value;
-        }, testName: testName);
+        return LottaDBFixture.CreateDbAsync(
+            configureCatalog: catalog => catalog.EmbeddingGenerator = _generator.Value,
+            testName: testName);
     }
 
     // =====================================================================

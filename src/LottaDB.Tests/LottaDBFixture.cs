@@ -12,14 +12,17 @@ public class LottaDBFixture : IDisposable
     public void Dispose() { }
 
     public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configureAction = null,
+        Action<LottaCatalog>? configureCatalog = null,
         bool reset = true,
         [CallerMemberName] string? testName = null)
     {
         testName = string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
-        var db = new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
-        {
-            config.ConfigureTestStorage();
+        var catalog = new LottaCatalog(testName!);
+        catalog.ConfigureTestStorage();
+        configureCatalog?.Invoke(catalog);
 
+        var db = await catalog.GetDatabaseAsync("default", config =>
+        {
             config.Store<Actor>();
             config.Store<Note>();
             config.Store<NoteView>();
@@ -43,6 +46,6 @@ public class LottaDBFixture : IDisposable
         return db;
     }
 
-    public static string GetTestName([CallerMemberName] string testName = null)
+    public static string GetTestName([CallerMemberName] string? testName = null)
         => string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
 }

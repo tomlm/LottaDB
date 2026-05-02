@@ -15,14 +15,15 @@ using Version = Lucene.Net.Util.LuceneVersion;
 namespace Lotta;
 
 /// <summary>
-/// A LottaDB database: one Azure table, one Lucene index.
-/// Each write commits to table storage, then runs On&lt;T&gt; handlers inline.
-/// Lucene indexing is a built-in On&lt;T&gt; handler auto-registered for each stored type.
+/// A LottaDB database instance. Multiple databases can share the same Azure Table
+/// (catalog) while maintaining isolation via distinct partition keys (database IDs).
+/// Each database has its own Lucene index.
 /// </summary>
 public class LottaDB : IDisposable
 {
     private readonly object _lock = new object();
-    private readonly string _name;
+    private readonly LottaCatalog _lottaCatalog;
+    private readonly string _databaseId;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private LuceneDirectory _directory;
@@ -46,24 +47,19 @@ public class LottaDB : IDisposable
     internal const string KEY_FIELD = "_key_";
     internal const string CONTENT_FIELD = "_content_";
 
-    private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration>? options)
-    {
-        var config = new LottaConfiguration(connectionString);
-        options?.Invoke(config);
-        return config;
-    }
-
     /// <summary>
-    /// Create a LottaDB database instance.
+    /// Create a LottaDB database instance. Use <see cref="LottaCatalog.GetDatabaseAsync"/> instead of calling this directly.
     /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="config">Configuration (registered types, On&lt;T&gt; handlers, storage factories).</param>
-    public LottaDB(string name, LottaConfiguration config)
+    /// <param name="catalog">The owning catalog (provides storage factories, analyzer, embedding generator).</param>
+    /// <param name="databaseId">Database ID within the catalog. Used as the partition key and Lucene index subdirectory.</param>
+    /// <param name="config">Per-database configuration (registered types, On&lt;T&gt; handlers).</param>
+    internal LottaDB(LottaCatalog catalog, string databaseId, LottaConfiguration config)
     {
-        _name = name;
+        _lottaCatalog = catalog;
+        _databaseId = databaseId;
         _config = config;
-        _tableAdapter = new TableStorageAdapter(config.TableServiceClientFactory(name));
-        _directory = config.LuceneDirectoryFactory(name);
+        _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), databaseId);
+        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}");
 
         InitializeMetadata();
         InitializeMappers();
@@ -86,13 +82,13 @@ public class LottaDB : IDisposable
             });
         _indexWriter.Commit();
         _lucene = new ReadOnlyLuceneDataProvider(_directory, LuceneVersion.LUCENE_48);
-        if (_config.EmbeddingGenerator != null)
-            _lucene.Settings.EmbeddingGenerator = _config.EmbeddingGenerator;
+        if (catalog.EmbeddingGenerator != null)
+            _lucene.Settings.EmbeddingGenerator = catalog.EmbeddingGenerator;
         _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
             _metadata.TryGetValue(type, out var meta);
-            return Activator.CreateInstance(mapperType, version, _config.Analyzer, meta, _config.EmbeddingGenerator)!;
+            return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator)!;
         };
     }
 
@@ -115,29 +111,6 @@ public class LottaDB : IDisposable
     {
         GetMapper<T>(); // pre-populate so the per-field analyzer can be merged
     }
-
-    /// <summary>
-    /// Create a LottaDB instance without a connection string. Requires a custom
-    /// <see cref="LottaConfiguration.TableServiceClientFactory"/> via <paramref name="options"/>.
-    /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="options">Optional configuration callback.</param>
-    public LottaDB(string name, Action<LottaConfiguration>? options = null)
-    : this(name, CreateConfig(null!, options))
-    {
-    }
-
-    /// <summary>
-    /// Create a LottaDB instance with an Azure Storage connection string.
-    /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="connectionString">Azure Storage connection string.</param>
-    /// <param name="options">Optional configuration callback for registering types, handlers, etc.</param>
-    public LottaDB(string name, string connectionString, Action<LottaConfiguration>? options = null)
-        : this(name, CreateConfig(connectionString, options))
-    {
-    }
-
 
     private void InitializeMetadata()
     {
@@ -202,7 +175,7 @@ public class LottaDB : IDisposable
             _indexDirty = true;
         }
 
-        await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: cancellationToken))
+        await foreach (var entity in _tableAdapter.GetAllAsync(_lottaCatalog.Name, cancellationToken: cancellationToken))
         {
             var meta = GetMeta(entity.GetType());
             var key = meta.GetKey(entity);
@@ -231,14 +204,12 @@ public class LottaDB : IDisposable
         return GetMeta(typeof(T));
     }
 
-    private static string PartitionKey<T>() => TableStorageAdapter.PK;
-
     private Lucene.Net.Linq.Mapping.IDocumentMapper<T> GetMapper<T>() where T : class, new()
     {
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             _metadata.TryGetValue(typeof(T), out var meta);
-            return new LottaDocumentMapper<T>(Version.LUCENE_48, _config.Analyzer, meta, _config.EmbeddingGenerator);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, _lottaCatalog.Analyzer, meta, _lottaCatalog.EmbeddingGenerator);
         });
     }
 
@@ -249,7 +220,7 @@ public class LottaDB : IDisposable
             var db = (LottaDB)state!;
             db._metadata.TryGetValue(t, out var meta);
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(t);
-            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta, db._config.EmbeddingGenerator)!;
+            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._lottaCatalog.Analyzer, meta, db._lottaCatalog.EmbeddingGenerator)!;
         }, this);
     }
 
@@ -272,7 +243,7 @@ public class LottaDB : IDisposable
         if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
             meta.SetKey(entity, key);
 
-        await _tableAdapter.UpsertAsync(_name, key, entity, meta);
+        await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta);
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
@@ -303,7 +274,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (existing, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+        var (existing, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
 
         return await DeleteAsync<T>(existing!, cancellationToken);
     }
@@ -321,7 +292,7 @@ public class LottaDB : IDisposable
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
-        await _tableAdapter.DeleteAsync(_name, key);
+        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
 
@@ -383,13 +354,13 @@ public class LottaDB : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
             if (current == null || string.IsNullOrEmpty(etag))
                 throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
 
             var mutated = mutate(current);
 
-            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+            var committed = await _tableAdapter.TryReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
             if (!committed)
                 continue; // someone else wrote between our read and write — re-read and retry
 
@@ -425,7 +396,7 @@ public class LottaDB : IDisposable
     /// <returns>The object, or null if not found.</returns>
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (result, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+        var (result, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
         return result;
     }
 
@@ -441,10 +412,10 @@ public class LottaDB : IDisposable
         int? maxPerPage = null,
         CancellationToken cancellationToken = default) where T : class, new()
     {
-        return _tableAdapter.GetManyAsync<T>(_name, predicate, maxPerPage, cancellationToken);
+        return _tableAdapter.GetManyAsync<T>(_lottaCatalog.Name, predicate, maxPerPage, cancellationToken);
     }
 
-    internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _name);
+    internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _lottaCatalog.Name);
 
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
@@ -570,12 +541,13 @@ public class LottaDB : IDisposable
     // === Maintain ===
 
     /// <summary>
-    /// Reset the database: deletes and recreates the table, clears and reinitializes the Lucene index.
+    /// Reset this database: deletes all rows in this database's partition and clears the Lucene index.
+    /// Other databases in the same catalog are not affected.
     /// </summary>
     public async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        // 1. Delete and recreate table storage
-        await _tableAdapter.ResetTableAsync(_name, cancellationToken: cancellationToken);
+        // 1. Delete all rows in this database's partition
+        await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
@@ -588,14 +560,14 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Deletes the table, deletes the index and disposes all resources. Use with caution — this is not reversible.
-    /// This object will not be usable after calling this method. Dispose the LottaDB instance when you're done to free resources. 
+    /// Deletes all rows in this database's partition, deletes the Lucene index, and disposes all resources.
+    /// Other databases in the same catalog are not affected. Use with caution — this is not reversible.
+    /// This object will not be usable after calling this method.
     /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
     public async Task DeleteDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        await _tableAdapter.DeleteTableAsync(_name, cancellationToken);
+        await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
 
         lock (_lock)
         {
@@ -645,20 +617,20 @@ public class LottaDB : IDisposable
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
-                pendingActions.Add(TableStorageAdapter.CreateUpsertAction(key, entity, meta));
+                pendingActions.Add(_tableAdapter.CreateUpsertAction(key, entity, meta));
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, entity.GetType()));
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -668,7 +640,7 @@ public class LottaDB : IDisposable
             // Flush remaining
             if (pendingActions.Count > 0)
             {
-                await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
             }
         }
@@ -722,7 +694,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default)
     {
-        return await DeleteManyAsyncCore(_tableAdapter.GetManyAsync(_name, keys, cancellationToken: cancellationToken)
+        return await DeleteManyAsyncCore(_tableAdapter.GetManyAsync(_lottaCatalog.Name, keys, cancellationToken: cancellationToken)
             .Select(e => GetDeleteTruple(e)), cancellationToken);
     }
 
@@ -749,19 +721,19 @@ public class LottaDB : IDisposable
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
-                pendingActions.Add(TableStorageAdapter.CreateDeleteAction(key));
+                pendingActions.Add(_tableAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, type, key));
 
                 if (pendingActions.Count >= 100)
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -770,7 +742,7 @@ public class LottaDB : IDisposable
 
             if (pendingActions.Count > 0)
             {
-                await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                 await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
             }
         }

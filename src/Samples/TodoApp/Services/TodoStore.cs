@@ -16,47 +16,57 @@ namespace TodoApp.Services;
 /// </summary>
 public class TodoStore : IDisposable
 {
-    private readonly LottaDB _db;
+    private readonly Task<LottaDB> _dbTask;
 
     public TodoStore(IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("TableStorage");
 
-        _db = new LottaDB("todos", connectionString!, config =>
+        var catalog = new LottaCatalog("todos", connectionString!);
+        _dbTask = catalog.GetDatabaseAsync("default", config =>
         {
             config.Store<TodoItem>();
         });
-        _db.RebuildSearchIndex().Wait();
     }
 
     /// <summary>Create or replace a todo (used for initial insert and edits).</summary>
-    public Task<ObjectResult> SaveAsync(TodoItem todo, CancellationToken cancellationToken = default)
-        => _db.SaveAsync(todo, cancellationToken);
+    public async Task<ObjectResult> SaveAsync(TodoItem todo, CancellationToken cancellationToken = default)
+    {
+        var db = await _dbTask;
+        return await db.SaveAsync(todo, cancellationToken);
+    }
 
     /// <summary>
     /// Toggle the done flag using the ETag-aware ChangeAsync so concurrent edits
     /// to Title/Notes never clobber (or get clobbered by) a checkbox toggle.
     /// </summary>
-    public Task<ObjectResult> ToggleDoneAsync(string id, bool isDone, CancellationToken cancellationTokent = default)
-        => _db.ChangeAsync<TodoItem>(id, t =>
+    public async Task<ObjectResult> ToggleDoneAsync(string id, bool isDone, CancellationToken cancellationTokent = default)
+    {
+        var db = await _dbTask;
+        return await db.ChangeAsync<TodoItem>(id, t =>
         {
             t.IsDone = isDone;
             t.CompletedAt = isDone ? DateTimeOffset.UtcNow : null;
             return t;
         }, cancellationTokent);
+    }
 
-    public Task<ObjectResult> DeleteAsync(string id, CancellationToken cancellationToken = default)
-        => _db.DeleteAsync<TodoItem>(id, cancellationToken);
+    public async Task<ObjectResult> DeleteAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var db = await _dbTask;
+        return await db.DeleteAsync<TodoItem>(id, cancellationToken);
+    }
 
     /// <summary>
     /// Lucene-backed live search. Empty query returns everything (still through the
     /// index, not a table scan). Status filter uses the NotAnalyzed IsDone field.
     /// </summary>
-    public IReadOnlyList<TodoItem> Search(string? query, TodoFilter filter)
+    public async Task<IReadOnlyList<TodoItem>> SearchAsync(string? query, TodoFilter filter)
     {
         try
         {
-            var q = _db.Search<TodoItem>(query);
+            var db = await _dbTask;
+            var q = db.Search<TodoItem>(query);
 
             q = filter switch
             {
@@ -83,7 +93,7 @@ public class TodoStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbTask.Dispose();
 }
 
 public enum TodoFilter
