@@ -43,7 +43,7 @@ public class LottaDB : IDisposable
     // Collects changes across the entire call chain (root save + handler saves)
     private static readonly AsyncLocal<List<ObjectChange>?> _chainChanges = new();
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
-    internal const string JSON_FIELD = "_json_";
+    internal const string OBJECT_FIELD = "_object_";
     internal const string KEY_FIELD = "_key_";
     internal const string CONTENT_FIELD = "_content_";
 

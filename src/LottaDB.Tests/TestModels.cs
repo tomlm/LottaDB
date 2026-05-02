@@ -255,3 +255,17 @@ public class BadDefaultSearch
     public string Id { get; set; } = "";
     public string NotIndexed { get; set; } = "";
 }
+
+/// <summary>
+/// Model with a large payload for testing property splitting (>64KB).
+/// </summary>
+public class LargeDocument
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable]
+    public string Title { get; set; } = "";
+
+    public string Payload { get; set; } = "";
+}

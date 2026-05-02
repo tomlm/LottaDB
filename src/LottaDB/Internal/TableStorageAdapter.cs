@@ -66,8 +66,11 @@ internal class TableStorageAdapter
     private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
         var entity = new TableEntity(_partitionKey, key);
-        entity[nameof(LottaTableEntity.Type)] = obj.GetType().FullName!;
-        entity[nameof(LottaTableEntity.Json)] = JsonSerializer.Serialize(obj, obj.GetType());
+        entity[nameof(LottaTableEntity.Ty2pe)] = obj.GetType().FullName!;
+
+        // Serialize as UTF-8 JSON bytes, split across properties if >64KB
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
+        LottaTableEntity.SetObjectBytes(entity, bytes);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -90,8 +93,8 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            var response = await table.GetEntityAsync<LottaTableEntity>(_partitionKey, key, cancellationToken: cancellationToken);
-            return (TypeUtils.DeserializePolymorphic<object>(response.Value.Json, response.Value.Type), response.Value.ETag.ToString());
+            var response = await table.GetEntityAsync<TableEntity>(_partitionKey, key, cancellationToken: cancellationToken);
+            return (DeserializeEntity<object>(response.Value), response.Value.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
@@ -132,10 +135,10 @@ internal class TableStorageAdapter
         CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == _partitionKey,
+        return table.QueryAsync<TableEntity>(e => e.PartitionKey == _partitionKey,
                 maxPerPage: maxPerPage,
                 cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+            .Select(entity => DeserializeEntity<object>(entity)!);
     }
 
     public async IAsyncEnumerable<object> GetManyAsync(string tableName,
@@ -152,13 +155,13 @@ internal class TableStorageAdapter
         for (int offset = 0; offset < keyList.Count; offset += 100)
         {
             var batch = keyList.Skip(offset).Take(100);
-            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<LottaTableEntity>(e => e.RowKey == k)));
+            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<TableEntity>(e => e.RowKey == k)));
             var query = $"PartitionKey eq '{_partitionKey}' and ({keyFilter})";
-            await foreach (var entity in table.QueryAsync<LottaTableEntity>(query,
+            await foreach (var entity in table.QueryAsync<TableEntity>(query,
                     maxPerPage: maxPerPage,
                     cancellationToken: cancellationToken))
             {
-                yield return TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!;
+                yield return DeserializeEntity<object>(entity)!;
             }
         }
     }
@@ -171,8 +174,8 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         var query = GetODataQuery<T>(predicate);
-        return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+        return table.QueryAsync<TableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializeEntity<T>(entity)!);
     }
 
     public IAsyncEnumerable<object> GetAllAsync(string tableName,
@@ -180,8 +183,18 @@ internal class TableStorageAdapter
         CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == _partitionKey, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+        return table.QueryAsync<TableEntity>(e => e.PartitionKey == _partitionKey, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializeEntity<object>(entity)!);
+    }
+
+    private static T? DeserializeEntity<T>(TableEntity entity) where T : class
+    {
+        var bytes = LottaTableEntity.GetObjectBytes(entity);
+        var typeName = entity.GetString("Type");
+        var concreteType = TypeUtils.ResolveType(typeName);
+        if (concreteType != null)
+            return JsonSerializer.Deserialize(bytes, concreteType) as T;
+        return JsonSerializer.Deserialize<T>(bytes);
     }
 
     private string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()

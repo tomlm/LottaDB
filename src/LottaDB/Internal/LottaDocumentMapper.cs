@@ -123,7 +123,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
     {
-        var json = source.Get(LottaDB.JSON_FIELD);
+        var json = source.Get(LottaDB.OBJECT_FIELD);
         if (json != null)
         {
             return (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
@@ -134,7 +134,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
     public override bool IsModified(T item, Document document)
     {
-        var json1 = document.Get(LottaDB.JSON_FIELD);
+        var json1 = document.Get(LottaDB.OBJECT_FIELD);
         if (String.IsNullOrEmpty(json1))
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());

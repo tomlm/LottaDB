@@ -21,7 +21,7 @@ internal class JsonFieldMapper<T> : IFieldMapper<T>
         _analyzer = analyzer;
     }
 
-    public string FieldName => LottaDB.JSON_FIELD;
+    public string FieldName => LottaDB.OBJECT_FIELD;
 
     public string PropertyName => FieldName;
 
@@ -36,7 +36,7 @@ internal class JsonFieldMapper<T> : IFieldMapper<T>
     public void CopyToDocument(T source, Document target)
     {
         target.RemoveFields(FieldName);
-        target.Add(new StringField(FieldName, Serialize(source), Field.Store.YES));
+        target.Add(new StoredField(FieldName, Serialize(source)));
     }
 
     public object GetPropertyValue(T source) => Serialize(source);

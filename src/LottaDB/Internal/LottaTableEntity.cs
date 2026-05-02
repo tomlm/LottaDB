@@ -16,11 +16,88 @@ namespace Lotta.Internal
         /// </summary>
         public string Type { get => GetString(nameof(Type)); set => this[nameof(Type)] = value; }
 
+        internal const string ObjectPropertyPrefix = "Object";
+        internal const int MaxPropertySize = 63 * 1024; // 63KB to stay safely under 64KB limit
+
         /// <summary>
-        /// Gets or sets the JSON representation of the object or data associated with this property.
+        /// Gets the reassembled MessagePack bytes from one or more Object/Object2/Object3... properties.
         /// </summary>
-        [Queryable]
-        public string Json { get => GetString(nameof(Json)); set => this[nameof(Json)] = value; }
+        private static byte[]? ToBytes(object? val)
+        {
+            return val switch
+            {
+                byte[] b => b,
+                BinaryData bd => bd.ToArray(),
+                _ => null,
+            };
+        }
+
+        internal byte[] GetObjectBytes()
+        {
+            return GetObjectBytes(this);
+        }
+
+        internal static byte[] GetObjectBytes(IDictionary<string, object> entity)
+        {
+            entity.TryGetValue(ObjectPropertyPrefix, out var rawVal);
+            var first = ToBytes(rawVal);
+            if (first == null) return Array.Empty<byte>();
+
+            // Check for split properties
+            var chunks = new List<byte[]> { first };
+            for (int i = 2; ; i++)
+            {
+                var key = $"{ObjectPropertyPrefix}{i}";
+                if (entity.TryGetValue(key, out var chunk))
+                {
+                    var chunkBytes = ToBytes(chunk);
+                    if (chunkBytes != null)
+                        chunks.Add(chunkBytes);
+                    else
+                        break;
+                }
+                else
+                    break;
+            }
+
+            if (chunks.Count == 1) return first;
+
+            // Reassemble
+            var totalLength = chunks.Sum(c => c.Length);
+            var result = new byte[totalLength];
+            var offset = 0;
+            foreach (var chunkItem in chunks)
+            {
+                Buffer.BlockCopy(chunkItem, 0, result, offset, chunkItem.Length);
+                offset += chunkItem.Length;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Sets the serialized bytes, splitting across multiple properties if needed.
+        /// </summary>
+        internal static void SetObjectBytes(IDictionary<string, object> entity, byte[] data)
+        {
+            if (data.Length <= MaxPropertySize)
+            {
+                entity[ObjectPropertyPrefix] = data;
+                return;
+            }
+
+            // Split into chunks
+            int chunkIndex = 0;
+            for (int offset = 0; offset < data.Length; offset += MaxPropertySize)
+            {
+                var length = Math.Min(MaxPropertySize, data.Length - offset);
+                var chunk = new byte[length];
+                Buffer.BlockCopy(data, offset, chunk, 0, length);
+
+                var key = chunkIndex == 0 ? ObjectPropertyPrefix : $"{ObjectPropertyPrefix}{chunkIndex + 1}";
+                entity[key] = chunk;
+                chunkIndex++;
+            }
+        }
 
         /// <summary>
         /// The partition key is a unique identifier for the partition within a given table and forms the first part of an entity's primary key.

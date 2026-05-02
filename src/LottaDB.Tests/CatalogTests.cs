@@ -518,4 +518,65 @@ public class CatalogTests : IDisposable
         Assert.Single(databases);
         Assert.Contains("db2", databases);
     }
+
+    [Fact]
+    public async Task LargeObject_SplitsAcrossProperties_RoundTrips()
+    {
+        using var catalog = CreateCatalog("catalog21");
+        var db = await catalog.GetDatabaseAsync("default", config =>
+        {
+            config.Store<LargeDocument>();
+        });
+        await db.ResetDatabaseAsync();
+
+        // Create a payload larger than 63KB to force splitting across table storage properties
+        var largePayload = new string('X', 100_000); // ~100KB
+        var doc = new LargeDocument
+        {
+            Id = "large1",
+            Title = "Large Document",
+            Payload = largePayload,
+        };
+
+        await db.SaveAsync(doc);
+
+        // Point read — verifies split property reassembly
+        var loaded = await db.GetAsync<LargeDocument>("large1");
+        Assert.NotNull(loaded);
+        Assert.Equal("large1", loaded.Id);
+        Assert.Equal("Large Document", loaded.Title);
+        Assert.Equal(largePayload.Length, loaded.Payload.Length);
+        Assert.Equal(largePayload, loaded.Payload);
+
+        // Lucene search by queryable field still works
+        db.ReloadSearcher();
+        var searched = db.Search<LargeDocument>(d => d.Title == "Large Document").ToList();
+        Assert.Single(searched);
+        Assert.Equal("Large Document", searched[0].Title);
+        Assert.Equal(largePayload, searched[0].Payload);
+    }
+
+    [Fact]
+    public async Task LargeObject_Update_RoundTrips()
+    {
+        using var catalog = CreateCatalog("catalog22");
+        var db = await catalog.GetDatabaseAsync("default", config =>
+        {
+            config.Store<LargeDocument>();
+        });
+        await db.ResetDatabaseAsync();
+
+        // Save initial large document
+        var payload1 = new string('A', 80_000);
+        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V1", Payload = payload1 });
+
+        // Update with different large payload
+        var payload2 = new string('B', 120_000);
+        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V2", Payload = payload2 });
+
+        var loaded = await db.GetAsync<LargeDocument>("doc1");
+        Assert.NotNull(loaded);
+        Assert.Equal("V2", loaded.Title);
+        Assert.Equal(payload2, loaded.Payload);
+    }
 }
