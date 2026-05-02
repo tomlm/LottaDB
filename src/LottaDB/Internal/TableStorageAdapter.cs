@@ -66,11 +66,11 @@ internal class TableStorageAdapter
     private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
         var entity = new TableEntity(_partitionKey, key);
-        entity[nameof(LottaTableEntity.Ty2pe)] = obj.GetType().FullName!;
+        entity[TableEntityExtensions.TypeProperty] = obj.GetType().FullName!;
 
         // Serialize as UTF-8 JSON bytes, split across properties if >64KB
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
-        LottaTableEntity.SetObjectBytes(entity, bytes);
+        entity.SetObjectBytes(bytes);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -189,8 +189,8 @@ internal class TableStorageAdapter
 
     private static T? DeserializeEntity<T>(TableEntity entity) where T : class
     {
-        var bytes = LottaTableEntity.GetObjectBytes(entity);
-        var typeName = entity.GetString("Type");
+        var bytes = entity.GetObjectBytes();
+        var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
         var concreteType = TypeUtils.ResolveType(typeName);
         if (concreteType != null)
             return JsonSerializer.Deserialize(bytes, concreteType) as T;
