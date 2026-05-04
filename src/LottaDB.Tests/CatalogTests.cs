@@ -827,6 +827,110 @@ public class CatalogTests : IDisposable
     }
 
     [Fact]
+    public async Task Blob_ListBlobs_NonRecursive()
+    {
+        using var catalog = CreateCatalog("catalog60");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("root.txt", "root");
+        await db.UploadBlobAsync("photos/a.jpg", "a");
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
+        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c");
+
+        // Non-recursive at root — only root.txt
+        var rootFiles = await db.ListBlobsAsync(recursive: false);
+        Assert.Single(rootFiles);
+        Assert.Contains("root.txt", rootFiles);
+
+        // Non-recursive in photos/ — only a.jpg
+        var photosFlat = await db.ListBlobsAsync("photos/", recursive: false);
+        Assert.Single(photosFlat);
+        Assert.Contains("photos/a.jpg", photosFlat);
+
+        // Recursive in photos/ — all 3 photos
+        var photosAll = await db.ListBlobsAsync("photos/", recursive: true);
+        Assert.Equal(3, photosAll.Count);
+        Assert.Contains("photos/a.jpg", photosAll);
+        Assert.Contains("photos/2024/b.jpg", photosAll);
+        Assert.Contains("photos/2024/trip/c.jpg", photosAll);
+    }
+
+    [Fact]
+    public async Task Blob_ListFolders_NonRecursive()
+    {
+        using var catalog = CreateCatalog("catalog61");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("root.txt", "root");
+        await db.UploadBlobAsync("photos/a.jpg", "a");
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
+        await db.UploadBlobAsync("docs/readme.md", "readme");
+
+        // Immediate subfolders of root
+        var rootFolders = await db.ListBlobFoldersAsync(recursive: false);
+        Assert.Equal(2, rootFolders.Count);
+        Assert.Contains("photos/", rootFolders);
+        Assert.Contains("docs/", rootFolders);
+
+        // Immediate subfolders of photos/
+        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: false);
+        Assert.Single(photoFolders);
+        Assert.Contains("photos/2024/", photoFolders);
+    }
+
+    [Fact]
+    public async Task Blob_ListFolders_Recursive()
+    {
+        using var catalog = CreateCatalog("catalog62");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("photos/a.jpg", "a");
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
+        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c");
+        await db.UploadBlobAsync("docs/readme.md", "readme");
+
+        // All folders recursively from root
+        var allFolders = await db.ListBlobFoldersAsync(recursive: true);
+        Assert.Contains("photos/", allFolders);
+        Assert.Contains("photos/2024/", allFolders);
+        Assert.Contains("photos/2024/trip/", allFolders);
+        Assert.Contains("docs/", allFolders);
+
+        // All folders recursively under photos/
+        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: true);
+        Assert.Contains("photos/2024/", photoFolders);
+        Assert.Contains("photos/2024/trip/", photoFolders);
+        Assert.DoesNotContain("photos/", photoFolders); // don't include the queried folder itself
+        Assert.DoesNotContain("docs/", photoFolders);
+    }
+
+    [Fact]
+    public async Task Blob_ListFolders_EmptyFolder()
+    {
+        using var catalog = CreateCatalog("catalog63");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("only-file.txt", "content");
+
+        var folders = await db.ListBlobFoldersAsync(recursive: false);
+        Assert.Empty(folders);
+    }
+
+    [Fact]
+    public async Task Blob_ListBlobs_FolderNormalization()
+    {
+        using var catalog = CreateCatalog("catalog64");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("photos/a.jpg", "a");
+
+        // Both with and without trailing slash should work
+        var withSlash = await db.ListBlobsAsync("photos/");
+        var withoutSlash = await db.ListBlobsAsync("photos");
+        Assert.Equal(withSlash, withoutSlash);
+    }
+
+    [Fact]
     public async Task Blob_IsolatedPerDatabase()
     {
         using var catalog = CreateCatalog("catalog36");

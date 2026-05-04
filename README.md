@@ -285,6 +285,11 @@ var catalog = new LottaCatalog("myapp", connectionString, catalog =>
 | **DeleteAsync<T>()** | Delete a single object by key or entity |
 | **DeleteManyAsync<T>()** | Delete by predicate, by entities, or all of a type |
 | **Search<T>()** | Full-text search via Lucene with LINQ |
+| **UploadBlobAsync()** | Upload a blob (stream, byte[], or string) with optional metadata extraction |
+| **DownloadBlobAsync()** | Download a blob as stream, byte[], or string |
+| **DeleteBlobAsync()** | Delete a blob and its metadata |
+| **ListBlobsAsync()** | List blobs in a folder (recursive or flat) |
+| **ListBlobFoldersAsync()** | List subfolders (recursive or immediate) |
 | **ResetDatabaseAsync()** | Clear this database's data (other databases unaffected) |
 | **DeleteDatabaseAsync()** | Delete this database and its index permanently |
 
@@ -496,6 +501,133 @@ var catalog = new LottaCatalog("myapp", connectionString, catalog =>
 ```
 
 Set `EmbeddingGenerator` to `null` to disable vector support entirely.
+
+## Blob Storage
+
+Each database has its own blob storage, isolated from other databases in the catalog.
+
+### Upload and download
+
+```csharp
+// Upload from stream, byte[], or string
+await db.UploadBlobAsync("photos/vacation.jpg", stream);
+await db.UploadBlobAsync("data.bin", byteArray);
+await db.UploadBlobAsync("notes/readme.txt", "Hello world");
+
+// Explicit content type (otherwise detected from file extension)
+await db.UploadBlobAsync("data.bin", stream, contentType: "image/png");
+
+// Download
+Stream? stream = await db.DownloadBlobAsync("photos/vacation.jpg");
+byte[]? bytes = await db.DownloadBlobBytesAsync("photos/vacation.jpg");
+string? text = await db.DownloadBlobStringAsync("notes/readme.txt");
+
+// Delete
+await db.DeleteBlobAsync("photos/vacation.jpg");
+```
+
+### Listing blobs and folders
+
+```csharp
+// List all blobs (recursive by default)
+var all = await db.ListBlobsAsync();
+
+// List blobs in a folder only (non-recursive)
+var flat = await db.ListBlobsAsync("photos/", recursive: false);
+
+// List immediate subfolders
+var folders = await db.ListBlobFoldersAsync("photos/", recursive: false);
+
+// List all nested subfolders
+var allFolders = await db.ListBlobFoldersAsync("photos/", recursive: true);
+```
+
+### Blob metadata with `OnUpload`
+
+Register an `OnUpload` handler to automatically extract and store metadata when blobs are uploaded. The metadata is stored as a `BlobFile` entity -- queryable and full-text searchable.
+
+```csharp
+var db = await catalog.GetDatabaseAsync("media", config =>
+{
+    config.OnUpload(); // enables default metadata extraction
+});
+
+// Upload returns the extracted metadata
+var meta = await db.UploadBlobAsync("readme.txt", "Hello world");
+// meta.Name == "readme.txt"
+// meta.MediaType == "text/plain"
+// meta.Content == "Hello world" (text formats are extracted)
+```
+
+The default handler detects MIME type from the file extension and creates the correct `BlobFile` subtype. For known text formats (.txt, .md, .json, .cs, .py, .html, etc.), the text content is extracted into the `Content` property and indexed for full-text search.
+
+#### BlobFile type hierarchy
+
+| Type | Used for | Extra properties |
+|------|----------|-----------------|
+| `BlobFile` | Base / unknown | Path, Name, FolderPath, MediaType, Title, Authors, Content, ContentLength |
+| `BlobPhoto` | Images | CameraModel, IsoSpeed, Width, Height, GPS, EXIF fields |
+| `BlobDocument` | PDF, DOCX, etc. | PageCount, WordCount, CharacterCount |
+| `BlobSpreadsheet` | XLSX, XLS | SheetCount, SheetNames |
+| `BlobPresentation` | PPTX, PPT | SlideCount |
+| `BlobMusic` | MP3, FLAC, etc. | Artist, Album, TrackNumber, Year, Duration |
+| `BlobVideo` | MP4, AVI, etc. | Width, Height, FrameRate, VideoCodec, Duration |
+| `BlobMessage` | EML | FromAddress, Subject, DateSent |
+| `BlobWebPage` | HTML | Language, Charset, Links |
+
+#### Querying blob metadata
+
+```csharp
+// Point read
+var photo = await db.GetAsync<BlobPhoto>("photos/vacation.jpg");
+
+// LINQ queries on metadata
+var highIso = db.Search<BlobPhoto>(p => p.IsoSpeed > 800).ToList();
+var bigPdfs = db.Search<BlobDocument>(p => p.PageCount > 10).ToList();
+
+// Full-text search across extracted content
+var results = db.Search<BlobFile>("quarterly revenue").ToList();
+
+// Polymorphic -- all file types
+var allFiles = db.Search<BlobFile>().ToList();
+```
+
+#### BlobFile convenience methods
+
+```csharp
+var file = await db.GetAsync<BlobFile>("readme.txt");
+Stream? stream = await file.DownloadAsync();  // download the blob
+await file.DeleteAsync();                       // delete blob + metadata
+```
+
+#### Custom upload handler
+
+```csharp
+config.OnUpload(async (path, contentType, stream, db) =>
+{
+    // custom extraction logic
+    return new BlobPhoto { CameraModel = "Custom" };
+});
+```
+
+#### Rich extraction with LottaDB.Tiki
+
+For deep metadata extraction (EXIF, ID3, page counts, etc.), install the [LottaDB.Tiki](https://www.nuget.org/packages/LottaDB.Tiki) package:
+
+```bash
+dotnet add package LottaDB.Tiki
+```
+
+```csharp
+using Lotta.Tiki;
+
+var db = await catalog.GetDatabaseAsync("media", config =>
+{
+    config.UseTikiExtraction(); // replaces default with Tiki.Net parser
+});
+```
+
+See the [LottaDB.Tiki README](src/LottaDB.Tiki/README.md) for details.
 
 ## Triggers via `On<T>`
 

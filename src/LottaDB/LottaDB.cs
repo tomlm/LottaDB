@@ -734,26 +734,93 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// List blobs in this database's blob storage under an optional prefix.
+    /// List blobs in this database's blob storage.
     /// </summary>
-    /// <param name="prefix">Optional prefix to filter blobs (e.g. "photos/"). Relative to this database.</param>
+    /// <param name="folder">Optional folder path (e.g. "photos/"). Relative to this database. Null for root.</param>
+    /// <param name="recursive">If true, includes blobs in all subfolders. If false, only blobs directly in the folder.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of blob paths relative to this database.</returns>
-    public async Task<IReadOnlyList<string>> ListBlobsAsync(string? prefix = null, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> ListBlobsAsync(string? folder = null, bool recursive = true, CancellationToken cancellationToken = default)
     {
         var container = GetBlobContainer();
-        var fullPrefix = prefix != null ? GetBlobPath(prefix) : GetBlobPath("");
+        var folderNorm = NormalizeFolder(folder);
+        var fullPrefix = GetBlobPath(folderNorm);
         var dbPrefix = GetBlobPath("");
         var blobs = new List<string>();
-        await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+
+        if (recursive)
         {
-            // Strip the database prefix to return relative paths
-            if (item.Name.StartsWith(dbPrefix))
-                blobs.Add(item.Name.Substring(dbPrefix.Length));
-            else
-                blobs.Add(item.Name);
+            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                blobs.Add(StripDbPrefix(item.Name, dbPrefix));
+            }
         }
+        else
+        {
+            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                if (item.IsBlob)
+                    blobs.Add(StripDbPrefix(item.Blob.Name, dbPrefix));
+            }
+        }
+
         return blobs;
+    }
+
+    /// <summary>
+    /// List subfolders in this database's blob storage.
+    /// </summary>
+    /// <param name="folder">Optional folder path (e.g. "photos/"). Relative to this database. Null for root.</param>
+    /// <param name="recursive">If true, includes all nested subfolders. If false, only immediate children.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>List of folder paths relative to this database (with trailing slash).</returns>
+    public async Task<IReadOnlyList<string>> ListBlobFoldersAsync(string? folder = null, bool recursive = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var folderNorm = NormalizeFolder(folder);
+        var fullPrefix = GetBlobPath(folderNorm);
+        var dbPrefix = GetBlobPath("");
+
+        if (!recursive)
+        {
+            var folders = new List<string>();
+            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                if (item.IsPrefix)
+                    folders.Add(StripDbPrefix(item.Prefix, dbPrefix));
+            }
+            return folders;
+        }
+        else
+        {
+            // Recursive: list all blobs and extract unique folder paths
+            var folderSet = new HashSet<string>();
+            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                var relativePath = StripDbPrefix(item.Name, dbPrefix);
+                // Extract all parent folders from this path
+                var parts = relativePath.Split('/');
+                var current = "";
+                for (int i = 0; i < parts.Length - 1; i++) // skip the filename
+                {
+                    current += parts[i] + "/";
+                    if (current != folderNorm) // don't include the queried folder itself
+                        folderSet.Add(current);
+                }
+            }
+            return folderSet.OrderBy(f => f).ToList();
+        }
+    }
+
+    private static string NormalizeFolder(string? folder)
+    {
+        if (string.IsNullOrEmpty(folder)) return "";
+        return folder.EndsWith('/') ? folder : folder + "/";
+    }
+
+    private static string StripDbPrefix(string fullPath, string dbPrefix)
+    {
+        return fullPath.StartsWith(dbPrefix) ? fullPath.Substring(dbPrefix.Length) : fullPath;
     }
 
     // === Maintain ===
