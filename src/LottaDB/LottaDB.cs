@@ -1,4 +1,7 @@
+using Azure;
 using Azure.Data.Tables;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Lotta.Internal;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
@@ -8,6 +11,7 @@ using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Linq.Expressions;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -22,7 +26,7 @@ namespace Lotta;
 public class LottaDB : IDisposable
 {
     private readonly object _lock = new object();
-    private readonly LottaCatalog _lottaCatalog;
+    internal readonly LottaCatalog _lottaCatalog;
     private readonly string _databaseId;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
@@ -59,7 +63,7 @@ public class LottaDB : IDisposable
         _databaseId = databaseId;
         _config = config;
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), databaseId);
-        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}");
+        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         InitializeMetadata();
         InitializeMappers();
@@ -88,7 +92,7 @@ public class LottaDB : IDisposable
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
             _metadata.TryGetValue(type, out var meta);
-            return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator)!;
+            return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
     }
 
@@ -209,7 +213,7 @@ public class LottaDB : IDisposable
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             _metadata.TryGetValue(typeof(T), out var meta);
-            return new LottaDocumentMapper<T>(Version.LUCENE_48, _lottaCatalog.Analyzer, meta, _lottaCatalog.EmbeddingGenerator);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, _lottaCatalog.Analyzer, meta, _lottaCatalog.EmbeddingGenerator, this);
         });
     }
 
@@ -220,7 +224,7 @@ public class LottaDB : IDisposable
             var db = (LottaDB)state!;
             db._metadata.TryGetValue(t, out var meta);
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(t);
-            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._lottaCatalog.Analyzer, meta, db._lottaCatalog.EmbeddingGenerator)!;
+            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._lottaCatalog.Analyzer, meta, db._lottaCatalog.EmbeddingGenerator, db)!;
         }, this);
     }
 
@@ -244,6 +248,8 @@ public class LottaDB : IDisposable
             meta.SetKey(entity, key);
 
         await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta);
+
+        if (entity is BlobFile bf) bf.Database = this;
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
@@ -397,6 +403,7 @@ public class LottaDB : IDisposable
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
         var (result, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+        if (result is BlobFile bf) bf.Database = this;
         return result;
     }
 
@@ -408,11 +415,15 @@ public class LottaDB : IDisposable
     /// <param name="predicate">Optional filter expression.</param>
     /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public IAsyncEnumerable<T> GetManyAsync<T>(Expression<Func<T, bool>>? predicate = null,
+    public async IAsyncEnumerable<T> GetManyAsync<T>(Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
-        CancellationToken cancellationToken = default) where T : class, new()
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default) where T : class, new()
     {
-        return _tableAdapter.GetManyAsync<T>(_lottaCatalog.Name, predicate, maxPerPage, cancellationToken);
+        await foreach (var item in _tableAdapter.GetManyAsync<T>(_lottaCatalog.Name, predicate, maxPerPage, cancellationToken))
+        {
+            if (item is BlobFile bf) bf.Database = this;
+            yield return item;
+        }
     }
 
     internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _lottaCatalog.Name);
@@ -536,6 +547,213 @@ public class LottaDB : IDisposable
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
         lock (list) { list.Add(handler); }
         return new HandlerHandle(list, handler);
+    }
+
+    // === Blobs ===
+
+    private BlobContainerClient? _blobContainer;
+
+    private BlobContainerClient GetBlobContainer()
+    {
+        if (_blobContainer == null)
+        {
+            _blobContainer = _lottaCatalog.GetBlobServiceClient()
+                .GetBlobContainerClient(_lottaCatalog.Name);
+            _blobContainer.CreateIfNotExists();
+        }
+        return _blobContainer;
+    }
+
+    private string GetBlobPath(string path) => $"{_databaseId}/Blobs/{path}";
+
+    /// <summary>
+    /// Upload a blob to this database's blob storage.
+    /// If an OnUpload handler is registered, the stream is tee'd concurrently to the handler
+    /// for metadata extraction, and the resulting BlobFile entity is saved automatically.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database (e.g. "photos/avatar.jpg").</param>
+    /// <param name="content">The content to upload.</param>
+    /// <param name="contentType">Optional MIME type (e.g. "image/jpeg"). If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, Stream content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var handler = _config.UploadHandler;
+
+        if (handler == null)
+        {
+            await blob.UploadAsync(content, overwrite: overwrite, cancellationToken: cancellationToken);
+            return null;
+        }
+
+        // Tee the stream: blob upload reads from TeeStream, handler reads from pipe concurrently
+        var pipe = new Pipe();
+        var teeStream = new TeeStream(content, pipe.Writer);
+        var handlerStream = pipe.Reader.AsStream();
+
+        var uploadTask = blob.UploadAsync(teeStream, overwrite: overwrite, cancellationToken: cancellationToken);
+        var parseTask = handler(path, contentType, handlerStream, this);
+
+        await Task.WhenAll(uploadTask, parseTask);
+
+        var blobFile = parseTask.Result;
+        if (blobFile != null)
+        {
+            blobFile.Path = path;
+            await SaveAsync(blobFile, cancellationToken);
+        }
+        return blobFile;
+    }
+
+    /// <summary>
+    /// Upload a blob from a byte array.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="content">The byte array to upload.</param>
+    /// <param name="contentType">Optional MIME type (e.g. "image/jpeg"). If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, byte[] content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var handler = _config.UploadHandler;
+
+        using var uploadStream = new MemoryStream(content);
+        await blob.UploadAsync(uploadStream, overwrite: overwrite, cancellationToken: cancellationToken);
+
+        if (handler != null)
+        {
+            using var handlerStream = new MemoryStream(content);
+            var blobFile = await handler(path, contentType, handlerStream, this);
+            if (blobFile != null)
+            {
+                blobFile.Path = path;
+                await SaveAsync(blobFile, cancellationToken);
+            }
+            return blobFile;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Upload a blob from a string (stored as UTF-8).
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="content">The string content to upload.</param>
+    /// <param name="contentType">Optional MIME type. If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, string content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        return await UploadBlobAsync(path, bytes, contentType, overwrite, cancellationToken);
+    }
+
+    /// <summary>
+    /// Download a blob from this database's blob storage.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as a stream, or null if the blob does not exist.</returns>
+    public async Task<Stream?> DownloadBlobAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        try
+        {
+            var response = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+            return response.Value.Content;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Download a blob as a byte array.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as bytes, or null if the blob does not exist.</returns>
+    public async Task<byte[]?> DownloadBlobBytesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        try
+        {
+            var response = await blob.DownloadContentAsync(cancellationToken: cancellationToken);
+            return response.Value.Content.ToArray();
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Download a blob as a UTF-8 string.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as a string, or null if the blob does not exist.</returns>
+    public async Task<string?> DownloadBlobStringAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var bytes = await DownloadBlobBytesAsync(path, cancellationToken);
+        return bytes != null ? System.Text.Encoding.UTF8.GetString(bytes) : null;
+    }
+
+    /// <summary>
+    /// Delete a blob from this database's blob storage.
+    /// Also deletes the associated BlobFile metadata entity if one exists.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True if the blob was deleted, false if it didn't exist.</returns>
+    public async Task<bool> DeleteBlobAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var response = await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
+
+        // Cascade delete the metadata entity if BlobFile is registered
+        if (_metadata.ContainsKey(typeof(BlobFile)))
+        {
+            var existing = await GetAsync<BlobFile>(path, cancellationToken);
+            if (existing != null)
+                await DeleteAsync(existing, cancellationToken);
+        }
+
+        return response.Value;
+    }
+
+    /// <summary>
+    /// List blobs in this database's blob storage under an optional prefix.
+    /// </summary>
+    /// <param name="prefix">Optional prefix to filter blobs (e.g. "photos/"). Relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>List of blob paths relative to this database.</returns>
+    public async Task<IReadOnlyList<string>> ListBlobsAsync(string? prefix = null, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var fullPrefix = prefix != null ? GetBlobPath(prefix) : GetBlobPath("");
+        var dbPrefix = GetBlobPath("");
+        var blobs = new List<string>();
+        await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+        {
+            // Strip the database prefix to return relative paths
+            if (item.Name.StartsWith(dbPrefix))
+                blobs.Add(item.Name.Substring(dbPrefix.Length));
+            else
+                blobs.Add(item.Name);
+        }
+        return blobs;
     }
 
     // === Maintain ===

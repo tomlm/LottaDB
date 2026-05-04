@@ -25,9 +25,12 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
     public const string KEY_FIELD = "_key_";
 
-    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta = null, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null)
+    private readonly LottaDB _db;
+
+    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
         : base(version, analyzer)
     {
+        _db = db;
         if (meta == null) return;
         var classMap = new ClassMap<T>(version);
 
@@ -126,7 +129,9 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         var json = source.Get(LottaDB.OBJECT_FIELD);
         if (json != null)
         {
-            return (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
+            var obj = (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
+            if (obj is BlobFile bf) bf.Database = _db;
+            return obj;
         }
 
         return base.CreateFromDocument(source, context, actualType, factory);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Azure;
 using Azure.Data.Tables;
+using Azure.Storage.Blobs;
 using Lotta.Internal;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.En;
@@ -22,6 +23,7 @@ public class LottaCatalog : IDisposable
     private readonly ConcurrentDictionary<string, LottaDB> _databases = new();
     private TableServiceClient? _tableServiceClient;
     private TableClient? _tableClient;
+    private BlobServiceClient? _blobServiceClient;
     internal const string ManifestPartitionKey = "__database__";
     internal const string SchemaColumn = "Schema";
 
@@ -37,9 +39,15 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Factory for creating a Lucene Directory. Receives a composite path
-    /// (<c>{catalog}/{databaseId}</c>) to create per-database indexes.
+    /// (<c>{catalog}/{databaseId}/Search</c>) to create per-database indexes.
     /// </summary>
     public Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
+
+    /// <summary>
+    /// Factory for creating a <see cref="BlobServiceClient"/>. Receives the catalog name.
+    /// Used for the Blob storage API on each database.
+    /// </summary>
+    public Func<string, BlobServiceClient> BlobServiceClientFactory { get; set; }
 
     /// <summary>
     /// Embedding generator for vector similarity search, shared across all databases in this catalog.
@@ -63,12 +71,14 @@ public class LottaCatalog : IDisposable
         connectionString ??= "UseDevelopmentStorage=true";
         TableServiceClientFactory = name => new TableServiceClient(connectionString);
         LuceneDirectoryFactory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
+        BlobServiceClientFactory = name => new BlobServiceClient(connectionString);
         configure?.Invoke(this);
     }
 
     /// <summary>
     /// Create a catalog without a connection string. Requires setting
-    /// <see cref="TableServiceClientFactory"/> and <see cref="LuceneDirectoryFactory"/> manually.
+    /// <see cref="TableServiceClientFactory"/>, <see cref="LuceneDirectoryFactory"/>,
+    /// and <see cref="BlobServiceClientFactory"/> manually.
     /// </summary>
     /// <param name="catalogName">Catalog name. Used as the Azure table name and blob container.</param>
     /// <param name="configure">Optional callback to configure catalog-level settings.</param>
@@ -77,6 +87,7 @@ public class LottaCatalog : IDisposable
         Name = catalogName;
         TableServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.TableServiceClientFactory is not configured.");
         LuceneDirectoryFactory = _ => throw new InvalidOperationException("LottaCatalog.LuceneDirectoryFactory is not configured.");
+        BlobServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
         configure?.Invoke(this);
     }
 
@@ -201,6 +212,7 @@ public class LottaCatalog : IDisposable
         // Clear cached clients so subsequent operations recreate them
         _tableClient = null;
         _tableServiceClient = null;
+        _blobServiceClient = null;
 
         foreach (var db in _databases.Values)
             db.Dispose();
@@ -221,6 +233,12 @@ public class LottaCatalog : IDisposable
     {
         _tableServiceClient ??= TableServiceClientFactory(Name);
         return _tableServiceClient;
+    }
+
+    internal BlobServiceClient GetBlobServiceClient()
+    {
+        _blobServiceClient ??= BlobServiceClientFactory(Name);
+        return _blobServiceClient;
     }
 
     internal TableClient GetTableClient()

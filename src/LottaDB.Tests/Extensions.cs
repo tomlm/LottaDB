@@ -1,6 +1,8 @@
 using Azure.Data.Tables;
+using Azure.Storage.Blobs;
 using Lucene.Net.Store;
 using Spotflow.InMemory.Azure.Storage;
+using Spotflow.InMemory.Azure.Storage.Blobs;
 using Spotflow.InMemory.Azure.Storage.Tables;
 
 namespace Lotta.Tests
@@ -9,7 +11,12 @@ namespace Lotta.Tests
     {
         public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            catalog.TableServiceClientFactory = CreateMockTableServiceClient;
+            // Use a shared provider so table + blob storage share the same in-memory account
+            var provider = new InMemoryStorageProvider();
+            var account = provider.AddAccount(catalog.Name);
+
+            catalog.TableServiceClientFactory = _ => InMemoryTableServiceClient.FromAccount(account);
+            catalog.BlobServiceClientFactory = _ => InMemoryBlobServiceClient.FromAccount(account);
             catalog.LuceneDirectoryFactory = CreateMockDirectory;
             return catalog;
         }

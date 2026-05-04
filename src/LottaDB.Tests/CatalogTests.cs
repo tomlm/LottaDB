@@ -579,4 +579,534 @@ public class CatalogTests : IDisposable
         Assert.Equal("V2", loaded.Title);
         Assert.Equal(payload2, loaded.Payload);
     }
+
+    // === Partition boundary isolation tests ===
+
+    [Fact]
+    public async Task GetManyAsync_WithPredicate_DoesNotCrossPartition()
+    {
+        using var catalog = CreateCatalog("catalog23");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+
+        // Predicate that would match db2's data if partition leaked
+        var results = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Bob").ToListAsync();
+        Assert.Empty(results);
+
+        // Predicate that matches db1's data
+        var results2 = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Alice").ToListAsync();
+        Assert.Single(results2);
+    }
+
+    [Fact]
+    public async Task GetManyAsync_AllItems_DoesNotCrossPartition()
+    {
+        using var catalog = CreateCatalog("catalog24");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+
+        // All items from db1 — should not include db2's data
+        var all = await db1.GetManyAsync<Actor>().ToListAsync();
+        Assert.Single(all);
+        Assert.Equal("alice", all[0].Username);
+    }
+
+    [Fact]
+    public async Task Search_FreeText_DoesNotCrossPartition()
+    {
+        using var catalog = CreateCatalog("catalog25");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        await db1.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene search engine" });
+        await db2.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Lucene is great" });
+
+        db1.ReloadSearcher();
+        db2.ReloadSearcher();
+
+        // Free-text search
+        var results1 = db1.Search<Note>("lucene").ToList();
+        Assert.Single(results1);
+        Assert.Equal("n1", results1[0].NoteId);
+
+        var results2 = db2.Search<Note>("lucene").ToList();
+        Assert.Single(results2);
+        Assert.Equal("n2", results2[0].NoteId);
+    }
+
+    [Fact]
+    public async Task Search_WithPredicate_DoesNotCrossPartition()
+    {
+        using var catalog = CreateCatalog("catalog26");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+
+        db1.ReloadSearcher();
+        db2.ReloadSearcher();
+
+        // LINQ predicate search — should not find db2's data
+        var results = db1.Search<Actor>(a => a.DisplayName == "Bob").ToList();
+        Assert.Empty(results);
+
+        var results2 = db1.Search<Actor>(a => a.DisplayName == "Alice").ToList();
+        Assert.Single(results2);
+    }
+
+    [Fact]
+    public async Task CrossTypeStorage_UnregisteredType_Throws()
+    {
+        using var catalog = CreateCatalog("catalog28");
+
+        // db1 only has Actor registered
+        var db1 = await catalog.GetDatabaseAsync("db1", config => config.Store<Actor>());
+        // db2 only has Note registered
+        var db2 = await catalog.GetDatabaseAsync("db2", config => config.Store<Note>());
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        // Saving Actor to db1 works
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+
+        // Saving Note to db1 should throw — Note is not registered on db1
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            db1.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello" }));
+
+        // Saving Actor to db2 should throw — Actor is not registered on db2
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }));
+
+        // Saving Note to db2 works
+        await db2.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello" });
+    }
+
+    [Fact]
+    public async Task DeleteManyAsync_DoesNotCrossPartition()
+    {
+        using var catalog = CreateCatalog("catalog27");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+        await db1.ResetDatabaseAsync();
+        await db2.ResetDatabaseAsync();
+
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+        await db1.SaveAsync(new Actor { Username = "charlie", DisplayName = "Charlie" });
+        await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
+
+        // Delete all actors from db1
+        await db1.DeleteManyAsync<Actor>();
+
+        // db1 should be empty
+        var db1Results = await db1.GetManyAsync<Actor>().ToListAsync();
+        Assert.Empty(db1Results);
+
+        // db2 should be untouched
+        var db2Results = await db2.GetManyAsync<Actor>().ToListAsync();
+        Assert.Single(db2Results);
+        Assert.Equal("Bob", db2Results[0].DisplayName);
+    }
+
+    // === Blob API tests ===
+
+    [Fact]
+    public async Task Blob_UploadAndDownload_Stream()
+    {
+        using var catalog = CreateCatalog("catalog30");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        var content = "Hello, Blob World!";
+        using var uploadStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
+        await db.UploadBlobAsync("test.txt", uploadStream);
+
+        var downloadStream = await db.DownloadBlobAsync("test.txt");
+        Assert.NotNull(downloadStream);
+        using var reader = new StreamReader(downloadStream);
+        var result = await reader.ReadToEndAsync();
+        Assert.Equal(content, result);
+    }
+
+    [Fact]
+    public async Task Blob_UploadAndDownload_Bytes()
+    {
+        using var catalog = CreateCatalog("catalog31");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        var content = new byte[] { 1, 2, 3, 4, 5 };
+        await db.UploadBlobAsync("data.bin", content);
+
+        var result = await db.DownloadBlobBytesAsync("data.bin");
+        Assert.NotNull(result);
+        Assert.Equal(content, result);
+    }
+
+    [Fact]
+    public async Task Blob_UploadAndDownload_String()
+    {
+        using var catalog = CreateCatalog("catalog32");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("note.txt", "Hello from LottaDB");
+
+        var result = await db.DownloadBlobStringAsync("note.txt");
+        Assert.Equal("Hello from LottaDB", result);
+    }
+
+    [Fact]
+    public async Task Blob_Download_NotFound_ReturnsNull()
+    {
+        using var catalog = CreateCatalog("catalog33");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        var stream = await db.DownloadBlobAsync("nonexistent.txt");
+        Assert.Null(stream);
+
+        var bytes = await db.DownloadBlobBytesAsync("nonexistent.txt");
+        Assert.Null(bytes);
+
+        var str = await db.DownloadBlobStringAsync("nonexistent.txt");
+        Assert.Null(str);
+    }
+
+    [Fact]
+    public async Task Blob_Delete()
+    {
+        using var catalog = CreateCatalog("catalog34");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("todelete.txt", "temp");
+        var deleted = await db.DeleteBlobAsync("todelete.txt");
+        Assert.True(deleted);
+
+        var result = await db.DownloadBlobStringAsync("todelete.txt");
+        Assert.Null(result);
+
+        // Delete again — should return false
+        var deletedAgain = await db.DeleteBlobAsync("todelete.txt");
+        Assert.False(deletedAgain);
+    }
+
+    [Fact]
+    public async Task Blob_ListBlobs()
+    {
+        using var catalog = CreateCatalog("catalog35");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("photos/a.jpg", "image-a");
+        await db.UploadBlobAsync("photos/b.jpg", "image-b");
+        await db.UploadBlobAsync("docs/readme.md", "readme");
+
+        // List all
+        var all = await db.ListBlobsAsync();
+        Assert.Equal(3, all.Count);
+
+        // List with prefix
+        var photos = await db.ListBlobsAsync("photos/");
+        Assert.Equal(2, photos.Count);
+        Assert.Contains("photos/a.jpg", photos);
+        Assert.Contains("photos/b.jpg", photos);
+
+        var docs = await db.ListBlobsAsync("docs/");
+        Assert.Single(docs);
+        Assert.Contains("docs/readme.md", docs);
+    }
+
+    [Fact]
+    public async Task Blob_IsolatedPerDatabase()
+    {
+        using var catalog = CreateCatalog("catalog36");
+        var db1 = await CreateDbAsync(catalog, "db1");
+        var db2 = await CreateDbAsync(catalog, "db2");
+
+        await db1.UploadBlobAsync("shared.txt", "from db1");
+        await db2.UploadBlobAsync("shared.txt", "from db2");
+
+        // Each database has its own blob
+        var result1 = await db1.DownloadBlobStringAsync("shared.txt");
+        var result2 = await db2.DownloadBlobStringAsync("shared.txt");
+        Assert.Equal("from db1", result1);
+        Assert.Equal("from db2", result2);
+
+        // Listing is scoped per database
+        var db1Blobs = await db1.ListBlobsAsync();
+        var db2Blobs = await db2.ListBlobsAsync();
+        Assert.Single(db1Blobs);
+        Assert.Single(db2Blobs);
+
+        // Deleting from db1 doesn't affect db2
+        await db1.DeleteBlobAsync("shared.txt");
+        Assert.Null(await db1.DownloadBlobStringAsync("shared.txt"));
+        Assert.Equal("from db2", await db2.DownloadBlobStringAsync("shared.txt"));
+    }
+
+    [Fact]
+    public async Task Blob_Overwrite()
+    {
+        using var catalog = CreateCatalog("catalog37");
+        var db = await CreateDbAsync(catalog, "db1");
+
+        await db.UploadBlobAsync("file.txt", "version 1");
+        await db.UploadBlobAsync("file.txt", "version 2");
+
+        var result = await db.DownloadBlobStringAsync("file.txt");
+        Assert.Equal("version 2", result);
+    }
+
+    // === OnUpload handler integration tests ===
+
+    [Fact]
+    public async Task Blob_OnUpload_DefaultHandler_ReturnsMetadata()
+    {
+        using var catalog = CreateCatalog("catalog40");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload(); // default handler
+        });
+
+        var meta = await db.UploadBlobAsync("docs/readme.txt", "Hello world");
+
+        Assert.NotNull(meta);
+        Assert.IsType<BlobFile>(meta);
+        Assert.Equal("docs/readme.txt", meta.Path);
+        Assert.Equal("readme.txt", meta.Name);
+        Assert.Equal("docs", meta.FolderPath);
+        Assert.Equal("text/plain", meta.MediaType);
+        Assert.Equal("Hello world", meta.Content);
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_DefaultHandler_TextContent_Searchable()
+    {
+        using var catalog = CreateCatalog("catalog41");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("notes/meeting.md", "We discussed the quarterly revenue forecast");
+        db.ReloadSearcher();
+
+        var results = db.Search<BlobFile>("quarterly revenue").ToList();
+        Assert.Single(results);
+        Assert.Equal("notes/meeting.md", results[0].Path);
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_DefaultHandler_BinaryFile_CorrectType()
+    {
+        using var catalog = CreateCatalog("catalog42");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var meta = await db.UploadBlobAsync("photos/test.jpg", new byte[] { 0xFF, 0xD8, 0xFF });
+
+        Assert.NotNull(meta);
+        Assert.IsType<BlobPhoto>(meta);
+        Assert.Equal("image/jpeg", meta.MediaType);
+        Assert.Null(meta.Content); // binary, no text extraction
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_MetadataPersistedAndRetrievable()
+    {
+        using var catalog = CreateCatalog("catalog43");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("code/app.cs", "Console.WriteLine(\"Hello\");");
+
+        var loaded = await db.GetAsync<BlobFile>("code/app.cs");
+        Assert.NotNull(loaded);
+        Assert.Equal("app.cs", loaded.Name);
+        Assert.Equal("code", loaded.FolderPath);
+        Assert.Equal("text/x-csharp", loaded.MediaType);
+        Assert.Equal("Console.WriteLine(\"Hello\");", loaded.Content);
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_DatabasePropertySet_AfterUpload()
+    {
+        using var catalog = CreateCatalog("catalog44");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var meta = await db.UploadBlobAsync("test.txt", "content");
+        Assert.NotNull(meta);
+
+        // Database should be set — DownloadAsync should work
+        var stream = await meta.DownloadAsync();
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("content", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_DatabasePropertySet_AfterGetAsync()
+    {
+        using var catalog = CreateCatalog("catalog45");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("test.txt", "content");
+
+        var loaded = await db.GetAsync<BlobFile>("test.txt");
+        Assert.NotNull(loaded);
+
+        var stream = await loaded.DownloadAsync();
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("content", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_DeleteAsync_CascadesMetadata()
+    {
+        using var catalog = CreateCatalog("catalog46");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("file.txt", "some content");
+
+        // Metadata exists
+        var before = await db.GetAsync<BlobFile>("file.txt");
+        Assert.NotNull(before);
+
+        // Delete via blob API
+        await db.DeleteBlobAsync("file.txt");
+
+        // Both blob and metadata are gone
+        Assert.Null(await db.DownloadBlobStringAsync("file.txt"));
+        Assert.Null(await db.GetAsync<BlobFile>("file.txt"));
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_BlobFileDeleteAsync_Works()
+    {
+        using var catalog = CreateCatalog("catalog47");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var meta = await db.UploadBlobAsync("file.txt", "some content");
+        Assert.NotNull(meta);
+
+        // Delete via BlobFile convenience method
+        var deleted = await meta.DeleteAsync();
+        Assert.True(deleted);
+
+        Assert.Null(await db.DownloadBlobStringAsync("file.txt"));
+        Assert.Null(await db.GetAsync<BlobFile>("file.txt"));
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_NoHandler_ReturnsNull()
+    {
+        using var catalog = CreateCatalog("catalog48");
+        var db = await CreateDbAsync(catalog, "db1"); // no OnUpload
+
+        var meta = await db.UploadBlobAsync("test.txt", "content");
+
+        Assert.Null(meta);
+        // Blob still uploaded
+        Assert.Equal("content", await db.DownloadBlobStringAsync("test.txt"));
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_Overwrite_UpdatesMetadata()
+    {
+        using var catalog = CreateCatalog("catalog49");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("file.txt", "version 1");
+        await db.UploadBlobAsync("file.txt", "version 2");
+
+        var meta = await db.GetAsync<BlobFile>("file.txt");
+        Assert.NotNull(meta);
+        Assert.Equal("version 2", meta.Content);
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_ExplicitContentType_Used()
+    {
+        using var catalog = CreateCatalog("catalog50");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var meta = await db.UploadBlobAsync("data.bin", new byte[] { 1, 2, 3 }, contentType: "image/png");
+
+        Assert.NotNull(meta);
+        Assert.IsType<BlobPhoto>(meta);
+        Assert.Equal("image/png", meta.MediaType);
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_Search_DatabasePropertySet()
+    {
+        using var catalog = CreateCatalog("catalog52");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("notes/search-test.txt", "findable content here");
+        db.ReloadSearcher();
+
+        var results = db.Search<BlobFile>("findable").ToList();
+        Assert.Single(results);
+
+        // Database should be set on Search results — DownloadAsync should work
+        var stream = await results[0].DownloadAsync();
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("findable content here", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task Blob_OnUpload_StreamOverload_ReturnsMetadata()
+    {
+        using var catalog = CreateCatalog("catalog51");
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("stream content"));
+        var meta = await db.UploadBlobAsync("stream.txt", stream);
+
+        Assert.NotNull(meta);
+        Assert.Equal("stream.txt", meta.Name);
+        Assert.Equal("text/plain", meta.MediaType);
+        Assert.Equal("stream content", meta.Content);
+    }
 }

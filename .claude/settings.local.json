@@ -18,7 +18,8 @@
       "Bash(grep -r \"class VectorIndexOptions\" --include=\"*.cs\" -rn)",
       "Bash(dotnet tool:*)",
       "Bash(ls -la /s/github/LottaDB/src/LottaDB.Tests/*.cs)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(grep -A 5 \"public.*TikiFile\\\\|public.*TikiPhoto\\\\|public.*TikiDocument\\\\|public.*TikiMusic\\\\|public.*TikiVideo\" \"s:/github/Tika.Net/src/Tiki.Net/Documents\"/*.cs)"
     ]
   }
 }

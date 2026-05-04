@@ -26,6 +26,16 @@ public interface ILottaConfiguration
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
     ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
+
+    /// <summary>
+    /// Replace the blob upload handler. When a blob is uploaded via <see cref="LottaDB.UploadBlobAsync(string, Stream, bool, CancellationToken)"/>,
+    /// the handler is invoked with the blob path, content type (may be null), a stream of the blob content, and the DB instance.
+    /// Returns a <see cref="BlobFile"/> (or subclass) to be saved as metadata, or null to skip metadata storage.
+    /// Replacement semantics: the last registered handler wins.
+    /// Call with no arguments to use the default handler.
+    /// </summary>
+    /// <param name="handler">Async handler that processes blob content and returns metadata.</param>
+    ILottaConfiguration OnUpload(Func<string, string?, Stream, LottaDB, Task<BlobFile?>>? handler = null);
 }
 
 /// <summary>

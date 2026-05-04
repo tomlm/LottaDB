@@ -10,6 +10,7 @@ public class LottaConfiguration : ILottaConfiguration
 {
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
+    internal Func<string, string?, Stream, LottaDB, Task<BlobFile?>>? UploadHandler { get; private set; }
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -35,6 +36,44 @@ public class LottaConfiguration : ILottaConfiguration
     {
         OnRegistrations.Add(new OnRegistration(typeof(T), handler));
         return this;
+    }
+
+    /// <summary>
+    /// Replace the blob upload handler. Last one wins.
+    /// Automatically registers all BlobFile types for storage.
+    /// If never called, no blob metadata is generated on upload.
+    /// Call with no arguments to use the default handler (extension-based mime type detection,
+    /// text content extraction for known text formats).
+    /// </summary>
+    public ILottaConfiguration OnUpload(Func<string, string?, Stream, LottaDB, Task<BlobFile?>>? handler = null)
+    {
+        UploadHandler = handler ?? DefaultBlobHandler.HandleAsync;
+
+        // Auto-register all BlobFile types if not already registered
+        StoreBlobFileTypes();
+
+        return this;
+    }
+
+    private void StoreBlobFileTypes()
+    {
+        RegisterIfMissing<BlobFile>();
+        RegisterIfMissing<BlobPhoto>();
+        RegisterIfMissing<BlobDocument>();
+        RegisterIfMissing<BlobSpreadsheet>();
+        RegisterIfMissing<BlobPresentation>();
+        RegisterIfMissing<BlobMedia>();
+        RegisterIfMissing<BlobMusic>();
+        RegisterIfMissing<BlobVideo>();
+        RegisterIfMissing<BlobMessage>();
+        RegisterIfMissing<BlobWebPage>();
+        RegisterIfMissing<BlobOfficeDocument>();
+    }
+
+    private void RegisterIfMissing<T>() where T : class, new()
+    {
+        if (!StorageConfigurations.ContainsKey(typeof(T)))
+            Store<T>();
     }
 }
 

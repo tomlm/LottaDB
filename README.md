@@ -38,10 +38,10 @@ dotnet add package LottaDB
 LottaDB uses a two-level hierarchy:
 
 - **Catalog** (`LottaCatalog`) -- a grouping that maps to one Azure Table and one blob container. Owns shared infrastructure: storage clients, analyzer, embedding generator.
-- **Database** (`LottaDB`) -- an isolated partition within a catalog, with its own Lucene index and type/handler registrations.
+- **Database** (`LottaDB`) -- an isolated partition within a catalog, with its own type registrations.
 
 ```
-LottaCatalog ("userX")          ← one Azure Table, one blob container
+Catalog ("userX")          ← one Azure Table "userX", one blob container"/userX"
 ├── Database "notes"            ← PartitionKey="notes", Lucene index at userX/notes
 │   ├── Store<Note>()
 │   └── On<Note>(handler)
@@ -103,7 +103,7 @@ var catalog = new LottaCatalog(tenantId, connectionString);
 var notesDb = await catalog.GetDatabaseAsync("notes", c => c.Store<Note>());
 var todosDb = await catalog.GetDatabaseAsync("todos", c => c.Store<Todo>());
 
-// Tenant leaves -- drop everything in one call
+// Tenant leaves -- drop all databases for the tenant
 await catalog.DeleteAsync();
 ```
 
@@ -116,22 +116,6 @@ var databases = await catalog.ListAsync();
 
 // Delete a single database (other databases unaffected)
 await notesDb.DeleteDatabaseAsync();
-```
-
-### Automatic schema migration
-
-When you change your type registrations (add a new `[Queryable]` property, register a new type, etc.), LottaDB detects the schema change on startup and automatically rebuilds the Lucene index from table storage.
-
-```csharp
-// v1: only Actor registered
-var db = await catalog.GetDatabaseAsync("main", c => c.Store<Actor>());
-
-// v2: added Note -- schema changed, index auto-rebuilt
-var db = await catalog.GetDatabaseAsync("main", c =>
-{
-    c.Store<Actor>();
-    c.Store<Note>();  // new! triggers rebuild
-});
 ```
 
 ## Storing POCO objects
@@ -260,6 +244,34 @@ var results = db.Search<Article>(a => a.Title.Similar("search engines")).ToList(
 ```
 
 The referenced property must be indexed via `[Queryable]`, `[Field]`, or the fluent API. An invalid reference throws at initialization.
+
+## LottaCatalog Operations
+
+| Operation | Description |
+| --- | --- |
+| **GetDatabaseAsync()** | Get or create a database within the catalog |
+| **ListAsync()** | List all database IDs in the catalog |
+| **DeleteAsync()** | Delete the entire catalog (all databases) |
+| **Dispose()** | Dispose all managed database instances |
+
+### Catalog-level settings
+
+Infrastructure settings live on the catalog and are shared across all databases:
+
+```csharp
+var catalog = new LottaCatalog("myapp", connectionString, catalog =>
+{
+    catalog.Analyzer = new StandardAnalyzer(LuceneVersion.LUCENE_48);
+    catalog.EmbeddingGenerator = myEmbeddingGenerator;
+});
+```
+
+| Setting | Description | Default |
+| --- | --- | --- |
+| **TableServiceClientFactory** | Factory for Azure Table Storage client | `new TableServiceClient(connectionString)` |
+| **LuceneDirectoryFactory** | Factory for Lucene index directory | `AzureDirectory` backed by blob storage |
+| **Analyzer** | Lucene analyzer for text analysis | `EnglishAnalyzer` |
+| **EmbeddingGenerator** | Embedding generator for vector search | `null` (disabled) |
 
 ## LottaDB Operations
 
@@ -560,30 +572,18 @@ if (result.Errors.Count > 0)
 }
 ```
 
-## LottaCatalog Operations
+### Automatic schema migration
 
-| Operation | Description |
-| --- | --- |
-| **GetDatabaseAsync()** | Get or create a database within the catalog |
-| **ListAsync()** | List all database IDs in the catalog |
-| **DeleteAsync()** | Delete the entire catalog (all databases) |
-| **Dispose()** | Dispose all managed database instances |
-
-### Catalog-level settings
-
-Infrastructure settings live on the catalog and are shared across all databases:
+When you change your type registrations (add a new `[Queryable]` property, register a new type, etc.), LottaDB detects the schema change on startup and automatically rebuilds the Lucene index from table storage.
 
 ```csharp
-var catalog = new LottaCatalog("myapp", connectionString, catalog =>
+// v1: only Actor registered
+var db = await catalog.GetDatabaseAsync("main", c => c.Store<Actor>());
+
+// v2: added Note -- schema changed, index auto-rebuilt
+var db = await catalog.GetDatabaseAsync("main", c =>
 {
-    catalog.Analyzer = new StandardAnalyzer(LuceneVersion.LUCENE_48);
-    catalog.EmbeddingGenerator = myEmbeddingGenerator;
+    c.Store<Actor>();
+    c.Store<Note>();  // new! triggers rebuild
 });
 ```
-
-| Setting | Description | Default |
-| --- | --- | --- |
-| **TableServiceClientFactory** | Factory for Azure Table Storage client | `new TableServiceClient(connectionString)` |
-| **LuceneDirectoryFactory** | Factory for Lucene index directory | `AzureDirectory` backed by blob storage |
-| **Analyzer** | Lucene analyzer for text analysis | `EnglishAnalyzer` |
-| **EmbeddingGenerator** | Embedding generator for vector search | `null` (disabled) |
