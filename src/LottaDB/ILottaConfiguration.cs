@@ -3,15 +3,6 @@ using System.Linq.Expressions;
 namespace Lotta;
 
 /// <summary>
-/// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
-/// </summary>
-/// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
-/// <param name="contentType">MIME type if provided by the caller, otherwise null (detected from extension).</param>
-/// <param name="content">A readable stream of the blob content.</param>
-/// <param name="existing">Reserved (always null). May be used in future for update scenarios.</param>
-/// <param name="db">The database instance, for querying or saving related entities.</param>
-/// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
-/// <summary>
 /// Handler invoked after an entity is saved or deleted.
 /// </summary>
 /// <typeparam name="T">The entity type.</typeparam>
@@ -24,7 +15,7 @@ public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db)
 /// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
 /// </summary>
 /// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
-/// <param name="contentType">MIME type if provided by the caller, otherwise null (detected from extension).</param>
+/// <param name="contentType">MIME type (explicit or detected from file extension).</param>
 /// <param name="content">A readable stream of the blob content.</param>
 /// <param name="db">The database instance, for querying or saving related entities.</param>
 /// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>

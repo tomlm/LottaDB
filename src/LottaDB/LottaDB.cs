@@ -582,10 +582,16 @@ public class LottaDB : IDisposable
         var container = GetBlobContainer();
         var blob = container.GetBlobClient(GetBlobPath(path));
         var handler = _config.UploadHandler;
+        var resolvedContentType = contentType ?? DefaultBlobHandler.GetMimeType(Path.GetExtension(path));
+        var options = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders { ContentType = resolvedContentType },
+            Conditions = overwrite ? null : new BlobRequestConditions { IfNoneMatch = new ETag("*") }
+        };
 
         if (handler == null)
         {
-            await blob.UploadAsync(content, overwrite: overwrite, cancellationToken: cancellationToken);
+            await blob.UploadAsync(content, options, cancellationToken: cancellationToken);
             return null;
         }
 
@@ -594,8 +600,8 @@ public class LottaDB : IDisposable
         var teeStream = new TeeStream(content, pipe.Writer);
         var handlerStream = pipe.Reader.AsStream();
 
-        var uploadTask = blob.UploadAsync(teeStream, overwrite: overwrite, cancellationToken: cancellationToken);
-        var parseTask = handler(path, contentType, handlerStream, this);
+        var uploadTask = blob.UploadAsync(teeStream, options, cancellationToken: cancellationToken);
+        var parseTask = handler(path, resolvedContentType, handlerStream, this);
 
         await Task.WhenAll(uploadTask, parseTask);
         return await SaveBlobFileAsync(parseTask.Result, path, cancellationToken);
@@ -615,15 +621,21 @@ public class LottaDB : IDisposable
         var container = GetBlobContainer();
         var blob = container.GetBlobClient(GetBlobPath(path));
         var handler = _config.UploadHandler;
+        var resolvedContentType = contentType ?? DefaultBlobHandler.GetMimeType(Path.GetExtension(path));
+        var options = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders { ContentType = resolvedContentType },
+            Conditions = overwrite ? null : new BlobRequestConditions { IfNoneMatch = new ETag("*") }
+        };
 
         using var uploadStream = new MemoryStream(content);
-        await blob.UploadAsync(uploadStream, overwrite: overwrite, cancellationToken: cancellationToken);
+        await blob.UploadAsync(uploadStream, options, cancellationToken: cancellationToken);
 
         if (handler == null)
             return null;
 
         using var handlerStream = new MemoryStream(content);
-        var blobFile = await handler(path, contentType, handlerStream, this);
+        var blobFile = await handler(path, resolvedContentType, handlerStream, this);
         return await SaveBlobFileAsync(blobFile, path, cancellationToken);
     }
 

@@ -7,6 +7,7 @@ namespace Lotta;
 /// As the consumer (e.g. blob upload) reads from this stream, the same bytes are pushed
 /// concurrently to the pipe for a second consumer (e.g. content parser).
 /// No full-file buffering is required — memory usage is bounded by the pipe's buffer size.
+/// On any failure, the pipe is completed with the exception so the reader doesn't hang.
 /// </summary>
 internal sealed class TeeStream : Stream
 {
@@ -32,55 +33,79 @@ internal sealed class TeeStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        int bytesRead = _source.Read(buffer, offset, count);
-        if (bytesRead > 0)
+        try
         {
-            _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, bytesRead)).AsTask().GetAwaiter().GetResult();
-            _pipeWriter.FlushAsync().AsTask().GetAwaiter().GetResult();
+            int bytesRead = _source.Read(buffer, offset, count);
+            if (bytesRead > 0)
+            {
+                _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, bytesRead)).AsTask().GetAwaiter().GetResult();
+                _pipeWriter.FlushAsync().AsTask().GetAwaiter().GetResult();
+            }
+            else
+            {
+                Complete();
+            }
+            return bytesRead;
         }
-        else
+        catch (Exception ex)
         {
-            Complete();
+            Complete(ex);
+            throw;
         }
-        return bytesRead;
     }
 
     public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        int bytesRead = await _source.ReadAsync(buffer, offset, count, cancellationToken);
-        if (bytesRead > 0)
+        try
         {
-            await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, bytesRead), cancellationToken);
-            await _pipeWriter.FlushAsync(cancellationToken);
+            int bytesRead = await _source.ReadAsync(buffer, offset, count, cancellationToken);
+            if (bytesRead > 0)
+            {
+                await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, bytesRead), cancellationToken);
+                await _pipeWriter.FlushAsync(cancellationToken);
+            }
+            else
+            {
+                Complete();
+            }
+            return bytesRead;
         }
-        else
+        catch (Exception ex)
         {
-            Complete();
+            Complete(ex);
+            throw;
         }
-        return bytesRead;
     }
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
-        int bytesRead = await _source.ReadAsync(buffer, cancellationToken);
-        if (bytesRead > 0)
+        try
         {
-            await _pipeWriter.WriteAsync(buffer.Slice(0, bytesRead), cancellationToken);
-            await _pipeWriter.FlushAsync(cancellationToken);
+            int bytesRead = await _source.ReadAsync(buffer, cancellationToken);
+            if (bytesRead > 0)
+            {
+                await _pipeWriter.WriteAsync(buffer.Slice(0, bytesRead), cancellationToken);
+                await _pipeWriter.FlushAsync(cancellationToken);
+            }
+            else
+            {
+                Complete();
+            }
+            return bytesRead;
         }
-        else
+        catch (Exception ex)
         {
-            Complete();
+            Complete(ex);
+            throw;
         }
-        return bytesRead;
     }
 
-    private void Complete()
+    private void Complete(Exception? exception = null)
     {
         if (!_completed)
         {
             _completed = true;
-            _pipeWriter.Complete();
+            _pipeWriter.Complete(exception);
         }
     }
 
