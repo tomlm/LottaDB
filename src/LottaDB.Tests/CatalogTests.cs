@@ -128,10 +128,10 @@ public class CatalogTests : IDisposable
         {
             config.Store<Actor>();
         });
-        await db.ResetDatabaseAsync();
+        await db.ResetDatabaseAsync(TestContext.Current.CancellationToken);
 
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        var result = await db.GetAsync<Actor>("alice");
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        var result = await db.GetAsync<Actor>("alice", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(result);
     }
 
@@ -217,7 +217,7 @@ public class CatalogTests : IDisposable
         await CreateDbAsync(catalog, "todos");
         await CreateDbAsync(catalog, "logs");
 
-        var databases = await catalog.ListAsync();
+        var databases = await catalog.ListAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(3, databases.Count);
         Assert.Contains("notes", databases);
@@ -230,7 +230,7 @@ public class CatalogTests : IDisposable
     {
         using var catalog = CreateCatalog("catalog8");
 
-        var databases = await catalog.ListAsync();
+        var databases = await catalog.ListAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(databases);
     }
@@ -320,12 +320,12 @@ public class CatalogTests : IDisposable
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
 
-        var beforeDelete = await catalog.ListAsync();
+        var beforeDelete = await catalog.ListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, beforeDelete.Count);
 
         await db1.DeleteDatabaseAsync();
 
-        var afterDelete = await catalog.ListAsync();
+        var afterDelete = await catalog.ListAsync(TestContext.Current.CancellationToken);
         Assert.Single(afterDelete);
         Assert.Contains("db2", afterDelete);
     }
@@ -342,10 +342,10 @@ public class CatalogTests : IDisposable
         await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
         await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" });
 
-        await catalog.DeleteAsync();
+        await catalog.DeleteAsync(TestContext.Current.CancellationToken);
 
         // Manifest should be empty after table drop + recreate
-        var databases = await catalog.ListAsync();
+        var databases = await catalog.ListAsync(TestContext.Current.CancellationToken);
         Assert.Empty(databases);
     }
 
@@ -449,8 +449,8 @@ public class CatalogTests : IDisposable
         });
 
         // Should work fine — empty database, no rebuild needed
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
-        var result = await db.GetAsync<Actor>("alice");
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
+        var result = await db.GetAsync<Actor>("alice", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(result);
         Assert.Equal("Alice", result.DisplayName);
     }
@@ -503,7 +503,7 @@ public class CatalogTests : IDisposable
         await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
 
         // Drop everything
-        await catalog.DeleteAsync();
+        await catalog.DeleteAsync(TestContext.Current.CancellationToken);
 
         // Should be able to create new databases after delete
         var db2 = await CreateDbAsync(catalog, "db2");
@@ -514,7 +514,7 @@ public class CatalogTests : IDisposable
         Assert.Equal("Bob", result.DisplayName);
 
         // Manifest should only show db2
-        var databases = await catalog.ListAsync();
+        var databases = await catalog.ListAsync(TestContext.Current.CancellationToken);
         Assert.Single(databases);
         Assert.Contains("db2", databases);
     }
@@ -527,7 +527,7 @@ public class CatalogTests : IDisposable
         {
             config.Store<LargeDocument>();
         });
-        await db.ResetDatabaseAsync();
+        await db.ResetDatabaseAsync(TestContext.Current.CancellationToken);
 
         // Create a payload larger than 63KB to force splitting across table storage properties
         var largePayload = new string('X', 100_000); // ~100KB
@@ -538,10 +538,10 @@ public class CatalogTests : IDisposable
             Payload = largePayload,
         };
 
-        await db.SaveAsync(doc);
+        await db.SaveAsync(doc, TestContext.Current.CancellationToken);
 
         // Point read — verifies split property reassembly
-        var loaded = await db.GetAsync<LargeDocument>("large1");
+        var loaded = await db.GetAsync<LargeDocument>("large1", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("large1", loaded.Id);
         Assert.Equal("Large Document", loaded.Title);
@@ -564,17 +564,17 @@ public class CatalogTests : IDisposable
         {
             config.Store<LargeDocument>();
         });
-        await db.ResetDatabaseAsync();
+        await db.ResetDatabaseAsync(TestContext.Current.CancellationToken);
 
         // Save initial large document
         var payload1 = new string('A', 80_000);
-        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V1", Payload = payload1 });
+        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V1", Payload = payload1 }, TestContext.Current.CancellationToken);
 
         // Update with different large payload
         var payload2 = new string('B', 120_000);
-        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V2", Payload = payload2 });
+        await db.SaveAsync(new LargeDocument { Id = "doc1", Title = "V2", Payload = payload2 }, TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<LargeDocument>("doc1");
+        var loaded = await db.GetAsync<LargeDocument>("doc1", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("V2", loaded.Title);
         Assert.Equal(payload2, loaded.Payload);
@@ -732,9 +732,9 @@ public class CatalogTests : IDisposable
 
         var content = "Hello, Blob World!";
         using var uploadStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-        await db.UploadBlobAsync("test.txt", uploadStream);
+        await db.UploadBlobAsync("test.txt", uploadStream, cancellationToken: TestContext.Current.CancellationToken);
 
-        var downloadStream = await db.DownloadBlobAsync("test.txt");
+        var downloadStream = await db.DownloadBlobAsync("test.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(downloadStream);
         using var reader = new StreamReader(downloadStream);
         var result = await reader.ReadToEndAsync();
@@ -748,9 +748,9 @@ public class CatalogTests : IDisposable
         var db = await CreateDbAsync(catalog, "db1");
 
         var content = new byte[] { 1, 2, 3, 4, 5 };
-        await db.UploadBlobAsync("data.bin", content);
+        await db.UploadBlobAsync("data.bin", content, cancellationToken: TestContext.Current.CancellationToken);
 
-        var result = await db.DownloadBlobBytesAsync("data.bin");
+        var result = await db.DownloadBlobBytesAsync("data.bin", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(result);
         Assert.Equal(content, result);
     }
@@ -761,9 +761,9 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog32");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("note.txt", "Hello from LottaDB");
+        await db.UploadBlobAsync("note.txt", "Hello from LottaDB", cancellationToken: TestContext.Current.CancellationToken);
 
-        var result = await db.DownloadBlobStringAsync("note.txt");
+        var result = await db.DownloadBlobStringAsync("note.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("Hello from LottaDB", result);
     }
 
@@ -773,13 +773,13 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog33");
         var db = await CreateDbAsync(catalog, "db1");
 
-        var stream = await db.DownloadBlobAsync("nonexistent.txt");
+        var stream = await db.DownloadBlobAsync("nonexistent.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(stream);
 
-        var bytes = await db.DownloadBlobBytesAsync("nonexistent.txt");
+        var bytes = await db.DownloadBlobBytesAsync("nonexistent.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(bytes);
 
-        var str = await db.DownloadBlobStringAsync("nonexistent.txt");
+        var str = await db.DownloadBlobStringAsync("nonexistent.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(str);
     }
 
@@ -789,15 +789,15 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog34");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("todelete.txt", "temp");
-        var deleted = await db.DeleteBlobAsync("todelete.txt");
+        await db.UploadBlobAsync("todelete.txt", "temp", cancellationToken: TestContext.Current.CancellationToken);
+        var deleted = await db.DeleteBlobAsync("todelete.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(deleted);
 
-        var result = await db.DownloadBlobStringAsync("todelete.txt");
+        var result = await db.DownloadBlobStringAsync("todelete.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(result);
 
         // Delete again — should return false
-        var deletedAgain = await db.DeleteBlobAsync("todelete.txt");
+        var deletedAgain = await db.DeleteBlobAsync("todelete.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(deletedAgain);
     }
 
@@ -807,21 +807,21 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog35");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("photos/a.jpg", "image-a");
-        await db.UploadBlobAsync("photos/b.jpg", "image-b");
-        await db.UploadBlobAsync("docs/readme.md", "readme");
+        await db.UploadBlobAsync("photos/a.jpg", "image-a", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/b.jpg", "image-b", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.md", "readme", cancellationToken: TestContext.Current.CancellationToken);
 
         // List all
-        var all = await db.ListBlobsAsync();
+        var all = await db.ListBlobsAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(3, all.Count);
 
         // List with prefix
-        var photos = await db.ListBlobsAsync("photos/");
+        var photos = await db.ListBlobsAsync("photos/", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(2, photos.Count);
         Assert.Contains("photos/a.jpg", photos);
         Assert.Contains("photos/b.jpg", photos);
 
-        var docs = await db.ListBlobsAsync("docs/");
+        var docs = await db.ListBlobsAsync("docs/", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(docs);
         Assert.Contains("docs/readme.md", docs);
     }
@@ -832,23 +832,23 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog60");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("root.txt", "root");
-        await db.UploadBlobAsync("photos/a.jpg", "a");
-        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
-        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c");
+        await db.UploadBlobAsync("root.txt", "root", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c", cancellationToken: TestContext.Current.CancellationToken);
 
         // Non-recursive at root — only root.txt
-        var rootFiles = await db.ListBlobsAsync(recursive: false);
+        var rootFiles = await db.ListBlobsAsync(recursive: false, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(rootFiles);
         Assert.Contains("root.txt", rootFiles);
 
         // Non-recursive in photos/ — only a.jpg
-        var photosFlat = await db.ListBlobsAsync("photos/", recursive: false);
+        var photosFlat = await db.ListBlobsAsync("photos/", recursive: false, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(photosFlat);
         Assert.Contains("photos/a.jpg", photosFlat);
 
         // Recursive in photos/ — all 3 photos
-        var photosAll = await db.ListBlobsAsync("photos/", recursive: true);
+        var photosAll = await db.ListBlobsAsync("photos/", recursive: true, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(3, photosAll.Count);
         Assert.Contains("photos/a.jpg", photosAll);
         Assert.Contains("photos/2024/b.jpg", photosAll);
@@ -861,19 +861,19 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog61");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("root.txt", "root");
-        await db.UploadBlobAsync("photos/a.jpg", "a");
-        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
-        await db.UploadBlobAsync("docs/readme.md", "readme");
+        await db.UploadBlobAsync("root.txt", "root", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.md", "readme", cancellationToken: TestContext.Current.CancellationToken);
 
         // Immediate subfolders of root
-        var rootFolders = await db.ListBlobFoldersAsync(recursive: false);
+        var rootFolders = await db.ListBlobFoldersAsync(recursive: false, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(2, rootFolders.Count);
         Assert.Contains("photos/", rootFolders);
         Assert.Contains("docs/", rootFolders);
 
         // Immediate subfolders of photos/
-        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: false);
+        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: false, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(photoFolders);
         Assert.Contains("photos/2024/", photoFolders);
     }
@@ -884,20 +884,20 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog62");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("photos/a.jpg", "a");
-        await db.UploadBlobAsync("photos/2024/b.jpg", "b");
-        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c");
-        await db.UploadBlobAsync("docs/readme.md", "readme");
+        await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/2024/b.jpg", "b", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("photos/2024/trip/c.jpg", "c", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.md", "readme", cancellationToken: TestContext.Current.CancellationToken);
 
         // All folders recursively from root
-        var allFolders = await db.ListBlobFoldersAsync(recursive: true);
+        var allFolders = await db.ListBlobFoldersAsync(recursive: true, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("photos/", allFolders);
         Assert.Contains("photos/2024/", allFolders);
         Assert.Contains("photos/2024/trip/", allFolders);
         Assert.Contains("docs/", allFolders);
 
         // All folders recursively under photos/
-        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: true);
+        var photoFolders = await db.ListBlobFoldersAsync("photos/", recursive: true, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("photos/2024/", photoFolders);
         Assert.Contains("photos/2024/trip/", photoFolders);
         Assert.DoesNotContain("photos/", photoFolders); // don't include the queried folder itself
@@ -910,9 +910,9 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog63");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("only-file.txt", "content");
+        await db.UploadBlobAsync("only-file.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
 
-        var folders = await db.ListBlobFoldersAsync(recursive: false);
+        var folders = await db.ListBlobFoldersAsync(recursive: false, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Empty(folders);
     }
 
@@ -922,11 +922,11 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog64");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("photos/a.jpg", "a");
+        await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
 
         // Both with and without trailing slash should work
-        var withSlash = await db.ListBlobsAsync("photos/");
-        var withoutSlash = await db.ListBlobsAsync("photos");
+        var withSlash = await db.ListBlobsAsync("photos/", cancellationToken: TestContext.Current.CancellationToken);
+        var withoutSlash = await db.ListBlobsAsync("photos", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(withSlash, withoutSlash);
     }
 
@@ -964,10 +964,10 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog37");
         var db = await CreateDbAsync(catalog, "db1");
 
-        await db.UploadBlobAsync("file.txt", "version 1");
-        await db.UploadBlobAsync("file.txt", "version 2");
+        await db.UploadBlobAsync("file.txt", "version 1", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("file.txt", "version 2", cancellationToken: TestContext.Current.CancellationToken);
 
-        var result = await db.DownloadBlobStringAsync("file.txt");
+        var result = await db.DownloadBlobStringAsync("file.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("version 2", result);
     }
 
@@ -982,7 +982,7 @@ public class CatalogTests : IDisposable
             config.OnUpload(); // default handler
         });
 
-        var meta = await db.UploadBlobAsync("docs/readme.txt", "Hello world");
+        var meta = await db.UploadBlobAsync("docs/readme.txt", "Hello world", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(meta);
         Assert.IsType<BlobFile>(meta);
@@ -1002,7 +1002,7 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("notes/meeting.md", "We discussed the quarterly revenue forecast");
+        await db.UploadBlobAsync("notes/meeting.md", "We discussed the quarterly revenue forecast", cancellationToken: TestContext.Current.CancellationToken);
         db.ReloadSearcher();
 
         var results = db.Search<BlobFile>("quarterly revenue").ToList();
@@ -1019,7 +1019,7 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        var meta = await db.UploadBlobAsync("photos/test.jpg", new byte[] { 0xFF, 0xD8, 0xFF });
+        var meta = await db.UploadBlobAsync("photos/test.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(meta);
         Assert.IsType<BlobPhoto>(meta);
@@ -1036,9 +1036,9 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("docs/notes.txt", "Some important notes");
+        await db.UploadBlobAsync("docs/notes.txt", "Some important notes", cancellationToken: TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<BlobFile>("docs/notes.txt");
+        var loaded = await db.GetAsync<BlobFile>("docs/notes.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
         Assert.Equal("notes.txt", loaded.Name);
         Assert.Equal("docs", loaded.FolderPath);
@@ -1055,11 +1055,11 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        var meta = await db.UploadBlobAsync("test.txt", "content");
+        var meta = await db.UploadBlobAsync("test.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(meta);
 
         // Database should be set — DownloadAsync should work
-        var stream = await meta.DownloadAsync();
+        var stream = await meta.DownloadAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(stream);
         using var reader = new StreamReader(stream);
         Assert.Equal("content", await reader.ReadToEndAsync());
@@ -1074,12 +1074,12 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("test.txt", "content");
+        await db.UploadBlobAsync("test.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
 
-        var loaded = await db.GetAsync<BlobFile>("test.txt");
+        var loaded = await db.GetAsync<BlobFile>("test.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(loaded);
 
-        var stream = await loaded.DownloadAsync();
+        var stream = await loaded.DownloadAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(stream);
         using var reader = new StreamReader(stream);
         Assert.Equal("content", await reader.ReadToEndAsync());
@@ -1094,18 +1094,18 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("file.txt", "some content");
+        await db.UploadBlobAsync("file.txt", "some content", cancellationToken: TestContext.Current.CancellationToken);
 
         // Metadata exists
-        var before = await db.GetAsync<BlobFile>("file.txt");
+        var before = await db.GetAsync<BlobFile>("file.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(before);
 
         // Delete via blob API
-        await db.DeleteBlobAsync("file.txt");
+        await db.DeleteBlobAsync("file.txt", cancellationToken: TestContext.Current.CancellationToken);
 
         // Both blob and metadata are gone
-        Assert.Null(await db.DownloadBlobStringAsync("file.txt"));
-        Assert.Null(await db.GetAsync<BlobFile>("file.txt"));
+        Assert.Null(await db.DownloadBlobStringAsync("file.txt", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<BlobFile>("file.txt", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1117,15 +1117,15 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        var meta = await db.UploadBlobAsync("file.txt", "some content");
+        var meta = await db.UploadBlobAsync("file.txt", "some content", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(meta);
 
         // Delete via BlobFile convenience method
-        var deleted = await meta.DeleteAsync();
+        var deleted = await meta.DeleteAsync(TestContext.Current.CancellationToken);
         Assert.True(deleted);
 
-        Assert.Null(await db.DownloadBlobStringAsync("file.txt"));
-        Assert.Null(await db.GetAsync<BlobFile>("file.txt"));
+        Assert.Null(await db.DownloadBlobStringAsync("file.txt", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<BlobFile>("file.txt", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1134,11 +1134,11 @@ public class CatalogTests : IDisposable
         using var catalog = CreateCatalog("catalog48");
         var db = await CreateDbAsync(catalog, "db1"); // no OnUpload
 
-        var meta = await db.UploadBlobAsync("test.txt", "content");
+        var meta = await db.UploadBlobAsync("test.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(meta);
         // Blob still uploaded
-        Assert.Equal("content", await db.DownloadBlobStringAsync("test.txt"));
+        Assert.Equal("content", await db.DownloadBlobStringAsync("test.txt", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1150,10 +1150,10 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("file.txt", "version 1");
-        await db.UploadBlobAsync("file.txt", "version 2");
+        await db.UploadBlobAsync("file.txt", "version 1", cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("file.txt", "version 2", cancellationToken: TestContext.Current.CancellationToken);
 
-        var meta = await db.GetAsync<BlobFile>("file.txt");
+        var meta = await db.GetAsync<BlobFile>("file.txt", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(meta);
         Assert.Equal("version 2", meta.Content);
     }
@@ -1167,7 +1167,7 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        var meta = await db.UploadBlobAsync("data.bin", new byte[] { 1, 2, 3 }, contentType: "image/png");
+        var meta = await db.UploadBlobAsync("data.bin", new byte[] { 1, 2, 3 }, contentType: "image/png", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(meta);
         Assert.IsType<BlobPhoto>(meta);
@@ -1183,14 +1183,14 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("notes/search-test.txt", "findable content here");
+        await db.UploadBlobAsync("notes/search-test.txt", "findable content here", cancellationToken: TestContext.Current.CancellationToken);
         db.ReloadSearcher();
 
         var results = db.Search<BlobFile>("findable").ToList();
         Assert.Single(results);
 
         // Database should be set on Search results — DownloadAsync should work
-        var stream = await results[0].DownloadAsync();
+        var stream = await results[0].DownloadAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(stream);
         using var reader = new StreamReader(stream);
         Assert.Equal("findable content here", await reader.ReadToEndAsync());
@@ -1206,7 +1206,7 @@ public class CatalogTests : IDisposable
         });
 
         using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("stream content"));
-        var meta = await db.UploadBlobAsync("stream.txt", stream);
+        var meta = await db.UploadBlobAsync("stream.txt", stream, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(meta);
         Assert.Equal("stream.txt", meta.Name);
@@ -1236,7 +1236,7 @@ public class CatalogTests : IDisposable
         });
 
         // Upload a .jpg → creates BlobPhoto
-        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Both On<BlobPhoto> and On<BlobFile> should fire
         Assert.Contains("BlobPhoto", firedTypes);
@@ -1258,7 +1258,7 @@ public class CatalogTests : IDisposable
             });
         });
 
-        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
         Assert.IsType<BlobPhoto>(received); // receives the actual derived type
@@ -1280,7 +1280,7 @@ public class CatalogTests : IDisposable
         });
 
         // Upload a .jpg → BlobPhoto, not BlobMusic
-        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(fired);
     }
