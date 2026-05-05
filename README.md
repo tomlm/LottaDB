@@ -16,7 +16,7 @@
 ## Why LottaDB?
 
 - **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
-- **A lotta LINQ.** `Query<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
+- **A lotta LINQ.** `GetManyAsync<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
 - **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives.
 - **A lotta views.** `On<T>` triggers build materialized views with plain C#. No event buses, no eventual consistency -- just inline code.
 - **A lotta tenants.** One catalog per tenant with multiple databases. Natural isolation, simple cleanup -- delete the catalog and everything goes with it.
@@ -81,8 +81,8 @@ await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
 // Point read
 var actor = await db.GetAsync<Actor>("alice");
 
-// Query (Table Storage -- server-side filter on [Queryable] properties)
-var results = db.Query<Actor>(a => a.DisplayName == "Alice")
+// fetch with (Table Storage -- server-side filter on [Queryable] properties)
+var results = db.GetManyAsync<Actor>(a => a.DisplayName == "Alice")
     .ToList();
 
 // Search (Lucene -- full-text search on [Queryable] properties)
@@ -381,20 +381,20 @@ var results = db.Search<Note>("AuthorId:alice AND Content:lucene").ToList();
 
 LottaDB stores 2 representations of every object: one in **table storage** (the source of truth) and one in a **Lucene** index (for fast search). **Query()** gives you a LINQ query over table storage and **Search()** uses the **LINQ to Lucene** library to query the search engine with LINQ expressions.
 
-### Query (Table Storage)
+### GetManyAsync (Table Storage)
 
 Filters on `[Queryable]` properties are executed by table storage server-side.
 
 ```csharp
 // All actors
-var all = db.Query<Actor>().ToList();
+var all = db.GetManyAsync<Actor>().ToList();
 
 // Server-side filter (AuthorId is [Queryable])
-var aliceNotes = db.Query<Note>(n => n.AuthorId == "alice")
+var aliceNotes = db.GetManyAsync<Note>(n => n.AuthorId == "alice")
     .ToList();
 
 // Polymorphic query -- returns Person and Employee
-var people = db.Query<Person>().ToList();
+var people = db.GetManyAsync<Person>().ToList();
 ```
 
 ### Search (Lucene)
