@@ -31,28 +31,8 @@ internal sealed class TeeStream : Stream
         set => throw new NotSupportedException();
     }
 
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        try
-        {
-            int bytesRead = _source.Read(buffer, offset, count);
-            if (bytesRead > 0)
-            {
-                _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, bytesRead)).AsTask().GetAwaiter().GetResult();
-                _pipeWriter.FlushAsync().AsTask().GetAwaiter().GetResult();
-            }
-            else
-            {
-                Complete();
-            }
-            return bytesRead;
-        }
-        catch (Exception ex)
-        {
-            Complete(ex);
-            throw;
-        }
-    }
+    public override int Read(byte[] buffer, int offset, int count) =>
+        throw new NotSupportedException("Use ReadAsync. Synchronous reads are not supported to avoid deadlocks with the pipe.");
 
     public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
