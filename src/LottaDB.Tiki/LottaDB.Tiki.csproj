@@ -3,31 +3,13 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>Lotta.Tiki</RootNamespace>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <Version>2.0.0</Version>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
     <Description>Tiki.Net integration for LottaDB — auto-extract rich metadata from blobs on upload.</Description>
-    <Company>Iciclecreek</Company>
-    <Authors>Tom Laird-McConnell</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/tomlm/LottaDB</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/tomlm/LottaDB</RepositoryUrl>
-    <Copyright>Tom Laird-McConnell All Rights Reserved</Copyright>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
-    <None Include="../../icon.png" Pack="true" PackagePath="" />
   </ItemGroup>
-  
 
   <ItemGroup>
     <ProjectReference Include="../LottaDB/LottaDB.csproj" />

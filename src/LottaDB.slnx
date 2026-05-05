@@ -3,6 +3,7 @@
     <File Path="../Analysis.md" />
     <File Path="../Architecture.md" />
     <File Path="../README.md" />
+    <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/TodoApp/TodoApp.csproj" />
