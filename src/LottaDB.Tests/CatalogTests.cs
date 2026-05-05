@@ -1036,14 +1036,14 @@ public class CatalogTests : IDisposable
             config.OnUpload();
         });
 
-        await db.UploadBlobAsync("code/app.cs", "Console.WriteLine(\"Hello\");");
+        await db.UploadBlobAsync("docs/notes.txt", "Some important notes");
 
-        var loaded = await db.GetAsync<BlobFile>("code/app.cs");
+        var loaded = await db.GetAsync<BlobFile>("docs/notes.txt");
         Assert.NotNull(loaded);
-        Assert.Equal("app.cs", loaded.Name);
-        Assert.Equal("code", loaded.FolderPath);
-        Assert.Equal("text/x-csharp", loaded.MediaType);
-        Assert.Equal("Console.WriteLine(\"Hello\");", loaded.Content);
+        Assert.Equal("notes.txt", loaded.Name);
+        Assert.Equal("docs", loaded.FolderPath);
+        Assert.Equal("text/plain", loaded.MediaType);
+        Assert.Equal("Some important notes", loaded.Content);
     }
 
     [Fact]

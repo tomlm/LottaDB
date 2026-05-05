@@ -595,7 +595,7 @@ public class LottaDB : IDisposable
         var handlerStream = pipe.Reader.AsStream();
 
         var uploadTask = blob.UploadAsync(teeStream, overwrite: overwrite, cancellationToken: cancellationToken);
-        var parseTask = handler(path, contentType, handlerStream, null, this);
+        var parseTask = handler(path, contentType, handlerStream, this);
 
         await Task.WhenAll(uploadTask, parseTask);
         return await SaveBlobFileAsync(parseTask.Result, path, cancellationToken);
@@ -623,7 +623,7 @@ public class LottaDB : IDisposable
             return null;
 
         using var handlerStream = new MemoryStream(content);
-        var blobFile = await handler(path, contentType, handlerStream, null, this);
+        var blobFile = await handler(path, contentType, handlerStream, this);
         return await SaveBlobFileAsync(blobFile, path, cancellationToken);
     }
 
@@ -778,35 +778,27 @@ public class LottaDB : IDisposable
         var fullPrefix = GetBlobPath(folderNorm);
         var dbPrefix = GetBlobPath("");
 
-        if (!recursive)
+        // BFS traversal using GetBlobsByHierarchyAsync — only fetches folder structure,
+        // never enumerates blob contents. Efficient even for large blob stores.
+        var folders = new List<string>();
+        var queue = new Queue<string>();
+        queue.Enqueue(fullPrefix);
+
+        while (queue.Count > 0)
         {
-            var folders = new List<string>();
-            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            var current = queue.Dequeue();
+            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: current, cancellationToken: cancellationToken))
             {
                 if (item.IsPrefix)
-                    folders.Add(StripDbPrefix(item.Prefix, dbPrefix));
-            }
-            return folders;
-        }
-        else
-        {
-            // Recursive: list all blobs and extract unique folder paths
-            var folderSet = new HashSet<string>();
-            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
-            {
-                var relativePath = StripDbPrefix(item.Name, dbPrefix);
-                // Extract all parent folders from this path
-                var parts = relativePath.Split('/');
-                var current = "";
-                for (int i = 0; i < parts.Length - 1; i++) // skip the filename
                 {
-                    current += parts[i] + "/";
-                    if (current != folderNorm) // don't include the queried folder itself
-                        folderSet.Add(current);
+                    folders.Add(StripDbPrefix(item.Prefix, dbPrefix));
+                    if (recursive)
+                        queue.Enqueue(item.Prefix);
                 }
             }
-            return folderSet.OrderBy(f => f).ToList();
         }
+
+        return folders;
     }
 
     private static string NormalizeFolder(string? folder)

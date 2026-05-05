@@ -1,3 +1,5 @@
+using MimeMapping;
+
 namespace Lotta;
 
 /// <summary>
@@ -7,110 +9,8 @@ namespace Lotta;
 /// </summary>
 internal static class DefaultBlobHandler
 {
-    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".txt", ".md", ".markdown", ".csv", ".tsv", ".log",
-        ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-        ".html", ".htm", ".css", ".svg",
-        ".cs", ".js", ".ts", ".py", ".rb", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".hpp",
-        ".sh", ".bash", ".ps1", ".bat", ".cmd",
-        ".sql", ".graphql", ".gql",
-        ".env", ".gitignore", ".dockerignore", ".editorconfig",
-    };
 
-    private static readonly Dictionary<string, string> MimeTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        // Text
-        [".txt"] = "text/plain",
-        [".md"] = "text/markdown",
-        [".markdown"] = "text/markdown",
-        [".csv"] = "text/csv",
-        [".tsv"] = "text/tab-separated-values",
-        [".log"] = "text/plain",
-        // Data
-        [".json"] = "application/json",
-        [".xml"] = "application/xml",
-        [".yaml"] = "application/yaml",
-        [".yml"] = "application/yaml",
-        [".toml"] = "application/toml",
-        [".ini"] = "text/plain",
-        [".cfg"] = "text/plain",
-        // Web
-        [".html"] = "text/html",
-        [".htm"] = "text/html",
-        [".css"] = "text/css",
-        [".svg"] = "image/svg+xml",
-        // Code
-        [".cs"] = "text/x-csharp",
-        [".js"] = "text/javascript",
-        [".ts"] = "text/typescript",
-        [".py"] = "text/x-python",
-        [".rb"] = "text/x-ruby",
-        [".java"] = "text/x-java",
-        [".go"] = "text/x-go",
-        [".rs"] = "text/x-rust",
-        [".c"] = "text/x-c",
-        [".cpp"] = "text/x-c++",
-        [".h"] = "text/x-c",
-        [".hpp"] = "text/x-c++",
-        [".sh"] = "text/x-shellscript",
-        [".bash"] = "text/x-shellscript",
-        [".ps1"] = "text/x-powershell",
-        [".bat"] = "text/x-bat",
-        [".cmd"] = "text/x-bat",
-        [".sql"] = "text/x-sql",
-        [".graphql"] = "text/x-graphql",
-        [".gql"] = "text/x-graphql",
-        // Images
-        [".jpg"] = "image/jpeg",
-        [".jpeg"] = "image/jpeg",
-        [".png"] = "image/png",
-        [".gif"] = "image/gif",
-        [".bmp"] = "image/bmp",
-        [".webp"] = "image/webp",
-        [".tiff"] = "image/tiff",
-        [".tif"] = "image/tiff",
-        [".ico"] = "image/x-icon",
-        // Audio
-        [".mp3"] = "audio/mpeg",
-        [".wav"] = "audio/wav",
-        [".flac"] = "audio/flac",
-        [".ogg"] = "audio/ogg",
-        [".aac"] = "audio/aac",
-        [".wma"] = "audio/x-ms-wma",
-        [".m4a"] = "audio/mp4",
-        // Video
-        [".mp4"] = "video/mp4",
-        [".avi"] = "video/x-msvideo",
-        [".mkv"] = "video/x-matroska",
-        [".mov"] = "video/quicktime",
-        [".wmv"] = "video/x-ms-wmv",
-        [".webm"] = "video/webm",
-        [".flv"] = "video/x-flv",
-        // Documents
-        [".pdf"] = "application/pdf",
-        [".doc"] = "application/msword",
-        [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        [".xls"] = "application/vnd.ms-excel",
-        [".xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        [".ppt"] = "application/vnd.ms-powerpoint",
-        [".pptx"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        [".rtf"] = "application/rtf",
-        [".odt"] = "application/vnd.oasis.opendocument.text",
-        [".ods"] = "application/vnd.oasis.opendocument.spreadsheet",
-        [".odp"] = "application/vnd.oasis.opendocument.presentation",
-        // Email
-        [".eml"] = "message/rfc822",
-        [".msg"] = "application/vnd.ms-outlook",
-        // Archives
-        [".zip"] = "application/zip",
-        [".gz"] = "application/gzip",
-        [".tar"] = "application/x-tar",
-        [".7z"] = "application/x-7z-compressed",
-        [".rar"] = "application/x-rar-compressed",
-    };
-
-    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, BlobFile? existing, LottaDB db)
+    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, LottaDB db)
     {
         var ext = Path.GetExtension(path);
         var mimeType = contentType ?? GetMimeType(ext);
@@ -123,7 +23,7 @@ internal static class DefaultBlobHandler
         blobFile.MediaType = mimeType;
 
         // For text formats, read the content
-        if (IsTextExtension(ext))
+        if (IsTextContent(mimeType, ext))
         {
             using var reader = new StreamReader(stream, leaveOpen: true);
             blobFile.Content = await reader.ReadToEndAsync();
@@ -144,12 +44,67 @@ internal static class DefaultBlobHandler
         if (string.IsNullOrEmpty(extension))
             return "application/octet-stream";
 
-        return MimeTypes.TryGetValue(extension, out var mime) ? mime : "application/octet-stream";
+        return MimeUtility.GetMimeMapping(extension);
     }
 
-    internal static bool IsTextExtension(string extension)
+    /// <summary>
+    /// Well-known source code and config extensions that MimeMapping doesn't classify as text.
+    /// </summary>
+    private static readonly HashSet<string> TextFileExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        return !string.IsNullOrEmpty(extension) && TextExtensions.Contains(extension);
+        // Source code
+        ".cs", ".fs", ".vb",                           // .NET
+        ".py", ".pyw",                                  // Python
+        ".rb", ".rake",                                 // Ruby
+        ".go",                                          // Go
+        ".rs",                                          // Rust
+        ".swift",                                       // Swift
+        ".kt", ".kts",                                  // Kotlin
+        ".scala",                                       // Scala
+        ".java",                                        // Java
+        ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",     // C/C++
+        ".m", ".mm",                                    // Objective-C
+        ".ts", ".tsx", ".jsx", ".mjs", ".cjs",         // TypeScript/JS variants
+        ".lua",                                         // Lua
+        ".r",                                           // R
+        ".jl",                                          // Julia
+        ".ex", ".exs",                                  // Elixir
+        ".erl", ".hrl",                                 // Erlang
+        ".hs", ".lhs",                                  // Haskell
+        ".clj", ".cljs",                                // Clojure
+        ".dart",                                        // Dart
+        ".php",                                         // PHP
+        ".pl", ".pm",                                   // Perl
+        ".groovy",                                      // Groovy
+        // Shell/scripting
+        ".sh", ".bash", ".zsh", ".fish",
+        ".ps1", ".psm1", ".psd1",                       // PowerShell
+        ".bat", ".cmd",                                 // Windows batch
+        // Query languages
+        ".sql", ".graphql", ".gql",
+        // Markup/config
+        ".toml", ".ini", ".cfg", ".conf",
+        ".env", ".properties",
+        ".tf", ".hcl",                                  // Terraform
+        ".proto",                                       // Protocol Buffers
+        // Build/project files
+        ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx",
+        ".gradle",
+        ".cmake",
+        ".makefile",
+        // Misc text
+        ".log", ".diff", ".patch",
+        ".gitignore", ".gitattributes", ".dockerignore", ".editorconfig",
+        ".yml",                                         // MimeMapping knows .yaml but not .yml
+    };
+
+    internal static bool IsTextContent(string mimeType, string extension)
+    {
+        return mimeType.StartsWith("text/")
+            || mimeType is "application/json" or "application/xml"
+               or "application/yaml" or "application/toml"
+               or "image/svg+xml"
+            || TextFileExtensions.Contains(extension);
     }
 
     private static BlobFile CreateBlobFileForMimeType(string mimeType)

@@ -26,10 +26,9 @@ public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db)
 /// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
 /// <param name="contentType">MIME type if provided by the caller, otherwise null (detected from extension).</param>
 /// <param name="content">A readable stream of the blob content.</param>
-/// <param name="existing">Reserved (always null). May be used in future for update scenarios.</param>
 /// <param name="db">The database instance, for querying or saving related entities.</param>
 /// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
-public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, BlobFile? existing, LottaDB db);
+public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, LottaDB db);
 
 /// <summary>
 /// Per-database configuration for type registrations and handlers.

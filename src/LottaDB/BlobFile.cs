@@ -58,10 +58,9 @@ public class BlobFile
     public string[]? Keywords { get; set; }
 
     /// <summary>
-    /// Extracted text content. Indexed in Lucene for full-text search
-    /// but not promoted to a Table Storage column (may be very large).
+    /// Extracted text content. Full-text searchable via Lucene and stored in Table Storage.
     /// </summary>
-    [Field(IndexMode.Analyzed)]
+    [Queryable]
     public string? Content { get; set; }
 
     /// <summary>Download the blob content as a stream.</summary>

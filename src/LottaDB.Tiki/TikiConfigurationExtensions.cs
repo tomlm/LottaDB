@@ -21,10 +21,8 @@ public static class TikiConfigurationExtensions
     {
         engine ??= new TikiEngine();
 
-        config.OnUpload(async (path, contentType, stream, existing, db) =>
+        config.OnUpload(async (path, contentType, stream, db) =>
         {
-            // Tiki does its own content sniffing; contentType from caller is
-            // used as a fallback for the MediaType if Tiki can't detect it.
             var tikiFile = await engine.ParseAsync(stream);
             return BlobFileMapper.FromTikiFile(tikiFile, path);
         });
