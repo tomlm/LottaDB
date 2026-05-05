@@ -92,10 +92,9 @@ public class StoreRegistrationTests
     {
         // Create a DB without registering Actor
         // deliberately NOT registering Actor
-        using var db = new LottaDB("StoreUnregisteredTypeThrows", "UseDevelopmentStorage=true", (config) =>
-        {
-            config.ConfigureTestStorage();
-        });
+        var catalog = new LottaCatalog("StoreUnregisteredTypeThrows");
+        catalog.ConfigureTestStorage();
+        using var db = await catalog.GetDatabaseAsync();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             db.SaveAsync(new Actor { Username = "alice" }, TestContext.Current.CancellationToken));
@@ -104,10 +103,9 @@ public class StoreRegistrationTests
     [Fact]
     public async Task Store_UnregisteredType_BulkSave_Throws()
     {
-        using var db = new LottaDB("UnregisteredBulkThrows", "UseDevelopmentStorage=true", (c) =>
-        {
-            c.ConfigureTestStorage();
-        });
+        var catalog = new LottaCatalog("UnregisteredBulkThrows");
+        catalog.ConfigureTestStorage();
+        using var db = await catalog.GetDatabaseAsync();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             db.SaveManyAsync(new[] { new Actor { Username = "alice" } }, TestContext.Current.CancellationToken));

@@ -1,45 +1,36 @@
-using Azure.Data.Tables;
-using Microsoft.Extensions.AI;
 using System.Linq.Expressions;
-using LuceneDirectory = Lucene.Net.Store.Directory;
 
 namespace Lotta;
 
 /// <summary>
-/// Configuration options for a LottaDB database instance.
+/// Handler invoked after an entity is saved or deleted.
+/// </summary>
+/// <typeparam name="T">The entity type.</typeparam>
+/// <param name="entity">The entity that was saved or deleted.</param>
+/// <param name="kind">Whether the entity was saved or deleted.</param>
+/// <param name="db">The database instance, for querying or saving related entities.</param>
+public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db);
+
+/// <summary>
+/// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
+/// </summary>
+/// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
+/// <param name="contentType">MIME type (explicit or detected from file extension).</param>
+/// <param name="content">A readable stream of the blob content.</param>
+/// <param name="db">The database instance, for querying or saving related entities.</param>
+/// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
+public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, LottaDB db);
+
+/// <summary>
+/// Per-database configuration for type registrations and handlers.
+/// Infrastructure settings (storage factories, embedding generator, analyzer) live on <see cref="LottaCatalog"/>.
 /// </summary>
 public interface ILottaConfiguration
 {
     /// <summary>
     /// Gets or sets the interval, in milliseconds, at which automatic search commits are performed.
     /// </summary>
-    /// <remarks>
-    /// This setting controls how frequently the search index is updated with recent changes. 
-    /// A shorter interval means more up-to-date search results but may impact performance, 
-    /// while a longer interval can improve performance at the cost of search freshness. 
-    /// The default value is 1000 milliseconds (1 second), which is a good starting point
-    /// for most applications. Adjust this value based on your application's needs and workload characteristics.
-    /// </remarks>
     public int AutoCommitDelay { get; set; }
-
-    /// <summary>
-    /// Factory for instantiating a TableServiceClient with a given connection string. The default factory creates a new client per database instance, 
-    /// which is suitable for most scenarios. Override this to implement custom client caching or dependency injection.
-    /// </summary>
-    Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
-
-    /// <summary>
-    /// Factory for instantiating a Lucene Directory with a given name. The default factory creates a new AzureDirectory per database instance
-    /// </summary>
-    Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
-
-    /// <summary>
-    /// Embedding generator for vector similarity search. Used to convert text into
-    /// vector embeddings for properties marked with <see cref="QueryableMode.Vector"/>.
-    /// Defaults to ElBruno.LocalEmbeddings with SmartComponents/bge-micro-v2 model.
-    /// Set to <c>null</c> to disable vector support.
-    /// </summary>
-    IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
 
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
@@ -53,7 +44,15 @@ public interface ILottaConfiguration
     /// </summary>
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
-    ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
+    ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new();
+
+    /// <summary>
+    /// Set the blob upload handler (replacement semantics: last one wins).
+    /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
+    /// Use <c>On&lt;BlobFile&gt;</c> for additional post-upload processing (CSAM scanning, thumbnails, etc.).
+    /// </summary>
+    /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>
+    ILottaConfiguration OnUpload(BlobUploadHandler? handler = null);
 }
 
 /// <summary>
@@ -64,42 +63,28 @@ public interface ILottaConfiguration
 public interface IStorageConfiguration<T> where T : class, new()
 {
     /// <summary>Set the key using a custom expression. For composite keys (e.g. <c>s.SetKey(x =&gt; $"{x.Domain}/{x.Id}")</c>).</summary>
-    /// <param name="resolver">Expression that computes the key string from the object.</param>
     IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver);
 
     /// <summary>Set the key strategy for time-ordered objects.</summary>
-    /// <param name="strategy">The key generation mode (Manual or Auto).</param>
     IStorageConfiguration<T> SetKey(KeyMode strategy);
 
     /// <summary>
     /// Make a property queryable: promotes it to a Table Storage column for server-side
-    /// filtering AND indexes it in Lucene for search. Smart defaults by type —
-    /// strings are analyzed (full-text), value types are not analyzed (exact match).
+    /// filtering AND indexes it in Lucene for search.
     /// </summary>
-    /// <typeparam name="TProp">The property type.</typeparam>
-    /// <param name="property">Expression selecting the property to make queryable.</param>
     IQueryableConfiguration AddQueryable<TProp>(Expression<Func<T, TProp>> property);
 
     /// <summary>Promote a property to a Table Storage column only (not indexed in Lucene).</summary>
-    /// <typeparam name="TProp">The property type.</typeparam>
-    /// <param name="property">Expression selecting the property to promote.</param>
     IStorageConfiguration<T> AddTag<TProp>(Expression<Func<T, TProp>> property);
 
     /// <summary>Index a property in Lucene only (not promoted to a Table Storage column).</summary>
-    /// <typeparam name="TProp">The property type.</typeparam>
-    /// <param name="property">Expression selecting the property to index.</param>
     IFieldConfiguration AddField<TProp>(Expression<Func<T, TProp>> property);
 
     /// <summary>Exclude a property from both table storage and Lucene indexing.</summary>
-    /// <typeparam name="TProp">The property type.</typeparam>
-    /// <param name="property">Expression selecting the property to exclude.</param>
     IStorageConfiguration<T> Ignore<TProp>(Expression<Func<T, TProp>> property);
 
     /// <summary>
-    /// Set the default search property for free-text queries and object-level
-    /// <c>.Query()</c> / <c>.Similar()</c>. When set, the automatic <c>_content_</c>
-    /// composite field is not created. The property must be indexed via
-    /// <see cref="AddQueryable{TProp}"/> or <see cref="AddField{TProp}"/>.
+    /// Set the default search property for free-text queries.
     /// </summary>
     IStorageConfiguration<T> DefaultSearch<TProp>(Expression<Func<T, TProp>> property);
 }
@@ -113,7 +98,7 @@ public interface IQueryableConfiguration
     IQueryableConfiguration Analyzed();
     /// <summary>Index as-is for exact match filtering only.</summary>
     IQueryableConfiguration NotAnalyzed();
-    /// <summary>Enable vector embeddings for similarity search. Composable with any analysis mode.</summary>
+    /// <summary>Enable vector embeddings for similarity search.</summary>
     IQueryableConfiguration Vector();
 }
 
@@ -126,6 +111,6 @@ public interface IFieldConfiguration
     IFieldConfiguration Analyzed();
     /// <summary>Index as-is for exact match filtering only.</summary>
     IFieldConfiguration NotAnalyzed();
-    /// <summary>Enable vector embeddings for similarity search. Composable with any analysis mode.</summary>
+    /// <summary>Enable vector embeddings for similarity search.</summary>
     IFieldConfiguration Vector();
 }

@@ -1,4 +1,7 @@
+using Azure;
 using Azure.Data.Tables;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Lotta.Internal;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
@@ -8,6 +11,7 @@ using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Linq.Expressions;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -15,14 +19,15 @@ using Version = Lucene.Net.Util.LuceneVersion;
 namespace Lotta;
 
 /// <summary>
-/// A LottaDB database: one Azure table, one Lucene index.
-/// Each write commits to table storage, then runs On&lt;T&gt; handlers inline.
-/// Lucene indexing is a built-in On&lt;T&gt; handler auto-registered for each stored type.
+/// A LottaDB database instance. Multiple databases can share the same Azure Table
+/// (catalog) while maintaining isolation via distinct partition keys (database IDs).
+/// Each database has its own Lucene index.
 /// </summary>
 public class LottaDB : IDisposable
 {
     private readonly object _lock = new object();
-    private readonly string _name;
+    internal readonly LottaCatalog _lottaCatalog;
+    private readonly string _databaseId;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private LuceneDirectory _directory;
@@ -42,28 +47,23 @@ public class LottaDB : IDisposable
     // Collects changes across the entire call chain (root save + handler saves)
     private static readonly AsyncLocal<List<ObjectChange>?> _chainChanges = new();
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
-    internal const string JSON_FIELD = "_json_";
+    internal const string OBJECT_FIELD = "_object_";
     internal const string KEY_FIELD = "_key_";
     internal const string CONTENT_FIELD = "_content_";
 
-    private static LottaConfiguration CreateConfig(string connectionString, Action<LottaConfiguration>? options)
-    {
-        var config = new LottaConfiguration(connectionString);
-        options?.Invoke(config);
-        return config;
-    }
-
     /// <summary>
-    /// Create a LottaDB database instance.
+    /// Create a LottaDB database instance. Use <see cref="LottaCatalog.GetDatabaseAsync"/> instead of calling this directly.
     /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="config">Configuration (registered types, On&lt;T&gt; handlers, storage factories).</param>
-    public LottaDB(string name, LottaConfiguration config)
+    /// <param name="catalog">The owning catalog (provides storage factories, analyzer, embedding generator).</param>
+    /// <param name="databaseId">Database ID within the catalog. Used as the partition key and Lucene index subdirectory.</param>
+    /// <param name="config">Per-database configuration (registered types, On&lt;T&gt; handlers).</param>
+    internal LottaDB(LottaCatalog catalog, string databaseId, LottaConfiguration config)
     {
-        _name = name;
+        _lottaCatalog = catalog;
+        _databaseId = databaseId;
         _config = config;
-        _tableAdapter = new TableStorageAdapter(config.TableServiceClientFactory(name));
-        _directory = config.LuceneDirectoryFactory(name);
+        _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), databaseId);
+        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         InitializeMetadata();
         InitializeMappers();
@@ -86,13 +86,13 @@ public class LottaDB : IDisposable
             });
         _indexWriter.Commit();
         _lucene = new ReadOnlyLuceneDataProvider(_directory, LuceneVersion.LUCENE_48);
-        if (_config.EmbeddingGenerator != null)
-            _lucene.Settings.EmbeddingGenerator = _config.EmbeddingGenerator;
+        if (catalog.EmbeddingGenerator != null)
+            _lucene.Settings.EmbeddingGenerator = catalog.EmbeddingGenerator;
         _lucene.MapperFactory = (type, version, analyzer) =>
         {
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(type);
             _metadata.TryGetValue(type, out var meta);
-            return Activator.CreateInstance(mapperType, version, _config.Analyzer, meta, _config.EmbeddingGenerator)!;
+            return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
     }
 
@@ -115,29 +115,6 @@ public class LottaDB : IDisposable
     {
         GetMapper<T>(); // pre-populate so the per-field analyzer can be merged
     }
-
-    /// <summary>
-    /// Create a LottaDB instance without a connection string. Requires a custom
-    /// <see cref="LottaConfiguration.TableServiceClientFactory"/> via <paramref name="options"/>.
-    /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="options">Optional configuration callback.</param>
-    public LottaDB(string name, Action<LottaConfiguration>? options = null)
-    : this(name, CreateConfig(null!, options))
-    {
-    }
-
-    /// <summary>
-    /// Create a LottaDB instance with an Azure Storage connection string.
-    /// </summary>
-    /// <param name="name">Database name. Used as the Azure table name and Lucene index name.</param>
-    /// <param name="connectionString">Azure Storage connection string.</param>
-    /// <param name="options">Optional configuration callback for registering types, handlers, etc.</param>
-    public LottaDB(string name, string connectionString, Action<LottaConfiguration>? options = null)
-        : this(name, CreateConfig(connectionString, options))
-    {
-    }
-
 
     private void InitializeMetadata()
     {
@@ -169,7 +146,7 @@ public class LottaDB : IDisposable
     private void RegisterLuceneHandler<T>() where T : class, new()
     {
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
-        list.Add((Func<T, TriggerKind, LottaDB, Task>)((entity, kind, db) =>
+        list.Add((EntityHandler<T>)((entity, kind, db) =>
         {
             var meta = GetMeta<T>();
             var key = meta.GetKey(entity);
@@ -202,7 +179,7 @@ public class LottaDB : IDisposable
             _indexDirty = true;
         }
 
-        await foreach (var entity in _tableAdapter.GetAllAsync(_name, cancellationToken: cancellationToken))
+        await foreach (var entity in _tableAdapter.GetAllAsync(_lottaCatalog.Name, cancellationToken: cancellationToken))
         {
             var meta = GetMeta(entity.GetType());
             var key = meta.GetKey(entity);
@@ -231,14 +208,12 @@ public class LottaDB : IDisposable
         return GetMeta(typeof(T));
     }
 
-    private static string PartitionKey<T>() => TableStorageAdapter.PK;
-
     private Lucene.Net.Linq.Mapping.IDocumentMapper<T> GetMapper<T>() where T : class, new()
     {
         return (Lucene.Net.Linq.Mapping.IDocumentMapper<T>)_mappers.GetOrAdd(typeof(T), _ =>
         {
             _metadata.TryGetValue(typeof(T), out var meta);
-            return new LottaDocumentMapper<T>(Version.LUCENE_48, _config.Analyzer, meta, _config.EmbeddingGenerator);
+            return new LottaDocumentMapper<T>(Version.LUCENE_48, _lottaCatalog.Analyzer, meta, _lottaCatalog.EmbeddingGenerator, this);
         });
     }
 
@@ -249,7 +224,7 @@ public class LottaDB : IDisposable
             var db = (LottaDB)state!;
             db._metadata.TryGetValue(t, out var meta);
             var mapperType = typeof(LottaDocumentMapper<>).MakeGenericType(t);
-            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._config.Analyzer, meta, db._config.EmbeddingGenerator)!;
+            return (IDocumentMapper)Activator.CreateInstance(mapperType, Version.LUCENE_48, db._lottaCatalog.Analyzer, meta, db._lottaCatalog.EmbeddingGenerator, db)!;
         }, this);
     }
 
@@ -272,7 +247,9 @@ public class LottaDB : IDisposable
         if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
             meta.SetKey(entity, key);
 
-        await _tableAdapter.UpsertAsync(_name, key, entity, meta);
+        await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta);
+
+        if (entity is BlobFile bf) bf.Database = this;
 
         var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
 
@@ -303,7 +280,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (existing, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+        var (existing, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
 
         return await DeleteAsync<T>(existing!, cancellationToken);
     }
@@ -321,7 +298,7 @@ public class LottaDB : IDisposable
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
-        await _tableAdapter.DeleteAsync(_name, key);
+        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
 
@@ -383,13 +360,13 @@ public class LottaDB : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var (current, etag) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+            var (current, etag) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
             if (current == null || string.IsNullOrEmpty(etag))
                 throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
 
             var mutated = mutate(current);
 
-            var committed = await _tableAdapter.TryReplaceAsync(_name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+            var committed = await _tableAdapter.TryReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
             if (!committed)
                 continue; // someone else wrote between our read and write — re-read and retry
 
@@ -425,7 +402,8 @@ public class LottaDB : IDisposable
     /// <returns>The object, or null if not found.</returns>
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (result, _) = await _tableAdapter.GetAsync<T>(_name, key, cancellationToken: cancellationToken);
+        var (result, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+        if (result is BlobFile bf) bf.Database = this;
         return result;
     }
 
@@ -437,14 +415,18 @@ public class LottaDB : IDisposable
     /// <param name="predicate">Optional filter expression.</param>
     /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public IAsyncEnumerable<T> GetManyAsync<T>(Expression<Func<T, bool>>? predicate = null,
+    public async IAsyncEnumerable<T> GetManyAsync<T>(Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
-        CancellationToken cancellationToken = default) where T : class, new()
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default) where T : class, new()
     {
-        return _tableAdapter.GetManyAsync<T>(_name, predicate, maxPerPage, cancellationToken);
+        await foreach (var item in _tableAdapter.GetManyAsync<T>(_lottaCatalog.Name, predicate, maxPerPage, cancellationToken))
+        {
+            if (item is BlobFile bf) bf.Database = this;
+            yield return item;
+        }
     }
 
-    internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _name);
+    internal (TableStorageAdapter adapter, string tableName) GetTableForTesting() => (_tableAdapter, _lottaCatalog.Name);
 
     /// <summary>
     /// Search the Lucene index. Returns an <see cref="IQueryable{T}"/> with full POCO fidelity
@@ -560,22 +542,298 @@ public class LottaDB : IDisposable
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
     /// <returns>A disposable handle. Dispose to stop receiving notifications.</returns>
-    public IDisposable On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new()
+    public IDisposable On<T>(EntityHandler<T> handler) where T : class, new()
     {
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
         lock (list) { list.Add(handler); }
         return new HandlerHandle(list, handler);
     }
 
+    // === Blobs ===
+
+    private BlobContainerClient? _blobContainer;
+
+    private BlobContainerClient GetBlobContainer()
+    {
+        if (_blobContainer == null)
+        {
+            _blobContainer = _lottaCatalog.GetBlobServiceClient()
+                .GetBlobContainerClient(_lottaCatalog.Name);
+            _blobContainer.CreateIfNotExists();
+        }
+        return _blobContainer;
+    }
+
+    private string GetBlobPath(string path) => $"{_databaseId}/Blobs/{path}";
+
+    /// <summary>
+    /// Upload a blob to this database's blob storage.
+    /// If an OnUpload handler is registered, the stream is tee'd concurrently to the handler
+    /// for metadata extraction, and the resulting BlobFile entity is saved automatically.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database (e.g. "photos/avatar.jpg").</param>
+    /// <param name="content">The content to upload.</param>
+    /// <param name="contentType">Optional MIME type (e.g. "image/jpeg"). If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, Stream content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var handler = _config.UploadHandler;
+        var resolvedContentType = contentType ?? DefaultBlobHandler.GetMimeType(Path.GetExtension(path));
+        var options = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders { ContentType = resolvedContentType },
+            Conditions = overwrite ? null : new BlobRequestConditions { IfNoneMatch = new ETag("*") }
+        };
+
+        if (handler == null)
+        {
+            await blob.UploadAsync(content, options, cancellationToken: cancellationToken);
+            return null;
+        }
+
+        // TeeStream: blob upload and handler run concurrently, zero buffering
+        var pipe = new Pipe();
+        var teeStream = new TeeStream(content, pipe.Writer);
+        var handlerStream = pipe.Reader.AsStream();
+
+        var uploadTask = blob.UploadAsync(teeStream, options, cancellationToken: cancellationToken);
+        var parseTask = handler(path, resolvedContentType, handlerStream, this);
+
+        await Task.WhenAll(uploadTask, parseTask);
+        return await SaveBlobFileAsync(parseTask.Result, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Upload a blob from a byte array.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="content">The byte array to upload.</param>
+    /// <param name="contentType">Optional MIME type (e.g. "image/jpeg"). If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, byte[] content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var handler = _config.UploadHandler;
+        var resolvedContentType = contentType ?? DefaultBlobHandler.GetMimeType(Path.GetExtension(path));
+        var options = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders { ContentType = resolvedContentType },
+            Conditions = overwrite ? null : new BlobRequestConditions { IfNoneMatch = new ETag("*") }
+        };
+
+        using var uploadStream = new MemoryStream(content);
+        await blob.UploadAsync(uploadStream, options, cancellationToken: cancellationToken);
+
+        if (handler == null)
+            return null;
+
+        using var handlerStream = new MemoryStream(content);
+        var blobFile = await handler(path, resolvedContentType, handlerStream, this);
+        return await SaveBlobFileAsync(blobFile, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Upload a blob from a string (stored as UTF-8).
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="content">The string content to upload.</param>
+    /// <param name="contentType">Optional MIME type. If null, detected from file extension.</param>
+    /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The extracted metadata if OnUpload handlers are registered, otherwise null.</returns>
+    public async Task<BlobFile?> UploadBlobAsync(string path, string content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        return await UploadBlobAsync(path, bytes, contentType, overwrite, cancellationToken);
+    }
+
+    private async Task<BlobFile?> SaveBlobFileAsync(BlobFile? blobFile, string path, CancellationToken cancellationToken)
+    {
+        if (blobFile != null)
+        {
+            blobFile.Path = path;
+            await SaveAsync(blobFile, cancellationToken);
+        }
+        return blobFile;
+    }
+
+    /// <summary>
+    /// Download a blob from this database's blob storage.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as a stream, or null if the blob does not exist.</returns>
+    public async Task<Stream?> DownloadBlobAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        try
+        {
+            var response = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+            return response.Value.Content;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Download a blob as a byte array.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as bytes, or null if the blob does not exist.</returns>
+    public async Task<byte[]?> DownloadBlobBytesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        try
+        {
+            var response = await blob.DownloadContentAsync(cancellationToken: cancellationToken);
+            return response.Value.Content.ToArray();
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Download a blob as a UTF-8 string.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The blob content as a string, or null if the blob does not exist.</returns>
+    public async Task<string?> DownloadBlobStringAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var bytes = await DownloadBlobBytesAsync(path, cancellationToken);
+        return bytes != null ? System.Text.Encoding.UTF8.GetString(bytes) : null;
+    }
+
+    /// <summary>
+    /// Delete a blob from this database's blob storage.
+    /// Also deletes the associated BlobFile metadata entity if one exists.
+    /// </summary>
+    /// <param name="path">Blob path relative to this database.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True if the blob was deleted, false if it didn't exist.</returns>
+    public async Task<bool> DeleteBlobAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var blob = container.GetBlobClient(GetBlobPath(path));
+        var response = await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
+
+        // Cascade delete the metadata entity if BlobFile is registered
+        if (_metadata.ContainsKey(typeof(BlobFile)))
+        {
+            var existing = await GetAsync<BlobFile>(path, cancellationToken);
+            if (existing != null)
+                await DeleteAsync(existing, cancellationToken);
+        }
+
+        return response.Value;
+    }
+
+    /// <summary>
+    /// List blobs in this database's blob storage.
+    /// </summary>
+    /// <param name="folder">Optional folder path (e.g. "photos/"). Relative to this database. Null for root.</param>
+    /// <param name="recursive">If true, includes blobs in all subfolders. If false, only blobs directly in the folder.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>List of blob paths relative to this database.</returns>
+    public async Task<IReadOnlyList<string>> ListBlobsAsync(string? folder = null, bool recursive = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var folderNorm = NormalizeFolder(folder);
+        var fullPrefix = GetBlobPath(folderNorm);
+        var dbPrefix = GetBlobPath("");
+        var blobs = new List<string>();
+
+        if (recursive)
+        {
+            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                blobs.Add(StripDbPrefix(item.Name, dbPrefix));
+            }
+        }
+        else
+        {
+            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            {
+                if (item.IsBlob)
+                    blobs.Add(StripDbPrefix(item.Blob.Name, dbPrefix));
+            }
+        }
+
+        return blobs;
+    }
+
+    /// <summary>
+    /// List subfolders in this database's blob storage.
+    /// </summary>
+    /// <param name="folder">Optional folder path (e.g. "photos/"). Relative to this database. Null for root.</param>
+    /// <param name="recursive">If true, includes all nested subfolders. If false, only immediate children.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>List of folder paths relative to this database (with trailing slash).</returns>
+    public async Task<IReadOnlyList<string>> ListBlobFoldersAsync(string? folder = null, bool recursive = true, CancellationToken cancellationToken = default)
+    {
+        var container = GetBlobContainer();
+        var folderNorm = NormalizeFolder(folder);
+        var fullPrefix = GetBlobPath(folderNorm);
+        var dbPrefix = GetBlobPath("");
+
+        // BFS traversal using GetBlobsByHierarchyAsync — only fetches folder structure,
+        // never enumerates blob contents. Efficient even for large blob stores.
+        var folders = new List<string>();
+        var queue = new Queue<string>();
+        queue.Enqueue(fullPrefix);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: current, cancellationToken: cancellationToken))
+            {
+                if (item.IsPrefix)
+                {
+                    folders.Add(StripDbPrefix(item.Prefix, dbPrefix));
+                    if (recursive)
+                        queue.Enqueue(item.Prefix);
+                }
+            }
+        }
+
+        return folders;
+    }
+
+    private static string NormalizeFolder(string? folder)
+    {
+        if (string.IsNullOrEmpty(folder)) return "";
+        return folder.EndsWith('/') ? folder : folder + "/";
+    }
+
+    private static string StripDbPrefix(string fullPath, string dbPrefix)
+    {
+        return fullPath.StartsWith(dbPrefix) ? fullPath.Substring(dbPrefix.Length) : fullPath;
+    }
+
     // === Maintain ===
 
     /// <summary>
-    /// Reset the database: deletes and recreates the table, clears and reinitializes the Lucene index.
+    /// Reset this database: deletes all rows in this database's partition and clears the Lucene index.
+    /// Other databases in the same catalog are not affected.
     /// </summary>
     public async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        // 1. Delete and recreate table storage
-        await _tableAdapter.ResetTableAsync(_name, cancellationToken: cancellationToken);
+        // 1. Delete all rows in this database's partition
+        await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
@@ -588,14 +846,14 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Deletes the table, deletes the index and disposes all resources. Use with caution — this is not reversible.
-    /// This object will not be usable after calling this method. Dispose the LottaDB instance when you're done to free resources. 
+    /// Deletes all rows in this database's partition, deletes the Lucene index, and disposes all resources.
+    /// Other databases in the same catalog are not affected. Use with caution — this is not reversible.
+    /// This object will not be usable after calling this method.
     /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
     public async Task DeleteDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        await _tableAdapter.DeleteTableAsync(_name, cancellationToken);
+        await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
 
         lock (_lock)
         {
@@ -645,20 +903,20 @@ public class LottaDB : IDisposable
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
-                pendingActions.Add(TableStorageAdapter.CreateUpsertAction(key, entity, meta));
+                pendingActions.Add(_tableAdapter.CreateUpsertAction(key, entity, meta));
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, entity.GetType()));
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -668,7 +926,7 @@ public class LottaDB : IDisposable
             // Flush remaining
             if (pendingActions.Count > 0)
             {
-                await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
             }
         }
@@ -722,7 +980,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default)
     {
-        return await DeleteManyAsyncCore(_tableAdapter.GetManyAsync(_name, keys, cancellationToken: cancellationToken)
+        return await DeleteManyAsyncCore(_tableAdapter.GetManyAsync(_lottaCatalog.Name, keys, cancellationToken: cancellationToken)
             .Select(e => GetDeleteTruple(e)), cancellationToken);
     }
 
@@ -749,19 +1007,19 @@ public class LottaDB : IDisposable
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
                 }
 
-                pendingActions.Add(TableStorageAdapter.CreateDeleteAction(key));
+                pendingActions.Add(_tableAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, type, key));
 
                 if (pendingActions.Count >= 100)
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -770,7 +1028,7 @@ public class LottaDB : IDisposable
 
             if (pendingActions.Count > 0)
             {
-                await _tableAdapter.SubmitTransactionAsync(_name, pendingActions);
+                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
                 await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
             }
         }
@@ -847,7 +1105,7 @@ public class LottaDB : IDisposable
 
             foreach (var handler in snapshot)
             {
-                if (handler is Func<T, TriggerKind, LottaDB, Task> typed)
+                if (handler is EntityHandler<T> typed)
                 {
                     try
                     {
@@ -868,18 +1126,22 @@ public class LottaDB : IDisposable
 
     /// <summary>
     /// Run handlers for an entity whose type is only known at runtime.
-    /// Dispatches to the generic RunHandlersAsync&lt;T&gt; via reflection.
+    /// Walks the type hierarchy so handlers registered for base types also fire.
+    /// For example, saving a BlobPhoto fires On&lt;BlobPhoto&gt;, On&lt;BlobFile&gt;, etc.
     /// </summary>
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
         List<Exception> errors, CancellationToken cancellationToken)
     {
-        if (!_handlers.ContainsKey(entityType)) return;
-
         var method = typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod)
-            .MakeGenericMethod(entityType);
+            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
 
-        await (Task)method.Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+        // Walk up the type hierarchy: BlobPhoto → BlobFile → object
+        for (var type = entityType; type != null && type != typeof(object); type = type.BaseType)
+        {
+            if (!_handlers.ContainsKey(type)) continue;
+
+            await (Task)method.MakeGenericMethod(type).Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+        }
     }
 
     protected virtual void Dispose(bool disposing)

@@ -5,26 +5,27 @@
 
 # LottaDB
 
-**LottaDB**  is a .NET library that makes it easy to story any **POCO** in **Azure Table Storage** with full **Lucene** search, all with the goodness of **LINQ**.
+**LottaDB**  is a .NET library that makes it easy to store any **POCO** in **Azure Table Storage** with full **Lucene** search, all with the goodness of **LINQ**.
 * One line to save
 * One line to search
 
 ## Overview
 
-**LottaDB** gives you a document database built using **Azure Table Storage** with full-text search via **Lucene Search Engine**. Each LottaDB instance is a single table/lucene catalog. Objects are stored with full POCO fidelity, with efficient LINQ expressions as the query language.
+**LottaDB** gives you a document database built on **Azure Table Storage** with full-text search via **Lucene Search Engine**. A **catalog** groups multiple **databases** under a single Azure Table, with each database isolated via partition keys and its own Lucene index. Objects are stored with full POCO fidelity, with LINQ as the query language.
 
 ## Why LottaDB?
 
 - **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
 - **A lotta LINQ.** `GetManyAsync<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
-- **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives. 
+- **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives.
 - **A lotta views.** `On<T>` triggers build materialized views with plain C#. No event buses, no eventual consistency -- just inline code.
-- **A lotta tenants.** One instance per tenant. Natural isolation, simple backup, no noisy neighbors.
+- **A lotta tenants.** One catalog per tenant with multiple databases. Natural isolation, simple cleanup -- delete the catalog and everything goes with it.
 - **A lotta nothing to operate.** Table Storage is serverless. Lucene runs in-process. No clusters, no connection pools, no ops team required.
+- **A lotta schema safety.** Schema changes are detected automatically -- when your type registrations change, the Lucene index is rebuilt on startup.
 
 ### Sweet spot
 
-LottaDB is ideal for **per-user or per-tenant workloads** -- think user profiles, settings, activity feeds, personal knowledge bases, mailboxes, or per-project data. Thousands of objects per tenant, thousands of tenants per deployment. Each tenant gets its own isolated database for pennies/month. It's not designed for billion-row analytics or high-throughput write-heavy pipelines.
+LottaDB is ideal for **per-user or per-tenant workloads** -- think user profiles, settings, activity feeds, personal knowledge bases, mailboxes, or per-project data. Thousands of objects per tenant, thousands of tenants per deployment. Each tenant gets its own isolated catalog for pennies/month. It's not designed for billion-row analytics or high-throughput write-heavy pipelines.
 
 ## Installation
 
@@ -32,16 +33,25 @@ LottaDB is ideal for **per-user or per-tenant workloads** -- think user profiles
 dotnet add package LottaDB
 ```
 
-## Features
+## Architecture: Catalogs and Databases
 
-- **Plain POCOs** -- no base classes, no interfaces. Have an object? Store an object.
-- **Full POCO roundtrip** -- objects are serialized as JSON. Complex properties (lists, dictionaries, nested objects) survive storage and retrieval intact.
-- **LINQ** -- Rich Linq against typed objects makes it so easy.
-- **Vector similarity search** -- mark properties with `QueryableMode.Vector` for semantic search via `.Similar()`. Built-in local embeddings, no API calls needed.
-- **Polymorphic queries** -- `GetAsync<Base>()/GetManyAsync<Base>()/Search<Base>()` returns all derived types, correctly deserialized into their correct typed objects.
-- **Triggers** -- `On<T>` triggers run inline after saves/deletes with full DB access. Build your materialized views with plain C#.
-- **Fluent or attribute configuration** -- annotate your models, or configure foreign POCOs entirely via fluent API.
-- **Per-tenant scaling** -- one LottaDB instance per tenant. 
+LottaDB uses a two-level hierarchy:
+
+- **Catalog** (`LottaCatalog`) -- a grouping that maps to one Azure Table and one blob container. Owns shared infrastructure: storage clients, analyzer, embedding generator.
+- **Database** (`LottaDB`) -- an isolated partition within a catalog, with its own type registrations.
+
+```
+Catalog ("userX")          ← one Azure Table "userX", one blob container"/userX"
+├── Database "notes"            ← PartitionKey="notes", Lucene index at userX/notes
+│   ├── Store<Note>()
+│   └── On<Note>(handler)
+├── Database "todos"            ← PartitionKey="todos", Lucene index at userX/todos
+│   └── Store<Todo>()
+└── Database "settings"         ← PartitionKey="settings", Lucene index at userX/settings
+    └── Store<UserPrefs>()
+```
+
+Multiple databases in a catalog share a table but are fully isolated -- data in one database is invisible to another.
 
 ## Quick Example
 
@@ -58,7 +68,9 @@ public class Actor
     public string AvatarUrl { get; set; } = "";
 }
 
-using var db = new LottaDB("myapp", "<your Azure Storage connection string>", luceneDirectory, config =>
+// Create a catalog and get a database
+var catalog = new LottaCatalog("myapp", "<your Azure Storage connection string>");
+var db = await catalog.GetDatabaseAsync("default", config =>
 {
     config.Store<Actor>();
 });
@@ -79,29 +91,55 @@ var found = db.Search<Actor>()
     .ToList();
 ```
 
+## Multi-Tenancy
+
+Each tenant gets their own catalog. Multiple databases within a catalog provide logical separation for different data types or use cases.
+
+```csharp
+// Per-tenant catalog
+var catalog = new LottaCatalog(tenantId, connectionString);
+
+// Separate databases for different concerns
+var notesDb = await catalog.GetDatabaseAsync("notes", c => c.Store<Note>());
+var todosDb = await catalog.GetDatabaseAsync("todos", c => c.Store<Todo>());
+
+// Tenant leaves -- drop all databases for the tenant
+await catalog.DeleteAsync();
+```
+
+### Listing and managing databases
+
+```csharp
+// Discover all databases in a catalog
+var databases = await catalog.ListAsync();
+// ["notes", "todos", "settings"]
+
+// Delete a single database (other databases unaffected)
+await notesDb.DeleteDatabaseAsync();
+```
+
 ## Storing POCO objects
 
-Lotta needs to know about types you want to store and the metadata about your type to store it and query it.
+LottaDB needs to know about types you want to store and the metadata about your type to store it and query it.
 
-* **Key** -  the Key to store/retrieve objects under
+* **Key** -- the Key to store/retrieve objects under
+* **Queryable** -- promote a property to be queryable using LINQ expressions
 
-* **Queryable** - Promote a property to be queryable using Linq expressions
-
-When you instantiate a DB you tell the data base about your type:
+When you get a database you tell it about your types:
 ```csharp
- var db = LottaDBFixture.CreateDb(opts =>
- {
-     opts.Store<Actor>();
-     opts.Store<Note>();
- });
+var db = await catalog.GetDatabaseAsync("mydb", config =>
+{
+    config.Store<Actor>();
+    config.Store<Note>();
+});
 ```
 
 ### Attribute-based modeling
 
-If it's a POCO object you own you can add attributes to describe metadata on how to store the object in Lotta.
+If it's a POCO object you own you can add attributes to describe metadata on how to store the object in LottaDB.
 
 * **`[Key]`** marks the unique identity property. Supports manual values or auto-generated ULIDs.
-* **`[Queryable]`** makes a property queryable via Linq.
+* **`[Queryable]`** makes a property queryable via LINQ.
 * **`[DefaultSearch]`** (class-level) sets which property is the default target for free-text queries and `.Query()`/`.Similar()`.
 
 ```csharp
@@ -126,10 +164,10 @@ public class Note
 
 ### Fluent modeling
 
-Lotta can store and retrieve POCO objects you don't own via fluent configuration.
+LottaDB can store and retrieve POCO objects you don't own via fluent configuration.
 
-* **SetKey()** define the property which is the key for storage and retrieve
-* **AddQueryable()** - defines a property as queryable via Linq.
+* **SetKey()** define the property which is the key for storage and retrieval
+* **AddQueryable()** -- defines a property as queryable via LINQ
 
 ```csharp
 public class BareNote
@@ -139,24 +177,23 @@ public class BareNote
     public string Content { get; set; } = "";
 }
 
- var db = LottaDBFixture.CreateDb(options =>
- {
-    options.Store<BareNote>(s =>
+var db = await catalog.GetDatabaseAsync("mydb", config =>
+{
+    config.Store<BareNote>(s =>
     {
         s.SetKey(n => n.NoteId);
         s.AddQueryable(n => n.AuthorId).NotAnalyzed();
-        s.AddQueryable(n => n.Content);  
+        s.AddQueryable(n => n.Content);
     });
- }
+});
 ```
-
 
 ### Default Search Property
 
 Automatically LottaDB creates a synthetic content field that concatenates all analyzed string properties for free-text search. When you call `Search<T>("some text")` or use `.Query("...")` on the object, it searches this combined field.
 
-You can override this behavior by adding the **`[DefaultSearch(nameof(MyContent)]`** attribute to your class or callilng `s.DefaultSearch(a => a.MyContent)` to set that a specific property should be used instead. 
-When set, the automatic property is not created -- your chosen property becomes the default search target for object operatations.
+You can override this behavior by adding the **`[DefaultSearch(nameof(MyContent))]`** attribute to your class or calling `s.DefaultSearch(a => a.MyContent)` to set that a specific property should be used instead.
+When set, the automatic property is not created -- your chosen property becomes the default search target for object operations.
 
 This is especially powerful with **computed properties** that compose exactly the content you want searchable:
 
@@ -181,7 +218,7 @@ public class Article
 
 **Fluent:**
 ```csharp
-options.Store<Article>(s =>
+config.Store<Article>(s =>
 {
     s.SetKey(a => a.Id);
     s.AddQueryable(a => a.Title);
@@ -208,7 +245,35 @@ var results = db.Search<Article>(a => a.Title.Similar("search engines")).ToList(
 
 The referenced property must be indexed via `[Queryable]`, `[Field]`, or the fluent API. An invalid reference throws at initialization.
 
-## Lotta Operations
+## LottaCatalog Operations
+
+| Operation | Description |
+| --- | --- |
+| **GetDatabaseAsync()** | Get or create a database within the catalog |
+| **ListAsync()** | List all database IDs in the catalog |
+| **DeleteAsync()** | Delete the entire catalog (all databases) |
+| **Dispose()** | Dispose all managed database instances |
+
+### Catalog-level settings
+
+Infrastructure settings live on the catalog and are shared across all databases:
+
+```csharp
+var catalog = new LottaCatalog("myapp", connectionString, catalog =>
+{
+    catalog.Analyzer = new StandardAnalyzer(LuceneVersion.LUCENE_48);
+    catalog.EmbeddingGenerator = myEmbeddingGenerator;
+});
+```
+
+| Setting | Description | Default |
+| --- | --- | --- |
+| **TableServiceClientFactory** | Factory for Azure Table Storage client | `new TableServiceClient(connectionString)` |
+| **LuceneDirectoryFactory** | Factory for Lucene index directory | `AzureDirectory` backed by blob storage |
+| **Analyzer** | Lucene analyzer for text analysis | `EnglishAnalyzer` |
+| **EmbeddingGenerator** | Embedding generator for vector search | `null` (disabled) |
+
+## LottaDB Operations
 
 | Operation | Description |
 | --- | --- |
@@ -220,6 +285,13 @@ The referenced property must be indexed via `[Queryable]`, `[Field]`, or the flu
 | **DeleteAsync<T>()** | Delete a single object by key or entity |
 | **DeleteManyAsync<T>()** | Delete by predicate, by entities, or all of a type |
 | **Search<T>()** | Full-text search via Lucene with LINQ |
+| **UploadBlobAsync()** | Upload a blob (stream, byte[], or string) with optional metadata extraction |
+| **DownloadBlobAsync()** | Download a blob as stream, byte[], or string |
+| **DeleteBlobAsync()** | Delete a blob and its metadata |
+| **ListBlobsAsync()** | List blobs in a folder (recursive or flat) |
+| **ListBlobFoldersAsync()** | List subfolders (recursive or immediate) |
+| **ResetDatabaseAsync()** | Clear this database's data (other databases unaffected) |
+| **DeleteDatabaseAsync()** | Delete this database and its index permanently |
 
 ### SaveAsync()
 
@@ -305,13 +377,13 @@ var results = db.Search<Note>("AuthorId:alice AND Content:lucene").ToList();
 ```
 
 
-## LINQ in Lotta
+## LINQ in LottaDB
 
-Lotta stores 2 representations of every object, one in **table storage** (for the truth), and one a **Lucene** index (for fast access). **Query()** gives you a Linq query over table storage and **.Search()** uses the **Linq To Lucene** library to query the search engine with linq expressions
+LottaDB stores 2 representations of every object: one in **table storage** (the source of truth) and one in a **Lucene** index (for fast search). **Query()** gives you a LINQ query over table storage and **Search()** uses the **LINQ to Lucene** library to query the search engine with LINQ expressions.
 
 ### GetManyAsync (Table Storage)
 
-Filters on `[Queryable]` properties are executed by table storage server-side. 
+Filters on `[Queryable]` properties are executed by table storage server-side.
 
 ```csharp
 // All actors
@@ -321,16 +393,13 @@ var all = db.GetManyAsync<Actor>().ToList();
 var aliceNotes = db.GetManyAsync<Note>(n => n.AuthorId == "alice")
     .ToList();
 
-// Predicate shorthand
-var aliceNotes = db.GetManyAsync<Note>(n => n.AuthorId == "alice").ToList();
-
 // Polymorphic query -- returns Person and Employee
 var people = db.GetManyAsync<Person>().ToList();
 ```
 
 ### Search (Lucene)
 
-Filters on `[Queryable]` properties are executed against Lucene catalog supporting full-text search with `Contains`.
+Filters on `[Queryable]` properties are executed against the Lucene index, supporting full-text search.
 
 ```csharp
 // Full-text search
@@ -343,10 +412,10 @@ var active = db.Search<Note>()
     .Where(n => n.AuthorId == "alice")
     .ToList();
 
-// FREETEXT query
+// Free-text query
 var results = db.Search<Note>("foo bar").ToList();
 
-// Lucene Query syntax
+// Lucene query syntax
 var results = db.Search<Note>("Title:foo AND bar").ToList();
 ```
 
@@ -354,7 +423,7 @@ var results = db.Search<Note>("Title:foo AND bar").ToList();
 
 LottaDB supports **vector similarity search** using embeddings. Mark string properties with `QueryableMode.Vector` and LottaDB will automatically generate embeddings at index time and support `.Similar()` queries for semantic search.
 
-By default, LottaDB uses [ElBruno.LocalEmbeddings](https://github.com/elbruno/LocalEmbeddings) with the `SmartComponents/bge-micro-v2` model -- no external API calls needed. You can override this by setting `EmbeddingGenerator` on the configuration.
+By default, LottaDB uses [ElBruno.LocalEmbeddings](https://github.com/elbruno/LocalEmbeddings) with the `SmartComponents/bge-micro-v2` model -- no external API calls needed. You can override this by setting `EmbeddingGenerator` on the catalog.
 
 ### Making a property vector-searchable
 
@@ -381,7 +450,7 @@ public class Article
 
 **Fluent:**
 ```csharp
-options.Store<Article>(s =>
+config.Store<Article>(s =>
 {
     s.SetKey(a => a.Id);
     s.AddQueryable(a => a.Title).Vector();              // analyzed + vector
@@ -423,16 +492,142 @@ var top5 = db.Search<Article>(a => a.Similar("quantum physics"))
 
 ### Custom embedding generator
 
-To use a different embedding model or an external API:
+To use a different embedding model or an external API, set `EmbeddingGenerator` on the catalog:
 ```csharp
-var db = new LottaDB("myapp", connectionString, config =>
+var catalog = new LottaCatalog("myapp", connectionString, catalog =>
 {
-    config.EmbeddingGenerator = myCustomEmbeddingGenerator; // IEmbeddingGenerator<string, Embedding<float>>
-    config.Store<Article>();
+    catalog.EmbeddingGenerator = myCustomEmbeddingGenerator; // IEmbeddingGenerator<string, Embedding<float>>
 });
 ```
 
 Set `EmbeddingGenerator` to `null` to disable vector support entirely.
+
+## Blob Storage
+
+Each database has its own blob storage, isolated from other databases in the catalog.
+
+### Upload and download
+
+```csharp
+// Upload from stream, byte[], or string
+await db.UploadBlobAsync("photos/vacation.jpg", stream);
+await db.UploadBlobAsync("data.bin", byteArray);
+await db.UploadBlobAsync("notes/readme.txt", "Hello world");
+
+// Explicit content type (otherwise detected from file extension)
+await db.UploadBlobAsync("data.bin", stream, contentType: "image/png");
+
+// Download
+Stream? stream = await db.DownloadBlobAsync("photos/vacation.jpg");
+byte[]? bytes = await db.DownloadBlobBytesAsync("photos/vacation.jpg");
+string? text = await db.DownloadBlobStringAsync("notes/readme.txt");
+
+// Delete
+await db.DeleteBlobAsync("photos/vacation.jpg");
+```
+
+### Listing blobs and folders
+
+```csharp
+// List all blobs (recursive by default)
+var all = await db.ListBlobsAsync();
+
+// List blobs in a folder only (non-recursive)
+var flat = await db.ListBlobsAsync("photos/", recursive: false);
+
+// List immediate subfolders
+var folders = await db.ListBlobFoldersAsync("photos/", recursive: false);
+
+// List all nested subfolders
+var allFolders = await db.ListBlobFoldersAsync("photos/", recursive: true);
+```
+
+### Blob metadata with `OnUpload`
+
+Register an `OnUpload` handler to automatically extract and store metadata when blobs are uploaded. The metadata is stored as a `BlobFile` entity -- queryable and full-text searchable.
+
+```csharp
+var db = await catalog.GetDatabaseAsync("media", config =>
+{
+    config.OnUpload(); // enables default metadata extraction
+});
+
+// Upload returns the extracted metadata
+var meta = await db.UploadBlobAsync("readme.txt", "Hello world");
+// meta.Name == "readme.txt"
+// meta.MediaType == "text/plain"
+// meta.Content == "Hello world" (text formats are extracted)
+```
+
+The default handler detects MIME type from the file extension and creates the correct `BlobFile` subtype. For known text formats (.txt, .md, .json, .cs, .py, .html, etc.), the text content is extracted into the `Content` property and indexed for full-text search.
+
+#### BlobFile type hierarchy
+
+| Type | Used for | Extra properties |
+|------|----------|-----------------|
+| `BlobFile` | Base / unknown | Path, Name, FolderPath, MediaType, Title, Authors, Content, ContentLength |
+| `BlobPhoto` | Images | CameraModel, IsoSpeed, Width, Height, GPS, EXIF fields |
+| `BlobDocument` | PDF, DOCX, etc. | PageCount, WordCount, CharacterCount |
+| `BlobSpreadsheet` | XLSX, XLS | SheetCount, SheetNames |
+| `BlobPresentation` | PPTX, PPT | SlideCount |
+| `BlobMusic` | MP3, FLAC, etc. | Artist, Album, TrackNumber, Year, Duration |
+| `BlobVideo` | MP4, AVI, etc. | Width, Height, FrameRate, VideoCodec, Duration |
+| `BlobMessage` | EML | FromAddress, Subject, DateSent |
+| `BlobWebPage` | HTML | Language, Charset, Links |
+
+#### Querying blob metadata
+
+```csharp
+// Point read
+var photo = await db.GetAsync<BlobPhoto>("photos/vacation.jpg");
+
+// LINQ queries on metadata
+var highIso = db.Search<BlobPhoto>(p => p.IsoSpeed > 800).ToList();
+var bigPdfs = db.Search<BlobDocument>(p => p.PageCount > 10).ToList();
+
+// Full-text search across extracted content
+var results = db.Search<BlobFile>("quarterly revenue").ToList();
+
+// Polymorphic -- all file types
+var allFiles = db.Search<BlobFile>().ToList();
+```
+
+#### BlobFile convenience methods
+
+```csharp
+var file = await db.GetAsync<BlobFile>("readme.txt");
+Stream? stream = await file.DownloadAsync();  // download the blob
+await file.DeleteAsync();                       // delete blob + metadata
+```
+
+#### Custom upload handler
+
+```csharp
+config.OnUpload(async (path, contentType, stream, db) =>
+{
+    // custom extraction logic
+    return new BlobPhoto { CameraModel = "Custom" };
+});
+```
+
+#### Rich extraction with LottaDB.Tiki
+
+For deep metadata extraction (EXIF, ID3, page counts, etc.), install the [LottaDB.Tiki](https://www.nuget.org/packages/LottaDB.Tiki) package:
+
+```bash
+dotnet add package LottaDB.Tiki
+```
+
+```csharp
+using Lotta.Tiki;
+
+var db = await catalog.GetDatabaseAsync("media", config =>
+{
+    config.UseTikiExtraction(); // replaces default with Tiki.Net parser
+});
+```
+
+See the [LottaDB.Tiki README](src/LottaDB.Tiki/README.md) for details.
 
 ## Triggers via `On<T>`
 
@@ -441,15 +636,19 @@ You can have code run when an object is saved/changed/deleted. That trigger can 
 Triggers run inline after each save or delete. They receive the object, the trigger kind (`Saved` or `Deleted`), and the full DB instance.
 
 ```csharp
-options.On<Note>(async (note, kind, db) =>
+var db = await catalog.GetDatabaseAsync("mydb", config =>
 {
-    Console.WriteLine($"Note {note.NoteId} was {kind}");
+    config.Store<Note>();
+    config.On<Note>(async (note, kind, db) =>
+    {
+        Console.WriteLine($"Note {note.NoteId} was {kind}");
+    });
 });
 ```
 
 ### Materialized views via `On<T>`
 
-You can use On<T> triggers to build derived objects that stay in sync automatically, whenever the trigger runs you can create/update/delete other objects.
+You can use On<T> triggers to build derived objects that stay in sync automatically. Whenever the trigger runs you can create/update/delete other objects.
 
 ```csharp
 public class NoteView
@@ -467,22 +666,26 @@ public class NoteView
     public string Content { get; set; } = "";
 }
 
-options.On<Note>(async (note, kind, db) =>
+var db = await catalog.GetDatabaseAsync("mydb", config =>
 {
-    // maintain NoteView as materialized view that's updated when Note changes.
-    if (kind == TriggerKind.Deleted)
+    config.Store<Note>();
+    config.Store<NoteView>();
+    config.On<Note>(async (note, kind, db) =>
     {
-        await db.DeleteManyAsync<NoteView>(nv => nv.NoteId == note.NoteId);
-        return;
-    }
+        if (kind == TriggerKind.Deleted)
+        {
+            await db.DeleteManyAsync<NoteView>(nv => nv.NoteId == note.NoteId);
+            return;
+        }
 
-    var actor = await db.GetAsync<Actor>(note.AuthorId);
-    await db.SaveAsync(new NoteView
-    {
-        Id = $"nv-{note.NoteId}",
-        NoteId = note.NoteId,
-        AuthorDisplay = actor?.DisplayName ?? "",
-        Content = note.Content,
+        var actor = await db.GetAsync<Actor>(note.AuthorId);
+        await db.SaveAsync(new NoteView
+        {
+            Id = $"nv-{note.NoteId}",
+            NoteId = note.NoteId,
+            AuthorDisplay = actor?.DisplayName ?? "",
+            Content = note.Content,
+        });
     });
 });
 ```
@@ -501,3 +704,18 @@ if (result.Errors.Count > 0)
 }
 ```
 
+### Automatic schema migration
+
+When you change your type registrations (add a new `[Queryable]` property, register a new type, etc.), LottaDB detects the schema change on startup and automatically rebuilds the Lucene index from table storage.
+
+```csharp
+// v1: only Actor registered
+var db = await catalog.GetDatabaseAsync("main", c => c.Store<Actor>());
+
+// v2: added Note -- schema changed, index auto-rebuilt
+var db = await catalog.GetDatabaseAsync("main", c =>
+{
+    c.Store<Actor>();
+    c.Store<Note>();  // new! triggers rebuild
+});
+```

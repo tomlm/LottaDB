@@ -1,46 +1,28 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>Lotta</RootNamespace>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-<PropertyGroup>
-    <Version>1.1.0</Version>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <Description>LottaDB is a .NET library that stores POCO objects =&gt; Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
-    <Company>Iciclecreek</Company>
-    <Authors>Tom Laird-McConnell</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/tomlm/LottaDB</PackageProjectUrl>
-    <PackageIconUrl>https://raw.githubusercontent.com/tomlm/LottaDB/master/icon.png</PackageIconUrl>
-    <PackageIcon>icon.png</PackageIcon>
+    <Description>LottaDB is a .NET library that stores POCO objects => Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <RepositoryUrl>https://github.com/tomlm/LottaDB</RepositoryUrl>
-    <Copyright>Tom Laird-McConnell All Rights Reserved</Copyright>
-    <RootNamespace>LottaDB</RootNamespace>
-    <ContentTargetFolders>content</ContentTargetFolders>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>  
-    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="" />
-    <None Include="../../icon.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="LottaDB.Tests" />
   </ItemGroup>
 
-
   <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.23.0" />
     <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.4-beta00017" />
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
+    <PackageReference Include="MimeMapping" Version="4.0.0" />
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.6" />
+    <PackageReference Include="System.Linq.Async" Version="6.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="Ulid" Version="1.4.1" />
   </ItemGroup>
 

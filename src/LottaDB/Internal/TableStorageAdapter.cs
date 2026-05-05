@@ -14,12 +14,12 @@ internal class TableStorageAdapter
 {
     private readonly TableServiceClient _serviceClient;
     private readonly Dictionary<string, TableClient> _tables = new();
+    private readonly string _partitionKey;
 
-    public const string PK = "O";
-
-    public TableStorageAdapter(TableServiceClient serviceClient)
+    public TableStorageAdapter(TableServiceClient serviceClient, string partitionKey)
     {
         _serviceClient = serviceClient;
+        _partitionKey = partitionKey;
     }
 
     private TableClient GetTable(string tableName)
@@ -63,11 +63,14 @@ internal class TableStorageAdapter
         }
     }
 
-    private static ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
+    private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
-        var entity = new TableEntity(TableStorageAdapter.PK, key);
-        entity[nameof(LottaTableEntity.Type)] = obj.GetType().FullName!;
-        entity[nameof(LottaTableEntity.Json)] = JsonSerializer.Serialize(obj, obj.GetType());
+        var entity = new TableEntity(_partitionKey, key);
+        entity[TableEntityExtensions.TypeProperty] = obj.GetType().FullName!;
+
+        // Serialize as UTF-8 JSON bytes, split across properties if >64KB
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
+        entity.SetObjectBytes(bytes);
 
         // Promote tags
         foreach (var tag in meta.Tags)
@@ -90,8 +93,8 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            var response = await table.GetEntityAsync<LottaTableEntity>(PK, key, cancellationToken: cancellationToken);
-            return (TypeUtils.DeserializePolymorphic<object>(response.Value.Json, response.Value.Type), response.Value.ETag.ToString());
+            var response = await table.GetEntityAsync<TableEntity>(_partitionKey, key, cancellationToken: cancellationToken);
+            return (DeserializeEntity<object>(response.Value), response.Value.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
@@ -104,7 +107,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            var response = table.GetEntity<TableEntity>(PK, key);
+            var response = table.GetEntity<TableEntity>(_partitionKey, key);
             return response.Value.ETag.ToString();
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -118,7 +121,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            await table.DeleteEntityAsync(PK, key);
+            await table.DeleteEntityAsync(_partitionKey, key);
             return true;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -132,10 +135,10 @@ internal class TableStorageAdapter
         CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK,
+        return table.QueryAsync<TableEntity>(e => e.PartitionKey == _partitionKey,
                 maxPerPage: maxPerPage,
                 cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+            .Select(entity => DeserializeEntity<object>(entity)!);
     }
 
     public async IAsyncEnumerable<object> GetManyAsync(string tableName,
@@ -152,13 +155,13 @@ internal class TableStorageAdapter
         for (int offset = 0; offset < keyList.Count; offset += 100)
         {
             var batch = keyList.Skip(offset).Take(100);
-            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<LottaTableEntity>(e => e.RowKey == k)));
-            var query = $"PartitionKey eq '{PK}' and ({keyFilter})";
-            await foreach (var entity in table.QueryAsync<LottaTableEntity>(query,
+            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<TableEntity>(e => e.RowKey == k)));
+            var query = $"PartitionKey eq '{_partitionKey}' and ({keyFilter})";
+            await foreach (var entity in table.QueryAsync<TableEntity>(query,
                     maxPerPage: maxPerPage,
                     cancellationToken: cancellationToken))
             {
-                yield return TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!;
+                yield return DeserializeEntity<object>(entity)!;
             }
         }
     }
@@ -171,8 +174,8 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         var query = GetODataQuery<T>(predicate);
-        return table.QueryAsync<LottaTableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<T>(entity.Json, entity.Type)!);
+        return table.QueryAsync<TableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializeEntity<T>(entity)!);
     }
 
     public IAsyncEnumerable<object> GetAllAsync(string tableName,
@@ -180,14 +183,24 @@ internal class TableStorageAdapter
         CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        return table.QueryAsync<LottaTableEntity>(e => e.PartitionKey == PK, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => TypeUtils.DeserializePolymorphic<object>(entity.Json, entity.Type)!);
+        return table.QueryAsync<TableEntity>(e => e.PartitionKey == _partitionKey, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
+            .Select(entity => DeserializeEntity<object>(entity)!);
     }
 
-    private static string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
+    private static T? DeserializeEntity<T>(TableEntity entity) where T : class
+    {
+        var bytes = entity.GetObjectBytes();
+        var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
+        var concreteType = TypeUtils.ResolveType(typeName);
+        if (concreteType != null)
+            return JsonSerializer.Deserialize(bytes, concreteType) as T;
+        return JsonSerializer.Deserialize<T>(bytes);
+    }
+
+    private string GetODataQuery<T>(Expression<Func<T, bool>>? predicate = null) where T : class, new()
     {
         StringBuilder sb = new StringBuilder();
-        sb.Append($"PartitionKey eq '{PK}'");
+        sb.Append($"PartitionKey eq '{_partitionKey}'");
 
         var derivedTypes = TypeUtils.GetDerivedTypes(typeof(T));
         if (derivedTypes.Any())
@@ -215,16 +228,51 @@ internal class TableStorageAdapter
         GetTable(tableName); // re-creates via CreateIfNotExists
     }
 
-    internal static TableTransactionAction CreateUpsertAction(string key, object obj, TypeMetadata meta)
+    /// <summary>
+    /// Deletes all rows in this adapter's partition without dropping the table.
+    /// </summary>
+    public async Task ResetPartitionAsync(string tableName, CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var entities = table.QueryAsync<TableEntity>(
+            filter: $"PartitionKey eq '{_partitionKey}'",
+            select: new[] { "PartitionKey", "RowKey" },
+            cancellationToken: cancellationToken);
+
+        var batch = new List<TableTransactionAction>();
+        await foreach (var entity in entities)
+        {
+            batch.Add(new TableTransactionAction(TableTransactionActionType.Delete,
+                new TableEntity(entity.PartitionKey, entity.RowKey) { ETag = ETag.All }));
+
+            if (batch.Count >= 100)
+            {
+                await SubmitTransactionAsync(tableName, batch);
+                batch.Clear();
+            }
+        }
+
+        if (batch.Count > 0)
+            await SubmitTransactionAsync(tableName, batch);
+    }
+
+    /// <summary>
+    /// Deletes all rows in this adapter's partition without dropping the table.
+    /// Alias for <see cref="ResetPartitionAsync"/> for semantic clarity.
+    /// </summary>
+    public Task DeletePartitionAsync(string tableName, CancellationToken cancellationToken = default)
+        => ResetPartitionAsync(tableName, cancellationToken);
+
+    internal TableTransactionAction CreateUpsertAction(string key, object obj, TypeMetadata meta)
     {
         var entity = BuildEntity(key, obj, meta);
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
-    internal static TableTransactionAction CreateDeleteAction(string key)
+    internal TableTransactionAction CreateDeleteAction(string key)
     {
         return new TableTransactionAction(TableTransactionActionType.Delete,
-            new TableEntity(PK, key) { ETag = ETag.All });
+            new TableEntity(_partitionKey, key) { ETag = ETag.All });
     }
 
     internal async Task SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)

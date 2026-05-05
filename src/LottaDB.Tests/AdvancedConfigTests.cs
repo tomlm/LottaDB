@@ -59,15 +59,15 @@ public class AdvancedConfigTests
         public string Body { get; set; } = "";
     }
 
-    private static LottaDB CreateDb(Action<ILottaConfiguration> configAction,
+    private static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration> configAction,
         [CallerMemberName] string? testName = null)
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        return new LottaDB(testName!, "UseDevelopmentStorage=true", config =>
+        var catalog = new LottaCatalog(testName!);
+        catalog.ConfigureTestStorage();
+        return await catalog.GetDatabaseAsync("default", config =>
         {
-            config.ConfigureTestStorage();
-
             configAction?.Invoke(config);
         });
     }
@@ -77,7 +77,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_QueryFilterWorks()
     {
-        using var db = CreateDb(config => config.Store<TagOnlyModel>());
+        using var db = await CreateDbAsync(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new TagOnlyModel { Id = "2", Category = "B", Description = "second" }, TestContext.Current.CancellationToken);
@@ -92,7 +92,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Tag_Attribute_NotInLuceneIndex()
     {
-        using var db = CreateDb(config => config.Store<TagOnlyModel>());
+        using var db = await CreateDbAsync(config => config.Store<TagOnlyModel>());
 
         await db.SaveAsync(new TagOnlyModel { Id = "1", Category = "A", Description = "first" }, TestContext.Current.CancellationToken);
 
@@ -107,7 +107,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_SearchFilterWorks()
     {
-        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = await CreateDbAsync(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -122,7 +122,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_AnalyzedSearchWorks()
     {
-        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = await CreateDbAsync(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "hello world" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new FieldOnlyModel { Id = "2", Status = "archived", Body = "goodbye moon" }, TestContext.Current.CancellationToken);
@@ -137,7 +137,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Field_Attribute_NotATableStorageTag()
     {
-        using var db = CreateDb(config => config.Store<FieldOnlyModel>());
+        using var db = await CreateDbAsync(config => config.Store<FieldOnlyModel>());
 
         await db.SaveAsync(new FieldOnlyModel { Id = "1", Status = "active", Body = "test" }, TestContext.Current.CancellationToken);
 
@@ -153,7 +153,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Mixed_TagQueryAndFieldSearch()
     {
-        using var db = CreateDb(config => config.Store<MixedModel>());
+        using var db = await CreateDbAsync(config => config.Store<MixedModel>());
 
         await db.SaveAsync(new MixedModel { Id = "1", Category = "news", Body = "breaking news today" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new MixedModel { Id = "2", Category = "sports", Body = "big game tonight" }, TestContext.Current.CancellationToken);
@@ -177,7 +177,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_QueryFilterWorks()
     {
-        using var db = CreateDb(config =>
+        using var db = await CreateDbAsync(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -200,7 +200,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_SearchFilterWorks()
     {
-        using var db = CreateDb(config =>
+        using var db = await CreateDbAsync(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -222,7 +222,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddField_NotAnalyzed_ExactMatchWorks()
     {
-        using var db = CreateDb(config =>
+        using var db = await CreateDbAsync(config =>
         {
             config.Store<BareModel>(s =>
             {
@@ -246,7 +246,7 @@ public class AdvancedConfigTests
     [Fact]
     public async Task Fluent_AddTag_And_AddField_Together()
     {
-        using var db = CreateDb(config =>
+        using var db = await CreateDbAsync(config =>
         {
             config.Store<BareModel>(s =>
             {

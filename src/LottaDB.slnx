@@ -3,10 +3,13 @@
     <File Path="../Analysis.md" />
     <File Path="../Architecture.md" />
     <File Path="../README.md" />
+    <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/TodoApp/TodoApp.csproj" />
   </Folder>
   <Project Path="LottaDB.Tests/LottaDB.Tests.csproj" Id="8068fd34-450f-41f2-9c0e-f39330c38af3" />
   <Project Path="LottaDB/LottaDB.csproj" Id="09a3fe38-05b1-48a6-90b9-689077d56a36" />
+  <Project Path="LottaDB.Tiki/LottaDB.Tiki.csproj" Id="b2c3d4e5-f6a7-48b9-c0d1-e2f3a4b5c6d7" />
+  <Project Path="LottaDB.Tiki.Tests/LottaDB.Tiki.Tests.csproj" Id="c3d4e5f6-a7b8-49c0-d1e2-f3a4b5c6d7e8" />
 </Solution>

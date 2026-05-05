@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>Lotta.Tiki</RootNamespace>
+    <Description>Tiki.Net integration for LottaDB — auto-extract rich metadata from blobs on upload.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LottaDB/LottaDB.csproj" />
+    <PackageReference Include="Tiki.Net" Version="1.0.1" />
+  </ItemGroup>
+
+</Project>

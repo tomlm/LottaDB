@@ -1,59 +1,16 @@
-using Azure.Data.Tables;
 using Lucene.Net.Analysis;
-using Lucene.Net.Analysis.En;
-using Lucene.Net.Store;
-using Lucene.Net.Store.Azure;
-using Microsoft.Extensions.AI;
 
 namespace Lotta;
 
 /// <summary>
-/// Configuration for a Lotta DB.
+/// Per-database configuration for type registrations and handlers.
+/// Infrastructure settings (storage factories, embedding generator, analyzer) live on <see cref="LottaCatalog"/>.
 /// </summary>
 public class LottaConfiguration : ILottaConfiguration
 {
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
-
-    public LottaConfiguration()
-    {
-        TableServiceClientFactory = name => throw new InvalidOperationException("LottaConfiguration.TableServiceClientFactory is not configured.");
-        LuceneDirectoryFactory = name => throw new InvalidOperationException("LottaConfiguration.LuceneDirectoryFactory is not configured.");
-    }
-
-    public LottaConfiguration(string connectionString)
-        : this()
-    {
-        connectionString = connectionString ?? "UseDevelopmentStorage=true";
-
-        TableServiceClientFactory = name => new TableServiceClient(connectionString);
-        LuceneDirectoryFactory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
-    }
-
-    /// <summary>
-    /// Factory for creating tableservice client. Default if there is a connectionstring is Azure TableServiceClient
-    /// otherwise throws an exception. You can override this to provide your own implementation of TableServiceClient
-    /// </summary>
-    public Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
-
-    /// <summary>
-    /// Factory for creating tableservice client. Default if there is a connectionstring is AzureDirectory
-    /// otherwise throws an exception. You can override this to provide your own implementation of Directory
-    /// </summary>
-    public Func<string, Lucene.Net.Store.Directory> LuceneDirectoryFactory { get; set; }
-
-    /// <summary>
-    /// Default Analyzer to use for indexing/querying
-    /// </summary>
-    public Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
-    
-    /// <summary>
-    /// Embedding generator for vector similarity search. When set, properties marked with
-    /// <see cref="QueryableMode.Vector"/> will have embeddings generated at index time and
-    /// support <c>.Similar()</c> queries. When <c>null</c> (the default), vector fields are
-    /// indexed for full-text search only — no embeddings are generated.
-    /// </summary>
-    public IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
+    internal BlobUploadHandler? UploadHandler { get; private set; }
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -61,12 +18,9 @@ public class LottaConfiguration : ILottaConfiguration
     public int AutoCommitDelay { get; set; } = 1000;
 
     /// <summary>
-    /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database, 
+    /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database,
     /// including table name, partition key, row key, etc. If not configured, Lotta will use default conventions to determine these values.
     /// </summary>
-    /// <typeparam name="T"></typeparam>
-    /// <param name="configure"></param>
-    /// <returns></returns>
     public ILottaConfiguration Store<T>(Action<IStorageConfiguration<T>>? configure = null) where T : class, new()
     {
         var config = new StorageConfiguration<T>();
@@ -78,17 +32,48 @@ public class LottaConfiguration : ILottaConfiguration
     /// <summary>
     /// Registers an asynchronous handler to be invoked when a trigger occurs for entities of the specified type.
     /// </summary>
-    /// <remarks>The handler will be called for each trigger event associated with the specified entity type.
-    /// Multiple handlers can be registered for different entity types or trigger kinds.</remarks>
-    /// <typeparam name="T">The type of entity for which the handler will be registered. Must be a reference type with a parameterless
-    /// constructor.</typeparam>
-    /// <param name="handler">A function to execute when a trigger occurs. The function receives the entity instance, the kind of trigger, and
-    /// the database context, and returns a task that represents the asynchronous operation.</param>
-    /// <returns>The current configuration instance, enabling method chaining.</returns>
-    public ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new()
+    public ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new()
     {
         OnRegistrations.Add(new OnRegistration(typeof(T), handler));
         return this;
+    }
+
+    /// <summary>
+    /// Set the blob upload handler. Replacement semantics: last one wins.
+    /// Call with no arguments to use the default handler (extension-based mime type detection,
+    /// text content extraction for known text formats).
+    /// Use <c>On&lt;BlobFile&gt;</c> for additional processing after upload (CSAM scanning, thumbnails, etc.).
+    /// Automatically registers all BlobFile types for storage.
+    /// </summary>
+    public ILottaConfiguration OnUpload(BlobUploadHandler? handler = null)
+    {
+        UploadHandler = handler ?? DefaultBlobHandler.HandleAsync;
+
+        // Auto-register all BlobFile types if not already registered
+        StoreBlobFileTypes();
+
+        return this;
+    }
+
+    private void StoreBlobFileTypes()
+    {
+        RegisterIfMissing<BlobFile>();
+        RegisterIfMissing<BlobPhoto>();
+        RegisterIfMissing<BlobDocument>();
+        RegisterIfMissing<BlobSpreadsheet>();
+        RegisterIfMissing<BlobPresentation>();
+        RegisterIfMissing<BlobMedia>();
+        RegisterIfMissing<BlobMusic>();
+        RegisterIfMissing<BlobVideo>();
+        RegisterIfMissing<BlobMessage>();
+        RegisterIfMissing<BlobWebPage>();
+        RegisterIfMissing<BlobOfficeDocument>();
+    }
+
+    private void RegisterIfMissing<T>() where T : class, new()
+    {
+        if (!StorageConfigurations.ContainsKey(typeof(T)))
+            Store<T>();
     }
 }
 
