@@ -146,7 +146,7 @@ public class LottaDB : IDisposable
     private void RegisterLuceneHandler<T>() where T : class, new()
     {
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
-        list.Add((Func<T, TriggerKind, LottaDB, Task>)((entity, kind, db) =>
+        list.Add((EntityHandler<T>)((entity, kind, db) =>
         {
             var meta = GetMeta<T>();
             var key = meta.GetKey(entity);
@@ -542,7 +542,7 @@ public class LottaDB : IDisposable
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
     /// <returns>A disposable handle. Dispose to stop receiving notifications.</returns>
-    public IDisposable On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new()
+    public IDisposable On<T>(EntityHandler<T> handler) where T : class, new()
     {
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
         lock (list) { list.Add(handler); }
@@ -1101,7 +1101,7 @@ public class LottaDB : IDisposable
 
             foreach (var handler in snapshot)
             {
-                if (handler is Func<T, TriggerKind, LottaDB, Task> typed)
+                if (handler is EntityHandler<T> typed)
                 {
                     try
                     {

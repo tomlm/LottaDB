@@ -3,6 +3,35 @@ using System.Linq.Expressions;
 namespace Lotta;
 
 /// <summary>
+/// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
+/// </summary>
+/// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
+/// <param name="contentType">MIME type if provided by the caller, otherwise null (detected from extension).</param>
+/// <param name="content">A readable stream of the blob content.</param>
+/// <param name="existing">Reserved (always null). May be used in future for update scenarios.</param>
+/// <param name="db">The database instance, for querying or saving related entities.</param>
+/// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
+/// <summary>
+/// Handler invoked after an entity is saved or deleted.
+/// </summary>
+/// <typeparam name="T">The entity type.</typeparam>
+/// <param name="entity">The entity that was saved or deleted.</param>
+/// <param name="kind">Whether the entity was saved or deleted.</param>
+/// <param name="db">The database instance, for querying or saving related entities.</param>
+public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db);
+
+/// <summary>
+/// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
+/// </summary>
+/// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
+/// <param name="contentType">MIME type if provided by the caller, otherwise null (detected from extension).</param>
+/// <param name="content">A readable stream of the blob content.</param>
+/// <param name="existing">Reserved (always null). May be used in future for update scenarios.</param>
+/// <param name="db">The database instance, for querying or saving related entities.</param>
+/// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
+public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, BlobFile? existing, LottaDB db);
+
+/// <summary>
 /// Per-database configuration for type registrations and handlers.
 /// Infrastructure settings (storage factories, embedding generator, analyzer) live on <see cref="LottaCatalog"/>.
 /// </summary>
@@ -25,17 +54,15 @@ public interface ILottaConfiguration
     /// </summary>
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
-    ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new();
+    ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new();
 
     /// <summary>
     /// Set the blob upload handler (replacement semantics: last one wins).
-    /// The handler receives the blob path, content type, a stream of the blob content,
-    /// null (reserved), and the DB instance. Returns a <see cref="BlobFile"/> to save, or null to skip.
-    /// Call with no arguments to use the default handler.
+    /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
     /// Use <c>On&lt;BlobFile&gt;</c> for additional post-upload processing (CSAM scanning, thumbnails, etc.).
     /// </summary>
-    /// <param name="handler">Async handler that processes blob content and returns metadata.</param>
-    ILottaConfiguration OnUpload(Func<string, string?, Stream, BlobFile?, LottaDB, Task<BlobFile?>>? handler = null);
+    /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>
+    ILottaConfiguration OnUpload(BlobUploadHandler? handler = null);
 }
 
 /// <summary>

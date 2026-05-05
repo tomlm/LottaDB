@@ -10,7 +10,7 @@ public class LottaConfiguration : ILottaConfiguration
 {
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
-    internal Func<string, string?, Stream, BlobFile?, LottaDB, Task<BlobFile?>>? UploadHandler { get; private set; }
+    internal BlobUploadHandler? UploadHandler { get; private set; }
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -32,7 +32,7 @@ public class LottaConfiguration : ILottaConfiguration
     /// <summary>
     /// Registers an asynchronous handler to be invoked when a trigger occurs for entities of the specified type.
     /// </summary>
-    public ILottaConfiguration On<T>(Func<T, TriggerKind, LottaDB, Task> handler) where T : class, new()
+    public ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new()
     {
         OnRegistrations.Add(new OnRegistration(typeof(T), handler));
         return this;
@@ -45,7 +45,7 @@ public class LottaConfiguration : ILottaConfiguration
     /// Use <c>On&lt;BlobFile&gt;</c> for additional processing after upload (CSAM scanning, thumbnails, etc.).
     /// Automatically registers all BlobFile types for storage.
     /// </summary>
-    public ILottaConfiguration OnUpload(Func<string, string?, Stream, BlobFile?, LottaDB, Task<BlobFile?>>? handler = null)
+    public ILottaConfiguration OnUpload(BlobUploadHandler? handler = null)
     {
         UploadHandler = handler ?? DefaultBlobHandler.HandleAsync;
 
