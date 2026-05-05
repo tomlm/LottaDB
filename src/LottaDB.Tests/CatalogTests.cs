@@ -1213,4 +1213,75 @@ public class CatalogTests : IDisposable
         Assert.Equal("text/plain", meta.MediaType);
         Assert.Equal("stream content", meta.Content);
     }
+
+    // === On<T> polymorphic handler dispatch ===
+
+    [Fact]
+    public async Task On_BaseTypeHandler_FiresForDerivedType()
+    {
+        using var catalog = CreateCatalog("catalog80");
+        var firedTypes = new List<string>();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+
+            config.On<BlobFile>(async (file, kind, db) =>
+            {
+                firedTypes.Add("BlobFile");
+            });
+            config.On<BlobPhoto>(async (photo, kind, db) =>
+            {
+                firedTypes.Add("BlobPhoto");
+            });
+        });
+
+        // Upload a .jpg → creates BlobPhoto
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+
+        // Both On<BlobPhoto> and On<BlobFile> should fire
+        Assert.Contains("BlobPhoto", firedTypes);
+        Assert.Contains("BlobFile", firedTypes);
+    }
+
+    [Fact]
+    public async Task On_BaseTypeHandler_ReceivesDerivedInstance()
+    {
+        using var catalog = CreateCatalog("catalog81");
+        BlobFile? received = null;
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+
+            config.On<BlobFile>(async (file, kind, db) =>
+            {
+                received = file;
+            });
+        });
+
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+
+        Assert.NotNull(received);
+        Assert.IsType<BlobPhoto>(received); // receives the actual derived type
+    }
+
+    [Fact]
+    public async Task On_UnrelatedTypeHandler_DoesNotFire()
+    {
+        using var catalog = CreateCatalog("catalog82");
+        var fired = false;
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+
+            config.On<BlobMusic>(async (music, kind, db) =>
+            {
+                fired = true;
+            });
+        });
+
+        // Upload a .jpg → BlobPhoto, not BlobMusic
+        await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 });
+
+        Assert.False(fired);
+    }
 }

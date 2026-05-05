@@ -10,7 +10,7 @@ public class LottaConfiguration : ILottaConfiguration
 {
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
-    internal Func<string, string?, Stream, LottaDB, Task<BlobFile?>>? UploadHandler { get; private set; }
+    internal Func<string, string?, Stream, BlobFile?, LottaDB, Task<BlobFile?>>? UploadHandler { get; private set; }
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -39,13 +39,13 @@ public class LottaConfiguration : ILottaConfiguration
     }
 
     /// <summary>
-    /// Replace the blob upload handler. Last one wins.
-    /// Automatically registers all BlobFile types for storage.
-    /// If never called, no blob metadata is generated on upload.
+    /// Set the blob upload handler. Replacement semantics: last one wins.
     /// Call with no arguments to use the default handler (extension-based mime type detection,
     /// text content extraction for known text formats).
+    /// Use <c>On&lt;BlobFile&gt;</c> for additional processing after upload (CSAM scanning, thumbnails, etc.).
+    /// Automatically registers all BlobFile types for storage.
     /// </summary>
-    public ILottaConfiguration OnUpload(Func<string, string?, Stream, LottaDB, Task<BlobFile?>>? handler = null)
+    public ILottaConfiguration OnUpload(Func<string, string?, Stream, BlobFile?, LottaDB, Task<BlobFile?>>? handler = null)
     {
         UploadHandler = handler ?? DefaultBlobHandler.HandleAsync;
 

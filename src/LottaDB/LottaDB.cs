@@ -589,23 +589,16 @@ public class LottaDB : IDisposable
             return null;
         }
 
-        // Tee the stream: blob upload reads from TeeStream, handler reads from pipe concurrently
+        // TeeStream: blob upload and handler run concurrently, zero buffering
         var pipe = new Pipe();
         var teeStream = new TeeStream(content, pipe.Writer);
         var handlerStream = pipe.Reader.AsStream();
 
         var uploadTask = blob.UploadAsync(teeStream, overwrite: overwrite, cancellationToken: cancellationToken);
-        var parseTask = handler(path, contentType, handlerStream, this);
+        var parseTask = handler(path, contentType, handlerStream, null, this);
 
         await Task.WhenAll(uploadTask, parseTask);
-
-        var blobFile = parseTask.Result;
-        if (blobFile != null)
-        {
-            blobFile.Path = path;
-            await SaveAsync(blobFile, cancellationToken);
-        }
-        return blobFile;
+        return await SaveBlobFileAsync(parseTask.Result, path, cancellationToken);
     }
 
     /// <summary>
@@ -626,18 +619,12 @@ public class LottaDB : IDisposable
         using var uploadStream = new MemoryStream(content);
         await blob.UploadAsync(uploadStream, overwrite: overwrite, cancellationToken: cancellationToken);
 
-        if (handler != null)
-        {
-            using var handlerStream = new MemoryStream(content);
-            var blobFile = await handler(path, contentType, handlerStream, this);
-            if (blobFile != null)
-            {
-                blobFile.Path = path;
-                await SaveAsync(blobFile, cancellationToken);
-            }
-            return blobFile;
-        }
-        return null;
+        if (handler == null)
+            return null;
+
+        using var handlerStream = new MemoryStream(content);
+        var blobFile = await handler(path, contentType, handlerStream, null, this);
+        return await SaveBlobFileAsync(blobFile, path, cancellationToken);
     }
 
     /// <summary>
@@ -648,11 +635,21 @@ public class LottaDB : IDisposable
     /// <param name="contentType">Optional MIME type. If null, detected from file extension.</param>
     /// <param name="overwrite">Whether to overwrite an existing blob. Defaults to true.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The extracted metadata if an OnUpload handler is registered, otherwise null.</returns>
+    /// <returns>The extracted metadata if OnUpload handlers are registered, otherwise null.</returns>
     public async Task<BlobFile?> UploadBlobAsync(string path, string content, string? contentType = null, bool overwrite = true, CancellationToken cancellationToken = default)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(content);
         return await UploadBlobAsync(path, bytes, contentType, overwrite, cancellationToken);
+    }
+
+    private async Task<BlobFile?> SaveBlobFileAsync(BlobFile? blobFile, string path, CancellationToken cancellationToken)
+    {
+        if (blobFile != null)
+        {
+            blobFile.Path = path;
+            await SaveAsync(blobFile, cancellationToken);
+        }
+        return blobFile;
     }
 
     /// <summary>
@@ -1125,18 +1122,22 @@ public class LottaDB : IDisposable
 
     /// <summary>
     /// Run handlers for an entity whose type is only known at runtime.
-    /// Dispatches to the generic RunHandlersAsync&lt;T&gt; via reflection.
+    /// Walks the type hierarchy so handlers registered for base types also fire.
+    /// For example, saving a BlobPhoto fires On&lt;BlobPhoto&gt;, On&lt;BlobFile&gt;, etc.
     /// </summary>
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
         List<Exception> errors, CancellationToken cancellationToken)
     {
-        if (!_handlers.ContainsKey(entityType)) return;
-
         var method = typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod)
-            .MakeGenericMethod(entityType);
+            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
 
-        await (Task)method.Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+        // Walk up the type hierarchy: BlobPhoto → BlobFile → object
+        for (var type = entityType; type != null && type != typeof(object); type = type.BaseType)
+        {
+            if (!_handlers.ContainsKey(type)) continue;
+
+            await (Task)method.MakeGenericMethod(type).Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+        }
     }
 
     protected virtual void Dispose(bool disposing)

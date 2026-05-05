@@ -125,5 +125,3 @@ This gives you:
 - Basic metadata (path, name, folder, media type, content length)
 
 The Tiki handler adds deep content parsing (EXIF, ID3 tags, page counts, etc.) on top.
-
-doea

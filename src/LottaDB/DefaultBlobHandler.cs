@@ -110,7 +110,7 @@ internal static class DefaultBlobHandler
         [".rar"] = "application/x-rar-compressed",
     };
 
-    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, LottaDB db)
+    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, BlobFile? existing, LottaDB db)
     {
         var ext = Path.GetExtension(path);
         var mimeType = contentType ?? GetMimeType(ext);
