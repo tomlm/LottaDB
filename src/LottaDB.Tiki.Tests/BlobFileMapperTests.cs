@@ -112,7 +112,7 @@ public class BlobFileMapperTests
     }
 
     [Fact]
-    public void TikiPhoto_MappsToBlobPhoto()
+    public void TikiPhoto_MapsToBlobPhoto()
     {
         var tiki = new TikiPhoto
         {
@@ -143,7 +143,7 @@ public class BlobFileMapperTests
     }
 
     [Fact]
-    public void TikiDocument_MappsToBlobDocument()
+    public void TikiDocument_MapsToBlobDocument()
     {
         var tiki = new TikiDocument
         {
@@ -165,7 +165,7 @@ public class BlobFileMapperTests
     }
 
     [Fact]
-    public void TikiMusic_MappsToBlobMusic()
+    public void TikiMusic_MapsToBlobMusic()
     {
         var tiki = new TikiMusic
         {
@@ -190,7 +190,7 @@ public class BlobFileMapperTests
     }
 
     [Fact]
-    public void UnknownTikiType_MappsToBlobFile()
+    public void UnknownTikiType_MapsToBlobFile()
     {
         var tiki = new TikiFile { MediaType = new MediaType("application", "octet-stream"), Content = "" };
         var result = BlobFileMapper.FromTikiFile(tiki, "data/unknown.bin");
