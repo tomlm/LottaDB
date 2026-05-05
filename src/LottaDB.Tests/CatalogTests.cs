@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Lotta.Tests;
 
 public class CatalogTests : IDisposable
@@ -8,9 +10,10 @@ public class CatalogTests : IDisposable
 
     public void Dispose() { }
 
-    private static LottaCatalog CreateCatalog(string name)
+    private static LottaCatalog CreateCatalog([CallerMemberName] string? testName = null)
     {
-        var catalog = new LottaCatalog(name);
+        var sanitized = string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
+        var catalog = new LottaCatalog(sanitized);
         catalog.ConfigureTestStorage();
         return catalog;
     }
@@ -27,7 +30,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DatabasesInSameCatalog_AreIsolated()
     {
-        using var catalog = CreateCatalog("catalog1");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -54,7 +57,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetManyAsync_OnlyReturnsFromOwnDatabase()
     {
-        using var catalog = CreateCatalog("catalog2");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -74,7 +77,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task ResetDatabase_OnlyClearsOwnPartition()
     {
-        using var catalog = CreateCatalog("catalog3");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -99,7 +102,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Search_OnlyReturnsFromOwnDatabase()
     {
-        using var catalog = CreateCatalog("catalog4");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -123,7 +126,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DefaultDatabaseId_IsDefault()
     {
-        using var catalog = CreateCatalog("simplecatalog");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync(configure: config =>
         {
             config.Store<Actor>();
@@ -138,7 +141,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task LottaCatalog_GetDatabase_ReturnsSameInstance()
     {
-        using var catalog = CreateCatalog("catalogX");
+        using var catalog = CreateCatalog();
 
         var db1 = await catalog.GetDatabaseAsync("mydb", config => config.Store<Actor>());
         var db2 = await catalog.GetDatabaseAsync("mydb");
@@ -152,7 +155,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task LottaCatalog_MultipleDatabases_AreIsolated()
     {
-        using var catalog = CreateCatalog("catalogY");
+        using var catalog = CreateCatalog();
 
         var db1 = await catalog.GetDatabaseAsync("notes", config => config.Store<Actor>());
         var db2 = await catalog.GetDatabaseAsync("todos", config => config.Store<Actor>());
@@ -171,7 +174,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DeleteDatabase_OnlyClearsOwnPartition()
     {
-        using var catalog = CreateCatalog("catalog5");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -192,7 +195,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task SameKeyInDifferentDatabases_AreIndependent()
     {
-        using var catalog = CreateCatalog("catalog6");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -212,7 +215,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task ListAsync_ReturnsAllDatabaseIds()
     {
-        using var catalog = CreateCatalog("catalog7");
+        using var catalog = CreateCatalog();
         await CreateDbAsync(catalog, "notes");
         await CreateDbAsync(catalog, "todos");
         await CreateDbAsync(catalog, "logs");
@@ -228,7 +231,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task ListAsync_EmptyCatalog_ReturnsEmpty()
     {
-        using var catalog = CreateCatalog("catalog8");
+        using var catalog = CreateCatalog();
 
         var databases = await catalog.ListAsync(TestContext.Current.CancellationToken);
 
@@ -316,7 +319,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DeleteDatabase_RemovesFromManifest()
     {
-        using var catalog = CreateCatalog("catalog9");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
 
@@ -333,7 +336,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DeleteCatalog_DropsEntireTable()
     {
-        using var catalog = CreateCatalog("catalog12");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -352,7 +355,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task BulkOps_ScopedPerDatabase()
     {
-        using var catalog = CreateCatalog("catalog13");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -384,7 +387,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Handlers_ScopedPerDatabase()
     {
-        using var catalog = CreateCatalog("catalog14");
+        using var catalog = CreateCatalog();
         var db1Triggered = false;
         var db2Triggered = false;
 
@@ -419,7 +422,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task ChangeAsync_ScopedPerDatabase()
     {
-        using var catalog = CreateCatalog("catalog15");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -442,7 +445,7 @@ public class CatalogTests : IDisposable
     public async Task FirstTimeDatabase_NoStoredSchema_DoesNotRebuild()
     {
         // Brand new database with no prior manifest — should not throw or rebuild
-        using var catalog = CreateCatalog("catalog16");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("brand_new", config =>
         {
             config.Store<Actor>();
@@ -458,7 +461,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetDatabaseAsync_WithoutConfigure_ReturnsEmptyDatabase()
     {
-        using var catalog = CreateCatalog("catalog17");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("empty");
 
         // No types registered — saving should throw
@@ -469,7 +472,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetDatabaseAsync_ConflictingSchema_Throws()
     {
-        using var catalog = CreateCatalog("catalog18");
+        using var catalog = CreateCatalog();
 
         // First call registers Actor
         await catalog.GetDatabaseAsync("mydb", config => config.Store<Actor>());
@@ -486,7 +489,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetDatabaseAsync_SameSchema_ReturnsCachedInstance()
     {
-        using var catalog = CreateCatalog("catalog19");
+        using var catalog = CreateCatalog();
 
         var db1 = await catalog.GetDatabaseAsync("mydb", config => config.Store<Actor>());
         // Same schema on second call — should return same instance, no error
@@ -498,7 +501,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DeleteCatalog_ThenCreateNewDatabases_Works()
     {
-        using var catalog = CreateCatalog("catalog20");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
 
@@ -522,7 +525,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task LargeObject_SplitsAcrossProperties_RoundTrips()
     {
-        using var catalog = CreateCatalog("catalog21");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("default", config =>
         {
             config.Store<LargeDocument>();
@@ -559,7 +562,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task LargeObject_Update_RoundTrips()
     {
-        using var catalog = CreateCatalog("catalog22");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("default", config =>
         {
             config.Store<LargeDocument>();
@@ -585,7 +588,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetManyAsync_WithPredicate_DoesNotCrossPartition()
     {
-        using var catalog = CreateCatalog("catalog23");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -606,7 +609,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task GetManyAsync_AllItems_DoesNotCrossPartition()
     {
-        using var catalog = CreateCatalog("catalog24");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -624,7 +627,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Search_FreeText_DoesNotCrossPartition()
     {
-        using var catalog = CreateCatalog("catalog25");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -649,7 +652,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Search_WithPredicate_DoesNotCrossPartition()
     {
-        using var catalog = CreateCatalog("catalog26");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -672,7 +675,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task CrossTypeStorage_UnregisteredType_Throws()
     {
-        using var catalog = CreateCatalog("catalog28");
+        using var catalog = CreateCatalog();
 
         // db1 only has Actor registered
         var db1 = await catalog.GetDatabaseAsync("db1", config => config.Store<Actor>());
@@ -699,7 +702,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task DeleteManyAsync_DoesNotCrossPartition()
     {
-        using var catalog = CreateCatalog("catalog27");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
         await db1.ResetDatabaseAsync();
@@ -727,7 +730,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_UploadAndDownload_Stream()
     {
-        using var catalog = CreateCatalog("catalog30");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         var content = "Hello, Blob World!";
@@ -744,7 +747,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_UploadAndDownload_Bytes()
     {
-        using var catalog = CreateCatalog("catalog31");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         var content = new byte[] { 1, 2, 3, 4, 5 };
@@ -758,7 +761,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_UploadAndDownload_String()
     {
-        using var catalog = CreateCatalog("catalog32");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("note.txt", "Hello from LottaDB", cancellationToken: TestContext.Current.CancellationToken);
@@ -770,7 +773,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_Download_NotFound_ReturnsNull()
     {
-        using var catalog = CreateCatalog("catalog33");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         var stream = await db.DownloadBlobAsync("nonexistent.txt", cancellationToken: TestContext.Current.CancellationToken);
@@ -786,7 +789,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_Delete()
     {
-        using var catalog = CreateCatalog("catalog34");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("todelete.txt", "temp", cancellationToken: TestContext.Current.CancellationToken);
@@ -804,7 +807,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListBlobs()
     {
-        using var catalog = CreateCatalog("catalog35");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("photos/a.jpg", "image-a", cancellationToken: TestContext.Current.CancellationToken);
@@ -829,7 +832,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListBlobs_NonRecursive()
     {
-        using var catalog = CreateCatalog("catalog60");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("root.txt", "root", cancellationToken: TestContext.Current.CancellationToken);
@@ -858,7 +861,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListFolders_NonRecursive()
     {
-        using var catalog = CreateCatalog("catalog61");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("root.txt", "root", cancellationToken: TestContext.Current.CancellationToken);
@@ -881,7 +884,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListFolders_Recursive()
     {
-        using var catalog = CreateCatalog("catalog62");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
@@ -907,7 +910,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListFolders_EmptyFolder()
     {
-        using var catalog = CreateCatalog("catalog63");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("only-file.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
@@ -919,7 +922,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_ListBlobs_FolderNormalization()
     {
-        using var catalog = CreateCatalog("catalog64");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("photos/a.jpg", "a", cancellationToken: TestContext.Current.CancellationToken);
@@ -933,7 +936,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_IsolatedPerDatabase()
     {
-        using var catalog = CreateCatalog("catalog36");
+        using var catalog = CreateCatalog();
         var db1 = await CreateDbAsync(catalog, "db1");
         var db2 = await CreateDbAsync(catalog, "db2");
 
@@ -961,7 +964,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_Overwrite()
     {
-        using var catalog = CreateCatalog("catalog37");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1");
 
         await db.UploadBlobAsync("file.txt", "version 1", cancellationToken: TestContext.Current.CancellationToken);
@@ -976,7 +979,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DefaultHandler_ReturnsMetadata()
     {
-        using var catalog = CreateCatalog("catalog40");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload(); // default handler
@@ -996,7 +999,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DefaultHandler_TextContent_Searchable()
     {
-        using var catalog = CreateCatalog("catalog41");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1013,7 +1016,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DefaultHandler_BinaryFile_CorrectType()
     {
-        using var catalog = CreateCatalog("catalog42");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1030,7 +1033,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_MetadataPersistedAndRetrievable()
     {
-        using var catalog = CreateCatalog("catalog43");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1049,7 +1052,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DatabasePropertySet_AfterUpload()
     {
-        using var catalog = CreateCatalog("catalog44");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1068,7 +1071,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DatabasePropertySet_AfterGetAsync()
     {
-        using var catalog = CreateCatalog("catalog45");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1088,7 +1091,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_DeleteAsync_CascadesMetadata()
     {
-        using var catalog = CreateCatalog("catalog46");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1111,7 +1114,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_BlobFileDeleteAsync_Works()
     {
-        using var catalog = CreateCatalog("catalog47");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1131,7 +1134,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_NoHandler_ReturnsNull()
     {
-        using var catalog = CreateCatalog("catalog48");
+        using var catalog = CreateCatalog();
         var db = await CreateDbAsync(catalog, "db1"); // no OnUpload
 
         var meta = await db.UploadBlobAsync("test.txt", "content", cancellationToken: TestContext.Current.CancellationToken);
@@ -1144,7 +1147,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_Overwrite_UpdatesMetadata()
     {
-        using var catalog = CreateCatalog("catalog49");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1161,7 +1164,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_ExplicitContentType_Used()
     {
-        using var catalog = CreateCatalog("catalog50");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1177,7 +1180,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_Search_DatabasePropertySet()
     {
-        using var catalog = CreateCatalog("catalog52");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1199,7 +1202,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task Blob_OnUpload_StreamOverload_ReturnsMetadata()
     {
-        using var catalog = CreateCatalog("catalog51");
+        using var catalog = CreateCatalog();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.OnUpload();
@@ -1219,7 +1222,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task On_BaseTypeHandler_FiresForDerivedType()
     {
-        using var catalog = CreateCatalog("catalog80");
+        using var catalog = CreateCatalog();
         var firedTypes = new List<string>();
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
@@ -1246,7 +1249,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task On_BaseTypeHandler_ReceivesDerivedInstance()
     {
-        using var catalog = CreateCatalog("catalog81");
+        using var catalog = CreateCatalog();
         BlobFile? received = null;
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
@@ -1267,7 +1270,7 @@ public class CatalogTests : IDisposable
     [Fact]
     public async Task On_UnrelatedTypeHandler_DoesNotFire()
     {
-        using var catalog = CreateCatalog("catalog82");
+        using var catalog = CreateCatalog();
         var fired = false;
         var db = await catalog.GetDatabaseAsync("db1", config =>
         {
@@ -1283,5 +1286,174 @@ public class CatalogTests : IDisposable
         await db.UploadBlobAsync("test.jpg", new byte[] { 0xFF, 0xD8 }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(fired);
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobPhoto_ReturnsOnlyPhotos()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("photos/cat.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("music/song.mp3", new byte[] { 0x49, 0x44, 0x33 }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.txt", "some text content", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var photos = db.Search<BlobPhoto>().ToList();
+        Assert.Single(photos);
+        Assert.Equal("photos/cat.jpg", photos[0].Path);
+        Assert.Equal("image/jpeg", photos[0].MediaType);
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobMusic_ReturnsOnlyMusic()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("photos/cat.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("music/song.mp3", new byte[] { 0x49, 0x44, 0x33 }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.txt", "some text content", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var music = db.Search<BlobMusic>().ToList();
+        Assert.Single(music);
+        Assert.Equal("music/song.mp3", music[0].Path);
+        Assert.Equal("audio/mpeg", music[0].MediaType);
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobDocument_ReturnsOnlyDocuments()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("photos/cat.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/report.pdf", new byte[] { 0x25, 0x50, 0x44, 0x46 }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("notes/readme.txt", "some text content", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var docs = db.Search<BlobDocument>().ToList();
+        Assert.Single(docs);
+        Assert.Equal("docs/report.pdf", docs[0].Path);
+        Assert.Equal("application/pdf", docs[0].MediaType);
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobVideo_ReturnsOnlyVideos()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("photos/cat.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("videos/clip.mp4", new byte[] { 0x00, 0x00, 0x00, 0x1C }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("notes/readme.txt", "some text content", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var videos = db.Search<BlobVideo>().ToList();
+        Assert.Single(videos);
+        Assert.Equal("videos/clip.mp4", videos[0].Path);
+        Assert.Equal("video/mp4", videos[0].MediaType);
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobFile_ReturnsAllBlobTypes()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("photos/cat.jpg", new byte[] { 0xFF, 0xD8, 0xFF }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("music/song.mp3", new byte[] { 0x49, 0x44, 0x33 }, cancellationToken: TestContext.Current.CancellationToken);
+        await db.UploadBlobAsync("docs/readme.txt", "some text content", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var all = db.Search<BlobFile>().ToList();
+        Assert.Equal(3, all.Count);
+        Assert.Contains(all, b => b is BlobPhoto);
+        Assert.Contains(all, b => b is BlobMusic);
+        Assert.Contains(all, b => b is BlobFile f && f.MediaType == "text/plain");
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobPhoto_DownloadAsync_Works()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var content = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00 };
+        await db.UploadBlobAsync("photos/test.jpg", content, cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var photos = db.Search<BlobPhoto>().ToList();
+        Assert.Single(photos);
+
+        var stream = await photos[0].DownloadAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(stream);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        Assert.Equal(content, ms.ToArray());
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobMusic_DownloadAsync_Works()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        var content = new byte[] { 0x49, 0x44, 0x33, 0x04, 0x00 };
+        await db.UploadBlobAsync("music/track.mp3", content, cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        var music = db.Search<BlobMusic>().ToList();
+        Assert.Single(music);
+
+        var stream = await music[0].DownloadAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(stream);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        Assert.Equal(content, ms.ToArray());
+    }
+
+    [Fact]
+    public async Task Blob_Search_BlobDocument_DownloadAsync_Works()
+    {
+        using var catalog = CreateCatalog();
+        var db = await catalog.GetDatabaseAsync("db1", config =>
+        {
+            config.OnUpload();
+        });
+
+        await db.UploadBlobAsync("docs/notes.txt", "downloadable text", cancellationToken: TestContext.Current.CancellationToken);
+        db.ReloadSearcher();
+
+        // BlobFile with text/plain should still be searchable and downloadable
+        var results = db.Search<BlobFile>("downloadable").ToList();
+        Assert.Single(results);
+
+        var stream = await results[0].DownloadAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("downloadable text", await reader.ReadToEndAsync());
     }
 }

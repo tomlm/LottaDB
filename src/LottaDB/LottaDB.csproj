@@ -5,6 +5,8 @@
     <RootNamespace>Lotta</RootNamespace>
     <Description>LottaDB is a .NET library that stores POCO objects => Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Version>2.0.1</Version>
+    <AssemblyVersion>2.0.1.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>

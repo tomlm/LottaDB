@@ -247,8 +247,10 @@ internal class TypeMetadata
     }
 
     /// <summary>
-    /// Serializes the index-relevant parts of a set of TypeMetadata into a deterministic JSON string.
+    /// Computes a deterministic hash of the index-relevant schema metadata.
     /// Used to detect schema changes that require a Lucene index rebuild.
+    /// Returns a hex-encoded SHA256 hash (64 chars) instead of the full JSON
+    /// to stay well within the Azure Table Storage 64KB property limit.
     /// </summary>
     internal static string ComputeSchemaJson(IEnumerable<TypeMetadata> metadatas)
     {
@@ -278,7 +280,9 @@ internal class TypeMetadata
                     }),
             });
 
-        return JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = false });
+        var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = false });
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>

@@ -63,9 +63,30 @@ internal class TableStorageAdapter
         }
     }
 
+    /// <summary>
+    /// Encode a key for use as Azure Table Storage RowKey.
+    /// Replaces disallowed characters (/ \ # ?) with URL-encoded equivalents.
+    /// </summary>
+    internal static string EncodeKey(string key)
+    {
+        if (key.IndexOfAny(['/', '\\', '#', '?']) < 0)
+            return key;
+        return key.Replace("/", "%2F").Replace("\\", "%5C").Replace("#", "%23").Replace("?", "%3F");
+    }
+
+    /// <summary>
+    /// Decode a RowKey back to the original key.
+    /// </summary>
+    internal static string DecodeKey(string rowKey)
+    {
+        if (rowKey.IndexOf('%') < 0)
+            return rowKey;
+        return rowKey.Replace("%2F", "/").Replace("%5C", "\\").Replace("%23", "#").Replace("%3F", "?");
+    }
+
     private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
-        var entity = new TableEntity(_partitionKey, key);
+        var entity = new TableEntity(_partitionKey, EncodeKey(key));
         entity[TableEntityExtensions.TypeProperty] = obj.GetType().FullName!;
 
         // Serialize as UTF-8 JSON bytes, split across properties if >64KB
@@ -93,7 +114,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            var response = await table.GetEntityAsync<TableEntity>(_partitionKey, key, cancellationToken: cancellationToken);
+            var response = await table.GetEntityAsync<TableEntity>(_partitionKey, EncodeKey(key), cancellationToken: cancellationToken);
             return (DeserializeEntity<object>(response.Value), response.Value.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -107,7 +128,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         try
         {
-            var response = table.GetEntity<TableEntity>(_partitionKey, key);
+            var response = table.GetEntity<TableEntity>(_partitionKey, EncodeKey(key));
             return response.Value.ETag.ToString();
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -119,6 +140,7 @@ internal class TableStorageAdapter
     public async Task<bool> DeleteAsync(string tableName, string key)
     {
         var table = GetTable(tableName);
+        key = EncodeKey(key);
         try
         {
             await table.DeleteEntityAsync(_partitionKey, key);
@@ -155,7 +177,7 @@ internal class TableStorageAdapter
         for (int offset = 0; offset < keyList.Count; offset += 100)
         {
             var batch = keyList.Skip(offset).Take(100);
-            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<TableEntity>(e => e.RowKey == k)));
+            var keyFilter = string.Join(" or ", batch.Select(k => TableClient.CreateQueryFilter<TableEntity>(e => e.RowKey == EncodeKey(k))));
             var query = $"PartitionKey eq '{_partitionKey}' and ({keyFilter})";
             await foreach (var entity in table.QueryAsync<TableEntity>(query,
                     maxPerPage: maxPerPage,
@@ -272,7 +294,7 @@ internal class TableStorageAdapter
     internal TableTransactionAction CreateDeleteAction(string key)
     {
         return new TableTransactionAction(TableTransactionActionType.Delete,
-            new TableEntity(_partitionKey, key) { ETag = ETag.All });
+            new TableEntity(_partitionKey, EncodeKey(key)) { ETag = ETag.All });
     }
 
     internal async Task SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)

@@ -160,4 +160,83 @@ public class GetManyAsyncTests
         Assert.Contains(results, o => o is Actor);
         Assert.Contains(results, o => o is Note);
     }
+
+    [Fact]
+    public async Task GetManyAsync_NoKeys_ReturnsBlobFileEntities()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload());
+        await db.SaveAsync(new BlobPhoto { Path = "photos/cat.jpg", Name = "cat.jpg", MediaType = "image/jpeg", Width = 1920, Height = 1080 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BlobMusic { Path = "music/song.mp3", Name = "song.mp3", MediaType = "audio/mpeg", Artist = "TestArtist", Album = "TestAlbum" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BlobDocument { Path = "docs/report.pdf", Name = "report.pdf", MediaType = "application/pdf", PageCount = 42 }, TestContext.Current.CancellationToken);
+
+        var (adapter, tableName) = db.GetTableForTesting();
+        var results = await adapter.GetManyAsync(tableName, cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, o => o is BlobPhoto p && p.Width == 1920);
+        Assert.Contains(results, o => o is BlobMusic m && m.Artist == "TestArtist");
+        Assert.Contains(results, o => o is BlobDocument d && d.PageCount == 42);
+    }
+
+    [Fact]
+    public async Task GetManyAsync_WithKeys_ReturnsBlobFileEntities()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload());
+        await db.SaveAsync(new BlobPhoto { Path = "photos/cat.jpg", Name = "cat.jpg", MediaType = "image/jpeg", Width = 1920, Height = 1080 }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BlobMusic { Path = "music/song.mp3", Name = "song.mp3", MediaType = "audio/mpeg", Artist = "TestArtist" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new BlobVideo { Path = "videos/clip.mp4", Name = "clip.mp4", MediaType = "video/mp4", Width = 3840, FrameRate = 60.0 }, TestContext.Current.CancellationToken);
+
+        var (adapter, tableName) = db.GetTableForTesting();
+        var results = await adapter.GetManyAsync(tableName, new[] { "photos/cat.jpg", "videos/clip.mp4" },
+                cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, o => o is BlobPhoto p && p.Path == "photos/cat.jpg" && p.Width == 1920);
+        Assert.Contains(results, o => o is BlobVideo v && v.Path == "videos/clip.mp4" && v.FrameRate == 60.0);
+    }
+
+    [Fact]
+    public async Task GetManyAsync_WithKeys_BlobPropertiesPreserved()
+    {
+        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload());
+        await db.SaveAsync(new BlobPhoto
+        {
+            Path = "photos/vacation.jpg",
+            Name = "vacation.jpg",
+            FolderPath = "photos",
+            MediaType = "image/jpeg",
+            ContentLength = 5_000_000,
+            Width = 4032,
+            Height = 3024,
+            CameraManufacturer = "Canon",
+            CameraModel = "EOS R5",
+            IsoSpeed = 400,
+            FNumber = 2.8,
+            FocalLength = 50.0,
+            DateTaken = new DateTime(2025, 6, 15, 10, 30, 0, DateTimeKind.Utc)
+        }, TestContext.Current.CancellationToken);
+
+        var (adapter, tableName) = db.GetTableForTesting();
+        var results = await adapter.GetManyAsync(tableName, new[] { "photos/vacation.jpg" },
+                cancellationToken: TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(results);
+        var photo = Assert.IsType<BlobPhoto>(results[0]);
+        Assert.Equal("photos/vacation.jpg", photo.Path);
+        Assert.Equal("vacation.jpg", photo.Name);
+        Assert.Equal("photos", photo.FolderPath);
+        Assert.Equal("image/jpeg", photo.MediaType);
+        Assert.Equal(5_000_000, photo.ContentLength);
+        Assert.Equal(4032, photo.Width);
+        Assert.Equal(3024, photo.Height);
+        Assert.Equal("Canon", photo.CameraManufacturer);
+        Assert.Equal("EOS R5", photo.CameraModel);
+        Assert.Equal(400, photo.IsoSpeed);
+        Assert.Equal(2.8, photo.FNumber);
+        Assert.Equal(50.0, photo.FocalLength);
+        Assert.Equal(new DateTime(2025, 6, 15, 10, 30, 0, DateTimeKind.Utc), photo.DateTaken);
+    }
 }
