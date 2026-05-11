@@ -252,9 +252,10 @@ internal class TypeMetadata
     /// Returns a hex-encoded SHA256 hash (64 chars) instead of the full JSON
     /// to stay well within the Azure Table Storage 64KB property limit.
     /// </summary>
-    internal static string ComputeSchemaJson(IEnumerable<TypeMetadata> metadatas)
+    internal static string ComputeSchemaJson(IEnumerable<TypeMetadata> metadatas,
+        IEnumerable<DynamicSchema>? dynamicSchemas = null)
     {
-        var schema = metadatas
+        var typedSchema = metadatas
             .OrderBy(m => m.Type.FullName)
             .Select(m => new
             {
@@ -280,7 +281,25 @@ internal class TypeMetadata
                     }),
             });
 
-        var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = false });
+        var dynamicSchema = (dynamicSchemas ?? Enumerable.Empty<DynamicSchema>())
+            .OrderBy(s => s.TypeName)
+            .Select(s => new
+            {
+                Type = s.TypeName,
+                KeyMode = s.KeyMode.ToString(),
+                KeyProperty = s.KeyProperty,
+                Properties = s.Properties
+                    .OrderBy(p => p.Name)
+                    .Select(p => new
+                    {
+                        p.Name,
+                        PropertyType = p.ClrType.FullName,
+                        p.IsAnalyzed,
+                    }),
+            });
+
+        var combined = new { Typed = typedSchema, Dynamic = dynamicSchema };
+        var json = JsonSerializer.Serialize(combined, new JsonSerializerOptions { WriteIndented = false });
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
         return Convert.ToHexString(hash);
     }
@@ -297,7 +316,7 @@ internal class TypeMetadata
             var m = typeof(TypeMetadata).GetMethod(nameof(Build))!.MakeGenericMethod(type);
             metadatas.Add((TypeMetadata)m.Invoke(null, new[] { configObj })!);
         }
-        return ComputeSchemaJson(metadatas);
+        return ComputeSchemaJson(metadatas, config.SchemaConfigurations.Values);
     }
 
     private static PropertyInfo? ExtractPropertyInfo(LambdaExpression expr)

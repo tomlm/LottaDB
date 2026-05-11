@@ -1,19 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:github.com)",
-      "WebSearch",
-      "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:www.nuget.org)",
       "Bash(dotnet restore:*)",
-      "Bash(dotnet package search:*)",
-      "Bash(nuget list:*)",
+      "Read(//c/Users/therm/.nuget/packages/**)",
+      "Bash(dotnet pack:*)",
+      "Bash(dotnet nuget locals:*)",
+      "Bash(rm -rf /s/packages/nuget/iciclecreek.lucene.net.linq/4.8.4-beta00017)",
       "Bash(dotnet nuget:*)",
-      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/spotflow.inmemory.azure.storage/index.json\")",
-      "Bash(dotnet add:*)",
-      "Bash(sed:*)",
-      "Bash(dotnet list:*)",
-      "Bash(dotnet tool:*)",
+      "Bash(ls /s/github/LottaDB/src/LottaDB/*.cs)",
+      "Bash(ls:*)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using Lotta;
 using System.Linq.Expressions;
 using System.Text;
 using System.Text.Json;
@@ -36,11 +37,13 @@ internal class TableStorageAdapter
         return client;
     }
 
-    public async Task UpsertAsync(string tableName, string key, object obj, TypeMetadata meta, CancellationToken cancellationToken = default)
+    /// <summary>Upsert an entity and return the new ETag.</summary>
+    public async Task<string> UpsertAsync(string tableName, string key, object obj, TypeMetadata meta, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
-        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
+        var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
+        return response.Headers.ETag.ToString();
     }
 
     /// <summary>
@@ -188,16 +191,26 @@ internal class TableStorageAdapter
         }
     }
 
-    public IAsyncEnumerable<T> GetManyAsync<T>(string tableName,
+    /// <summary>
+    /// GetMany with ETag annotation. Each returned object has its ETag set via <see cref="ObjectExtensions.SetETag{T}"/>.
+    /// </summary>
+    public async IAsyncEnumerable<T> GetManyAsync<T>(string tableName,
         Expression<Func<T, bool>>? predicate = null,
         int? maxPerPage = null,
-        CancellationToken cancellationToken = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         where T : class, new()
     {
         var table = GetTable(tableName);
         var query = GetODataQuery<T>(predicate);
-        return table.QueryAsync<TableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken)
-            .Select(entity => DeserializeEntity<T>(entity)!);
+        await foreach (var entity in table.QueryAsync<TableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken))
+        {
+            var obj = DeserializeEntity<T>(entity);
+            if (obj != null)
+            {
+                obj.SetETag(entity.ETag.ToString());
+                yield return obj;
+            }
+        }
     }
 
     public IAsyncEnumerable<object> GetAllAsync(string tableName,
@@ -209,13 +222,46 @@ internal class TableStorageAdapter
             .Select(entity => DeserializeEntity<object>(entity)!);
     }
 
-    private static T? DeserializeEntity<T>(TableEntity entity) where T : class
+    /// <summary>
+    /// Enumerates all raw <see cref="TableEntity"/> rows in the partition.
+    /// Used by <see cref="LottaDB.RebuildSearchIndex"/> to iterate once and dispatch
+    /// each entity to typed or dynamic mappers based on the Type column.
+    /// </summary>
+    internal IAsyncEnumerable<TableEntity> GetAllRawAsync(string tableName,
+        int? maxPerPage = null,
+        CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        return table.QueryAsync<TableEntity>(e => e.PartitionKey == _partitionKey, maxPerPage: maxPerPage, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Deserializes a <see cref="TableEntity"/> into a CLR object using the stored Type column
+    /// to resolve the concrete type. Returns null if the type cannot be resolved.
+    /// </summary>
+    internal static object? DeserializeEntity(TableEntity entity)
     {
         var bytes = entity.GetObjectBytes();
+        if (bytes.Length == 0) return null;
         var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
         var concreteType = TypeUtils.ResolveType(typeName);
         if (concreteType != null)
-            return JsonSerializer.Deserialize(bytes, concreteType) as T;
+        {
+            var obj = JsonSerializer.Deserialize(bytes, concreteType);
+            if (obj != null)
+                obj.SetJson(System.Text.Encoding.UTF8.GetString(bytes));
+            return obj;
+        }
+        return null;
+    }
+
+    private static T? DeserializeEntity<T>(TableEntity entity) where T : class
+    {
+        var obj = DeserializeEntity(entity);
+        if (obj is T typed) return typed;
+        if (obj != null) return null;
+        // Fallback: try deserializing as T directly
+        var bytes = entity.GetObjectBytes();
         return JsonSerializer.Deserialize<T>(bytes);
     }
 
@@ -291,29 +337,50 @@ internal class TableStorageAdapter
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
+    internal TableTransactionAction CreateDynamicUpsertAction(string key, string schemaName, JsonDocument json, DynamicSchema schema)
+    {
+        var entity = new TableEntity(_partitionKey, EncodeKey(key));
+        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
+        foreach (var prop in schema.Properties)
+        {
+            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
+        }
+        return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
+    }
+
     internal TableTransactionAction CreateDeleteAction(string key)
     {
         return new TableTransactionAction(TableTransactionActionType.Delete,
             new TableEntity(_partitionKey, EncodeKey(key)) { ETag = ETag.All });
     }
 
-    internal async Task SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)
+    /// <summary>
+    /// Submit a batch of table operations. Returns per-item ETags (null for deletes).
+    /// </summary>
+    internal async Task<string?[]> SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)
     {
-        if (actions.Count == 0) return;
+        var etags = new string?[actions.Count];
+        if (actions.Count == 0) return etags;
         var table = GetTable(tableName);
         try
         {
-            await table.SubmitTransactionAsync(actions);
+            var responses = await table.SubmitTransactionAsync(actions);
+            for (int i = 0; i < responses.Value.Count; i++)
+                etags[i] = responses.Value[i].Headers.ETag?.ToString();
         }
         catch (Exception)
         {
             // Fallback for providers that don't support transactions (e.g., Spotflow in-memory)
-            foreach (var action in actions)
+            for (int i = 0; i < actions.Count; i++)
             {
+                var action = actions[i];
                 switch (action.ActionType)
                 {
                     case TableTransactionActionType.UpsertReplace:
-                        await table.UpsertEntityAsync(action.Entity, TableUpdateMode.Replace);
+                        var response = await table.UpsertEntityAsync(action.Entity, TableUpdateMode.Replace);
+                        etags[i] = response.Headers.ETag?.ToString();
                         break;
                     case TableTransactionActionType.Delete:
                         try { await table.DeleteEntityAsync(action.Entity.PartitionKey, action.Entity.RowKey); }
@@ -322,6 +389,119 @@ internal class TableStorageAdapter
                 }
             }
         }
+        return etags;
+    }
+
+    // === Dynamic (JSON Schema) operations ===
+
+    /// <summary>
+    /// Upsert a dynamic JSON document. Stores the full JSON in the Object column
+    /// and extracts queryable property values as tag columns for OData filtering.
+    /// </summary>
+    /// <param name="tableName">The Azure Table Storage table name.</param>
+    /// <param name="key">The document key (used as RowKey).</param>
+    /// <param name="schemaName">The schema type name (stored in the Type column).</param>
+    /// <param name="json">The full JSON document to store.</param>
+    /// <param name="schema">The schema definition used to extract tag values.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The new ETag after upsert.</returns>
+    public async Task<string> UpsertDynamicAsync(string tableName, string key, string schemaName,
+        JsonDocument json, DynamicSchema schema, CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var entity = new TableEntity(_partitionKey, EncodeKey(key));
+        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
+
+        foreach (var prop in schema.Properties)
+        {
+            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
+        }
+
+        var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
+        return response.Headers.ETag.ToString();
+    }
+
+    /// <summary>
+    /// Point-read a dynamic JSON document by key.
+    /// Returns a <see cref="JsonDocument"/> with ETag annotated via <see cref="ObjectExtensions.SetETag{T}"/>.
+    /// </summary>
+    public async Task<JsonDocument?> GetDynamicAsync(string tableName, string key, CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        try
+        {
+            var response = await table.GetEntityAsync<TableEntity>(_partitionKey, EncodeKey(key), cancellationToken: cancellationToken);
+            var bytes = response.Value.GetObjectBytes();
+            if (bytes.Length == 0) return null;
+            var doc = JsonDocument.Parse(bytes);
+            doc.SetETag(response.Value.ETag.ToString());
+            return doc;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Query dynamic JSON documents by schema name with an optional OData filter.
+    /// Each returned <see cref="JsonDocument"/> has its ETag annotated.
+    /// </summary>
+    public async IAsyncEnumerable<JsonDocument> GetManyDynamicAsync(string tableName, string schemaName,
+        string? filter = null, int? maxPerPage = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var query = $"PartitionKey eq '{_partitionKey}' and Type eq '{schemaName}'";
+        if (!string.IsNullOrEmpty(filter))
+            query += $" and ({filter})";
+
+        await foreach (var entity in table.QueryAsync<TableEntity>(query, maxPerPage: maxPerPage, cancellationToken: cancellationToken))
+        {
+            var bytes = entity.GetObjectBytes();
+            if (bytes.Length > 0)
+            {
+                var doc = JsonDocument.Parse(bytes);
+                doc.SetETag(entity.ETag.ToString());
+                yield return doc;
+            }
+        }
+    }
+
+    /// <summary>Conditional replace for a dynamic JSON document. Returns false on ETag mismatch (412).</summary>
+    public async Task<bool> TryReplaceDynamicAsync(string tableName, string key, string schemaName,
+        JsonDocument json, DynamicSchema schema, string etag, CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var entity = new TableEntity(_partitionKey, EncodeKey(key));
+        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
+        foreach (var prop in schema.Properties)
+        {
+            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
+        }
+        try
+        {
+            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 412)
+        {
+            return false;
+        }
+    }
+
+    private static object ConvertJsonElementToTableValue(JsonElement val, Type clrType)
+    {
+        if (clrType == typeof(string)) return val.GetString() ?? "";
+        if (clrType == typeof(int)) return val.TryGetInt32(out var i) ? i : 0;
+        if (clrType == typeof(double)) return val.TryGetDouble(out var d) ? d : 0.0;
+        if (clrType == typeof(bool)) return val.GetBoolean();
+        if (clrType == typeof(long)) return val.TryGetInt64(out var l) ? l : 0L;
+        return val.ToString();
     }
 
     private static object ConvertToTableValue(object value)

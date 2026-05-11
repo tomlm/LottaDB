@@ -7,8 +7,6 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Version>2.0.0</Version>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

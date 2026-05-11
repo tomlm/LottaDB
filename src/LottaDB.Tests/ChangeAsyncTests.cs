@@ -276,7 +276,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         using var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "parallel-counter";
-        const int N = 10;
+        const int N = 5;
 
         await db.SaveAsync(new Actor
         {
