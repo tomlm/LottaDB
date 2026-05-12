@@ -165,7 +165,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
     // === Search ===
 
     [Fact]
-    public async Task SearchDocuments_FindsByQueryableField()
+    public async Task Search_FindsByQueryableField()
     {
         using var db = await CreateDbWithSchema();
 
@@ -178,13 +178,13 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
 
         db.ReloadSearcher();
 
-        var results = db.SearchDocuments("Person", "Name:Alice").ToList();
+        var results = db.Search("Person", "Name:Alice").ToList();
         Assert.Single(results);
         Assert.Equal("Alice Smith", results[0].RootElement.GetProperty("Name").GetString());
     }
 
     [Fact]
-    public async Task SearchDocuments_NumericRangeQuery()
+    public async Task Search_NumericRangeQuery()
     {
         using var db = await CreateDbWithSchema();
 
@@ -197,13 +197,13 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
 
         db.ReloadSearcher();
 
-        var results = db.SearchDocuments("Person", "Age:[25 TO 60]").ToList();
+        var results = db.Search("Person", "Age:[25 TO 60]").ToList();
         Assert.Single(results);
         Assert.Equal("Old", results[0].RootElement.GetProperty("Name").GetString());
     }
 
     [Fact]
-    public async Task SearchDocuments_FreeTextOnContent()
+    public async Task Search_FreeTextOnContent()
     {
         using var db = await CreateDbWithSchema();
 
@@ -217,13 +217,13 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
         db.ReloadSearcher();
 
         // Free-text search hits _content_ (which includes analyzed string properties)
-        var results = db.SearchDocuments("Person", "wonder").ToList();
+        var results = db.Search("Person", "wonder").ToList();
         Assert.Single(results);
         Assert.Equal("Alice Wonder", results[0].RootElement.GetProperty("Name").GetString());
     }
 
     [Fact]
-    public async Task SearchDocuments_NoQuery_ReturnsAll()
+    public async Task Search_NoQuery_ReturnsAll()
     {
         using var db = await CreateDbWithSchema();
 
@@ -236,14 +236,14 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
 
         db.ReloadSearcher();
 
-        var results = db.SearchDocuments("Person").ToList();
+        var results = db.Search("Person").ToList();
         Assert.Equal(2, results.Count);
     }
 
-    // === GetManyDocumentsAsync ===
+    // === GetManyAsync ===
 
     [Fact]
-    public async Task GetManyDocumentsAsync_ReturnsAll()
+    public async Task GetManyAsync_ReturnsAll()
     {
         using var db = await CreateDbWithSchema();
 
@@ -254,13 +254,13 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
             JsonDocument.Parse("""{ "Name": "Y", "Age": 2 }"""),
             TestContext.Current.CancellationToken);
 
-        var results = await db.GetManyDocumentsAsync("Person",
+        var results = await db.GetManyAsync("Person",
             cancellationToken: TestContext.Current.CancellationToken).ToListAsync();
         Assert.Equal(2, results.Count);
     }
 
     [Fact]
-    public async Task GetManyDocumentsAsync_WithODataFilter()
+    public async Task GetManyAsync_WithODataFilter()
     {
         using var db = await CreateDbWithSchema();
 
@@ -271,7 +271,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
             JsonDocument.Parse("""{ "Name": "Old", "Age": 50 }"""),
             TestContext.Current.CancellationToken);
 
-        var results = await db.GetManyDocumentsAsync("Person",
+        var results = await db.GetManyAsync("Person",
             filter: "Age gt 30",
             cancellationToken: TestContext.Current.CancellationToken).ToListAsync();
         Assert.Single(results);
@@ -293,17 +293,17 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
             TestContext.Current.CancellationToken);
 
         db.ReloadSearcher();
-        Assert.Equal(2, db.SearchDocuments("Person").Count());
+        Assert.Equal(2, db.Search("Person").Count());
 
         // Wipe the Lucene index to prove RebuildSearchIndex actually repopulates it
         db.DeleteSearchIndex();
-        Assert.Empty(db.SearchDocuments("Person"));
+        Assert.Empty(db.Search("Person"));
 
         // Rebuild from Table Storage
         await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         // Dynamic documents should be searchable again
-        var results = db.SearchDocuments("Person").ToList();
+        var results = db.Search("Person").ToList();
         Assert.Equal(2, results.Count);
         Assert.Contains(results, r => r.RootElement.GetProperty("Name").GetString() == "Alice Rebuild");
         Assert.Contains(results, r => r.RootElement.GetProperty("Name").GetString() == "Bob Rebuild");
@@ -325,14 +325,14 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
 
         // Wipe the Lucene index to prove RebuildSearchIndex actually repopulates it
         db.DeleteSearchIndex();
-        Assert.Empty(db.SearchDocuments("Person"));
+        Assert.Empty(db.Search("Person"));
         Assert.Empty(db.Search<Actor>().ToList());
 
         // Rebuild from Table Storage
         await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
         // Both should be restored
-        var dynamicResults = db.SearchDocuments("Person").ToList();
+        var dynamicResults = db.Search("Person").ToList();
         Assert.Single(dynamicResults);
         Assert.Equal("Dynamic Doc", dynamicResults[0].RootElement.GetProperty("Name").GetString());
 
@@ -357,7 +357,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
 
         // Email is not in the schema — searching by it throws a parse error
         Assert.Throws<Lucene.Net.QueryParsers.Classic.ParseException>(
-            () => db.SearchDocuments("Person", "Email:alice-at-test").ToList());
+            () => db.Search("Person", "Email:alice-at-test").ToList());
 
         // Update schema to add Email as queryable
         var newSchema = JsonDocument.Parse("""
@@ -375,7 +375,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
         await db.UpdateSchemaAsync("Person", newSchema, TestContext.Current.CancellationToken);
 
         // Now Email should be searchable
-        var after = db.SearchDocuments("Person", "Email:alice-at-test").ToList();
+        var after = db.Search("Person", "Email:alice-at-test").ToList();
         Assert.Single(after);
         Assert.Equal("Alice", after[0].RootElement.GetProperty("Name").GetString());
     }
@@ -436,7 +436,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task SearchDocuments_ReturnsETags()
+    public async Task Search_ReturnsETags()
     {
         using var db = await CreateDbWithSchema();
         await db.SaveAsync("Person",
@@ -444,7 +444,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
             TestContext.Current.CancellationToken);
         db.ReloadSearcher();
 
-        var results = db.SearchDocuments("Person", "Name:ETagSearch").ToList();
+        var results = db.Search("Person", "Name:ETagSearch").ToList();
         Assert.Single(results);
         Assert.Equal("ETagSearch", results[0].RootElement.GetProperty("Name").GetString());
         Assert.NotEmpty(results[0].GetETag()!);
@@ -464,13 +464,13 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
         Assert.Equal(5, result.Changes.Count);
 
         // Verify all are in Table Storage
-        var all = await db.GetManyDocumentsAsync("Person",
+        var all = await db.GetManyAsync("Person",
             cancellationToken: TestContext.Current.CancellationToken).ToListAsync();
         Assert.Equal(5, all.Count);
 
         // Verify all are searchable
         db.ReloadSearcher();
-        var searchResults = db.SearchDocuments("Person").ToList();
+        var searchResults = db.Search("Person").ToList();
         Assert.Equal(5, searchResults.Count);
     }
 
@@ -569,7 +569,7 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task SearchDocuments_AnnotatesETags()
+    public async Task Search_AnnotatesETags()
     {
         using var db = await CreateDbWithSchema();
         await db.SaveAsync("Person",
@@ -577,21 +577,21 @@ public class DynamicSchemaTests : IClassFixture<LottaDBFixture>
             TestContext.Current.CancellationToken);
         db.ReloadSearcher();
 
-        var results = db.SearchDocuments("Person", "Name:SearchETag").ToList();
+        var results = db.Search("Person", "Name:SearchETag").ToList();
         Assert.Single(results);
         Assert.NotNull(results[0].GetETag());
         Assert.NotEmpty(results[0].GetETag()!);
     }
 
     [Fact]
-    public async Task GetManyDocumentsAsync_AnnotatesETags()
+    public async Task GetManyAsync_AnnotatesETags()
     {
         using var db = await CreateDbWithSchema();
         await db.SaveAsync("Person",
             JsonDocument.Parse("""{ "Name": "GetManyETag", "Age": 30 }"""),
             TestContext.Current.CancellationToken);
 
-        var results = await db.GetManyDocumentsAsync("Person",
+        var results = await db.GetManyAsync("Person",
             cancellationToken: TestContext.Current.CancellationToken).ToListAsync();
         Assert.Single(results);
         Assert.NotNull(results[0].GetETag());

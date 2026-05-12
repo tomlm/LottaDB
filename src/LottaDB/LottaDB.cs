@@ -559,13 +559,13 @@ public class LottaDB : IDisposable
         string newETag;
         if (existingETag != null)
         {
-            if (!await _tableAdapter.TryReplaceDynamicAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, existingETag, cancellationToken))
+            if (!await _tableAdapter.TryReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, existingETag, cancellationToken))
                 throw new ConcurrencyException(key, typeof(JsonDocument));
             newETag = _tableAdapter.GetETag(_lottaCatalog.Name, key) ?? "";
         }
         else
         {
-            newETag = await _tableAdapter.UpsertDynamicAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, cancellationToken);
+            newETag = await _tableAdapter.UpsertJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, cancellationToken);
         }
         json.SetETag(newETag);
 
@@ -596,7 +596,7 @@ public class LottaDB : IDisposable
     public async Task<JsonDocument?> GetAsync(string schemaName, string key, CancellationToken cancellationToken = default)
     {
         GetSchema(schemaName); // validate schema exists
-        var result = await _tableAdapter.GetDynamicAsync(_lottaCatalog.Name, key, cancellationToken);
+        var result = await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
         if (result != null) result.SetKey(key);
         return result;
     }
@@ -612,7 +612,7 @@ public class LottaDB : IDisposable
         GetSchema(schemaName); // validate schema exists
 
         // Fetch document before deleting (needed for handlers)
-        var doc = await _tableAdapter.GetDynamicAsync(_lottaCatalog.Name, key, cancellationToken);
+        var doc = await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
 
         await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
         lock (_lock)
@@ -633,7 +633,7 @@ public class LottaDB : IDisposable
     /// </summary>
     /// <param name="schemaName">The registered schema name.</param>
     /// <param name="query">Optional Lucene query string (e.g. "Name:Tom AND Age:[20 TO 30]").</param>
-    public IEnumerable<JsonDocument> SearchDocuments(string schemaName, string? query = null)
+    public IEnumerable<JsonDocument> Search(string schemaName, string? query = null)
     {
         ReloadSearcher();
         var mapper = _dynamicMappers[schemaName];
@@ -680,12 +680,12 @@ public class LottaDB : IDisposable
     /// <param name="filter">Optional OData filter expression (e.g. "Age gt 20 and Name eq 'Tom'").</param>
     /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async IAsyncEnumerable<JsonDocument> GetManyDocumentsAsync(string schemaName,
+    public async IAsyncEnumerable<JsonDocument> GetManyAsync(string schemaName,
         string? filter = null, int? maxPerPage = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var schema = GetSchema(schemaName); // validate schema exists
-        await foreach (var doc in _tableAdapter.GetManyDynamicAsync(_lottaCatalog.Name, schema.StorageTypeName, filter, maxPerPage, cancellationToken))
+        await foreach (var doc in _tableAdapter.GetManyJsonDocumentsAsync(_lottaCatalog.Name, schema.StorageTypeName, filter, maxPerPage, cancellationToken))
         {
             doc.SetKey(schema.ExtractKey(doc));
             yield return doc;
@@ -770,7 +770,7 @@ public class LottaDB : IDisposable
             if (pendingKeys.Contains(key))
                 await FlushAsync();
 
-            pendingActions.Add(_tableAdapter.CreateDynamicUpsertAction(key, schema.StorageTypeName, doc, schema));
+            pendingActions.Add(_tableAdapter.CreateJsonDocumentUpsertAction(key, schema.StorageTypeName, doc, schema));
             pendingKeys.Add(key);
             pendingDocs.Add((doc, key));
 
@@ -810,7 +810,7 @@ public class LottaDB : IDisposable
             _indexDirty = true;
         }
 
-        await foreach (var json in _tableAdapter.GetManyDynamicAsync(
+        await foreach (var json in _tableAdapter.GetManyJsonDocumentsAsync(
             _lottaCatalog.Name, storageTypeName, cancellationToken: cancellationToken))
         {
             var document = new Document();
@@ -1152,14 +1152,14 @@ public class LottaDB : IDisposable
 
         if (recursive)
         {
-            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsAsync(traits: BlobTraits.None, states: BlobStates.None, prefix: fullPrefix, cancellationToken: cancellationToken))
             {
                 blobs.Add(StripDbPrefix(item.Name, dbPrefix));
             }
         }
         else
         {
-            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsByHierarchyAsync(traits: BlobTraits.None, states: BlobStates.None, delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
             {
                 if (item.IsBlob)
                     blobs.Add(StripDbPrefix(item.Blob.Name, dbPrefix));
@@ -1192,7 +1192,7 @@ public class LottaDB : IDisposable
         while (queue.Count > 0)
         {
             var current = queue.Dequeue();
-            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: current, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsByHierarchyAsync(traits: BlobTraits.None, states: BlobStates.None, delimiter: "/", prefix: current, cancellationToken: cancellationToken))
             {
                 if (item.IsPrefix)
                 {

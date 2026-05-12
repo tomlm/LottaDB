@@ -337,7 +337,7 @@ internal class TableStorageAdapter
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
-    internal TableTransactionAction CreateDynamicUpsertAction(string key, string schemaName, JsonDocument json, DynamicSchema schema)
+    internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, DynamicSchema schema)
     {
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
         entity[TableEntityExtensions.TypeProperty] = schemaName;
@@ -405,7 +405,7 @@ internal class TableStorageAdapter
     /// <param name="schema">The schema definition used to extract tag values.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The new ETag after upsert.</returns>
-    public async Task<string> UpsertDynamicAsync(string tableName, string key, string schemaName,
+    public async Task<string> UpsertJsonDocumentAsync(string tableName, string key, string schemaName,
         JsonDocument json, DynamicSchema schema, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
@@ -427,7 +427,7 @@ internal class TableStorageAdapter
     /// Point-read a dynamic JSON document by key.
     /// Returns a <see cref="JsonDocument"/> with ETag annotated via <see cref="ObjectExtensions.SetETag{T}"/>.
     /// </summary>
-    public async Task<JsonDocument?> GetDynamicAsync(string tableName, string key, CancellationToken cancellationToken = default)
+    public async Task<JsonDocument?> GetJsonDocumentAsync(string tableName, string key, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         try
@@ -449,7 +449,7 @@ internal class TableStorageAdapter
     /// Query dynamic JSON documents by schema name with an optional OData filter.
     /// Each returned <see cref="JsonDocument"/> has its ETag annotated.
     /// </summary>
-    public async IAsyncEnumerable<JsonDocument> GetManyDynamicAsync(string tableName, string schemaName,
+    public async IAsyncEnumerable<JsonDocument> GetManyJsonDocumentsAsync(string tableName, string schemaName,
         string? filter = null, int? maxPerPage = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -471,7 +471,7 @@ internal class TableStorageAdapter
     }
 
     /// <summary>Conditional replace for a dynamic JSON document. Returns false on ETag mismatch (412).</summary>
-    public async Task<bool> TryReplaceDynamicAsync(string tableName, string key, string schemaName,
+    public async Task<bool> TryReplaceJsonDocumentAsync(string tableName, string key, string schemaName,
         JsonDocument json, DynamicSchema schema, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
