@@ -58,7 +58,7 @@ public static class ObjectExtensions
         if (_table.TryGetValue(obj, out var meta) && meta.Key != null)
             return meta.Key;
 
-        var keyProp = GetKeyProperty(typeof(T));
+        var keyProp = GetKeyProperty(obj.GetType());
         if (keyProp != null)
             return keyProp.GetValue(obj)?.ToString();
 

@@ -47,23 +47,15 @@ internal class TableStorageAdapter
     }
 
     /// <summary>
-    /// Conditional replace using the supplied ETag. Returns false if another writer
-    /// changed the row since it was read (HTTP 412 Precondition Failed) so the caller
-    /// can re-read and retry. A missing row (404) bubbles up as an exception.
+    /// Conditional replace using the supplied ETag. Returns the new ETag on success.
+    /// Throws <see cref="RequestFailedException"/> (412) if another writer changed the row.
     /// </summary>
-    public async Task<bool> TryReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag, CancellationToken cancellationToken = default)
+    public async Task<string> ReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
-        try
-        {
-            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-            return true;
-        }
-        catch (RequestFailedException ex) when (ex.Status == 412)
-        {
-            return false;
-        }
+        var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
+        return response.Headers.ETag.ToString();
     }
 
     /// <summary>
@@ -476,7 +468,12 @@ internal class TableStorageAdapter
     }
 
     /// <summary>Conditional replace for a dynamic JSON document. Returns false on ETag mismatch (412).</summary>
-    public async Task<bool> TryReplaceJsonDocumentAsync(string tableName, string key, string schemaName,
+    /// <summary>
+    /// Conditional replace for a dynamic JSON document. Returns the new ETag on success,
+    /// or null on ETag mismatch (412).
+    /// Throws <see cref="RequestFailedException"/> (412) if another writer changed the row.
+    /// </summary>
+    public async Task<string> ReplaceJsonDocumentAsync(string tableName, string key, string schemaName,
         JsonDocument json, DynamicSchema schema, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
@@ -488,28 +485,26 @@ internal class TableStorageAdapter
             if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
-        try
-        {
-            await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-            return true;
-        }
-        catch (RequestFailedException ex) when (ex.Status == 412)
-        {
-            return false;
-        }
+        var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
+        return response.Headers.ETag.ToString();
     }
 
     /// <summary>
     /// Validates that a user-supplied OData filter does not attempt to override
     /// the fixed PartitionKey or Type constraints, preventing cross-database reads.
     /// </summary>
-    private static void ValidateODataFilter(string filter)
+    /// <summary>
+    /// Validates that a user-supplied OData filter does not attempt to override
+    /// the fixed PartitionKey, RowKey, or Type constraints, preventing cross-database reads.
+    /// </summary>
+    internal static void ValidateODataFilter(string filter)
     {
         if (filter.Contains("PartitionKey", StringComparison.OrdinalIgnoreCase) ||
-            filter.Contains("Type eq", StringComparison.OrdinalIgnoreCase))
+            filter.Contains("RowKey", StringComparison.OrdinalIgnoreCase) ||
+            System.Text.RegularExpressions.Regex.IsMatch(filter, @"\bType\s+(eq|ne|gt|ge|lt|le)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
             throw new ArgumentException(
-                "OData filter must not reference 'PartitionKey' or 'Type' columns. " +
+                "OData filter must not reference 'PartitionKey', 'RowKey', or 'Type' columns. " +
                 "These are managed internally by LottaDB for isolation.", nameof(filter));
         }
     }

@@ -298,7 +298,10 @@ internal class TypeMetadata
                     }),
             });
 
-        var combined = new { Typed = typedSchema, Dynamic = dynamicSchema };
+        // Bump this when the Lucene document format changes (e.g., adding new stored fields)
+        // to force an index rebuild on upgrade even if schema definitions haven't changed.
+        const int IndexFormatVersion = 3;
+        var combined = new { IndexFormatVersion, Typed = typedSchema, Dynamic = dynamicSchema };
         var json = JsonSerializer.Serialize(combined, new JsonSerializerOptions { WriteIndented = false });
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
         return Convert.ToHexString(hash);

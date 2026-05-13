@@ -222,8 +222,9 @@ public class LottaDB : IDisposable
                 if (!_dynamicMappers.TryGetValue(schemaName, out var dynamicMapper)) continue;
                 var bytes = tableEntity.GetObjectBytes();
                 if (bytes.Length == 0) continue;
-                var json = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(bytes);
-                dynamicMapper.ToDocument(json, document);
+                var jsonDoc = System.Text.Json.JsonDocument.Parse(bytes);
+                jsonDoc.SetKey(TableStorageAdapter.DecodeKey(tableEntity.RowKey));
+                dynamicMapper.ToDocument(jsonDoc, document);
             }
             else
             {
@@ -307,9 +308,14 @@ public class LottaDB : IDisposable
         if (existingETag != null)
         {
             // Conditional write — entity has an ETag from a previous read
-            if (!await _tableAdapter.TryReplaceAsync(_lottaCatalog.Name, key, entity, meta, existingETag, cancellationToken))
+            try
+            {
+                newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, entity, meta, existingETag, cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
                 throw new ConcurrencyException(key, entity.GetType());
-            newETag = _tableAdapter.GetETag(_lottaCatalog.Name, key) ?? "";
+            }
         }
         else
         {
@@ -435,13 +441,18 @@ public class LottaDB : IDisposable
 
             var mutated = mutate(current);
 
-            var committed = await _tableAdapter.TryReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
-            if (!committed)
+            string newETag;
+            try
+            {
+                newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
                 continue; // someone else wrote between our read and write — re-read and retry
+            }
 
             // Annotate the mutated entity so the Lucene handler picks up the ETag
-            var newETag = _tableAdapter.GetETag(_lottaCatalog.Name, key);
-            if (newETag != null) mutated!.SetETag(newETag);
+            mutated!.SetETag(newETag);
 
             var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
 
@@ -559,9 +570,14 @@ public class LottaDB : IDisposable
         string newETag;
         if (existingETag != null)
         {
-            if (!await _tableAdapter.TryReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, existingETag, cancellationToken))
+            try
+            {
+                newETag = await _tableAdapter.ReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, existingETag, cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
                 throw new ConcurrencyException(key, typeof(JsonDocument));
-            newETag = _tableAdapter.GetETag(_lottaCatalog.Name, key) ?? "";
+            }
         }
         else
         {
