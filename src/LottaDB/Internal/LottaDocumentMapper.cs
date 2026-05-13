@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
+using Lotta;
 using Version = Lucene.Net.Util.LuceneVersion;
 
 namespace Lotta.Internal;
@@ -130,6 +131,11 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
         if (json != null)
         {
             var obj = (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
+            obj.SetJson(json);
+            var etag = source.Get(LottaDB.ETAG_FIELD);
+            if (etag != null) obj.SetETag(etag);
+            var keyValue = source.Get(LottaDB.KEY_FIELD);
+            if (keyValue != null) obj.SetKey(keyValue);
             if (obj is BlobFile bf) bf.Database = _db;
             return obj;
         }

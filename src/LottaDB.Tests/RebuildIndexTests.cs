@@ -14,10 +14,14 @@ public class RebuildIndexTests
         var before = db.Search<Actor>().ToList();
         Assert.Equal(2, before.Count);
 
-        // Rebuild the index (simulates recovery after Lucene data loss)
+        // Wipe the Lucene index to prove RebuildSearchIndex actually repopulates it
+        db.DeleteSearchIndex();
+        Assert.Empty(db.Search<Actor>().ToList());
+
+        // Rebuild the index from Table Storage
         await db.RebuildSearchIndex(TestContext.Current.CancellationToken);
 
-        // Should still find everything
+        // Should find everything again
         var after = db.Search<Actor>().ToList();
         Assert.Equal(2, after.Count);
     }

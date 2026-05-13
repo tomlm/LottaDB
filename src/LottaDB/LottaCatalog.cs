@@ -108,7 +108,7 @@ public class LottaCatalog : IDisposable
             {
                 var checkConfig = new LottaConfiguration();
                 configure.Invoke(checkConfig);
-                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values);
+                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values, existing._schemas.Values);
                 var newSchema = TypeMetadata.ComputeSchemaFromConfig(checkConfig);
                 if (existingSchema != newSchema)
                     throw new InvalidOperationException(
@@ -129,7 +129,7 @@ public class LottaCatalog : IDisposable
         }
 
         // Compute current schema and compare with stored manifest
-        var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values);
+        var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);
         var table = GetTableClient();
         string? storedSchema = null;
 

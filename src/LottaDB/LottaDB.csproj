@@ -1,12 +1,12 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>Lotta</RootNamespace>
-    <Description>LottaDB is a .NET library that stores POCO objects => Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
+    <Description>LottaDB is a .NET library that stores POCO objects =&gt; Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>2.0.1</Version>
-    <AssemblyVersion>2.0.1.0</AssemblyVersion>
+    <Version>3.0.0</Version>
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,12 +19,12 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.23.0" />
-    <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.4-beta00017" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.27.0" />
+    <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.5-beta00017" /> 
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
     <PackageReference Include="MimeMapping" Version="4.0.0" />
-    <PackageReference Include="System.IO.Pipelines" Version="10.0.6" />
-    <PackageReference Include="System.Linq.Async" Version="6.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.7" />
+    <PackageReference Include="System.Linq.Async" Version="7.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="Ulid" Version="1.4.1" />
   </ItemGroup>
 

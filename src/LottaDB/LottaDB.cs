@@ -13,6 +13,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Linq.Expressions;
+using System.Text.Json;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 using Version = Lucene.Net.Util.LuceneVersion;
 
@@ -41,6 +42,9 @@ public class LottaDB : IDisposable
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
     private readonly ConcurrentDictionary<Type, List<object>> _handlers = new();
+    internal readonly ConcurrentDictionary<string, DynamicSchema> _schemas = new();
+    private readonly ConcurrentDictionary<string, DynamicDocumentMapper> _dynamicMappers = new();
+    private readonly ConcurrentDictionary<string, List<Func<JsonDocument, TriggerKind, LottaDB, Task>>> _schemaHandlers = new();
 
     // Cycle detection: tracks object keys being processed in the current call chain
     private static readonly AsyncLocal<HashSet<string>> _processing = new();
@@ -48,6 +52,7 @@ public class LottaDB : IDisposable
     private static readonly AsyncLocal<List<ObjectChange>?> _chainChanges = new();
     private static readonly AsyncLocal<List<Exception>?> _chainErrors = new();
     internal const string OBJECT_FIELD = "_object_";
+    internal const string ETAG_FIELD = "_etag_";
     internal const string KEY_FIELD = "_key_";
     internal const string CONTENT_FIELD = "_content_";
 
@@ -69,6 +74,7 @@ public class LottaDB : IDisposable
         InitializeMappers();
         InitializeHandlers();
         InitializeLuceneHandlers();
+        InitializeDynamicSchemas();
 
         // Build a per-field analyzer that merges all mapper analyzers.
         // Default is KeywordAnalyzer (matching DocumentMapperBase) so unregistered
@@ -76,6 +82,8 @@ public class LottaDB : IDisposable
         var perFieldAnalyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
         perFieldAnalyzer.AddAnalyzer(KEY_FIELD, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
         foreach (var mapper in _mappers.Values)
+            perFieldAnalyzer.Merge(mapper.Analyzer);
+        foreach (var mapper in _dynamicMappers.Values)
             perFieldAnalyzer.Merge(mapper.Analyzer);
 
         _indexWriter = new IndexWriter(_directory,
@@ -158,12 +166,32 @@ public class LottaDB : IDisposable
                     var mapper = GetMapper<T>();
                     var document = new Document();
                     mapper.ToDocument(entity, document);
+                    var etag = entity.GetETag()
+                        ?? throw new InvalidOperationException(
+                            $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
+                    document.Add(new StoredField(ETAG_FIELD, etag));
                     _indexWriter.AddDocument(document);
                 }
             }
             ScheduleRefresh();
             return Task.CompletedTask;
         }));
+    }
+
+    private void InitializeDynamicSchemas()
+    {
+        foreach (var (name, schema) in _config.SchemaConfigurations)
+        {
+            _schemas[name] = schema;
+            var mapper = new DynamicDocumentMapper(schema, LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer);
+            _dynamicMappers[name] = mapper;
+        }
+
+        foreach (var reg in _config.OnSchemaRegistrations)
+        {
+            var list = _schemaHandlers.GetOrAdd(reg.SchemaName, _ => new List<Func<JsonDocument, TriggerKind, LottaDB, Task>>());
+            list.Add(reg.Handler);
+        }
     }
 
     /// <summary>
@@ -179,13 +207,37 @@ public class LottaDB : IDisposable
             _indexDirty = true;
         }
 
-        await foreach (var entity in _tableAdapter.GetAllAsync(_lottaCatalog.Name, cancellationToken: cancellationToken))
+        // Single pass over all rows — dispatch to typed or dynamic mapper based on Type column
+        await foreach (var tableEntity in _tableAdapter.GetAllRawAsync(_lottaCatalog.Name, cancellationToken: cancellationToken))
         {
-            var meta = GetMeta(entity.GetType());
-            var key = meta.GetKey(entity);
-            var mapper = GetMapper(entity.GetType());
+            var typeName = tableEntity.GetString(TableEntityExtensions.TypeProperty);
+            if (typeName == null) continue;
+
             var document = new Document();
-            mapper.ToDocument(entity, document);
+
+            if (DynamicSchema.IsDynamicTypeName(typeName))
+            {
+                // Dynamic schema entity — look up by unprefixed name
+                var schemaName = DynamicSchema.UnprefixTypeName(typeName);
+                if (!_dynamicMappers.TryGetValue(schemaName, out var dynamicMapper)) continue;
+                var bytes = tableEntity.GetObjectBytes();
+                if (bytes.Length == 0) continue;
+                var jsonDoc = System.Text.Json.JsonDocument.Parse(bytes);
+                jsonDoc.SetKey(TableStorageAdapter.DecodeKey(tableEntity.RowKey));
+                dynamicMapper.ToDocument(jsonDoc, document);
+            }
+            else
+            {
+                // Typed entity — deserialize via the standard path
+                var entity = TableStorageAdapter.DeserializeEntity(tableEntity);
+                if (entity == null || !_metadata.ContainsKey(entity.GetType())) continue;
+                var mapper = GetMapper(entity.GetType());
+                mapper.ToDocument(entity, document);
+            }
+
+            // Store ETag from Table Storage
+            document.Add(new StoredField(ETAG_FIELD, tableEntity.ETag.ToString()));
+
             lock (_lock)
             {
                 _indexWriter.AddDocument(document);
@@ -231,7 +283,9 @@ public class LottaDB : IDisposable
     // === Write ===
 
     /// <summary>
-    /// Save (upsert) an object. Key extracted from [Key] attribute.
+    /// Save an object. Key extracted from [Key] attribute.
+    /// If the object has an ETag (from a previous read), performs a conditional write
+    /// that throws <see cref="ConcurrencyException"/> on conflict. Otherwise, performs an unconditional upsert.
     /// Writes to table storage, then runs On&lt;T&gt; handlers (including Lucene indexing).
     /// </summary>
     /// <param name="entity">The object to save.</param>
@@ -247,7 +301,28 @@ public class LottaDB : IDisposable
         if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
             meta.SetKey(entity, key);
 
-        await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta);
+        entity.SetKey(key);
+
+        var existingETag = entity.GetETag();
+        string newETag;
+        if (existingETag != null)
+        {
+            // Conditional write — entity has an ETag from a previous read
+            try
+            {
+                newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, entity, meta, existingETag, cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
+                throw new ConcurrencyException(key, entity.GetType());
+            }
+        }
+        else
+        {
+            // Unconditional upsert
+            newETag = await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta, cancellationToken);
+        }
+        entity.SetETag(newETag);
 
         if (entity is BlobFile bf) bf.Database = this;
 
@@ -366,9 +441,18 @@ public class LottaDB : IDisposable
 
             var mutated = mutate(current);
 
-            var committed = await _tableAdapter.TryReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
-            if (!committed)
+            string newETag;
+            try
+            {
+                newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
                 continue; // someone else wrote between our read and write — re-read and retry
+            }
+
+            // Annotate the mutated entity so the Lucene handler picks up the ETag
+            mutated!.SetETag(newETag);
 
             var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
 
@@ -376,6 +460,8 @@ public class LottaDB : IDisposable
             var changes = _chainChanges.Value ??= new List<ObjectChange>();
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
+
+            mutated.SetKey(key);
 
             await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
 
@@ -402,7 +488,9 @@ public class LottaDB : IDisposable
     /// <returns>The object, or null if not found.</returns>
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default) where T : class, new()
     {
-        var (result, _) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+        var (result, etag) = await _tableAdapter.GetAsync<T>(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+        if (result != null && etag != null) result.SetETag(etag);
+        if (result != null) result.SetKey(key);
         if (result is BlobFile bf) bf.Database = this;
         return result;
     }
@@ -421,6 +509,8 @@ public class LottaDB : IDisposable
     {
         await foreach (var item in _tableAdapter.GetManyAsync<T>(_lottaCatalog.Name, predicate, maxPerPage, cancellationToken))
         {
+            var meta = GetMeta(item.GetType());
+            item.SetKey(meta.GetKey(item));
             if (item is BlobFile bf) bf.Database = this;
             yield return item;
         }
@@ -458,6 +548,323 @@ public class LottaDB : IDisposable
     /// <param name="predicate">Filter expression applied to Lucene results.</param>
     public IQueryable<T> Search<T>(Expression<Func<T, bool>> predicate) where T : class, new()
         => Search<T>().Where(predicate);
+
+    // === Dynamic (JSON Schema) API ===
+
+    /// <summary>
+    /// Save a JSON document using a registered dynamic schema.
+    /// The key is extracted from the JSON (or auto-generated for <see cref="KeyMode.Auto"/>).
+    /// If the document has an ETag (from a previous read), performs a conditional write
+    /// that throws <see cref="ConcurrencyException"/> on conflict. Otherwise, performs an unconditional upsert.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="json">The JSON document to save.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<ObjectResult> SaveAsync(string schemaName, JsonDocument json, CancellationToken cancellationToken = default)
+    {
+        var schema = GetSchema(schemaName);
+        var key = schema.ExtractKey(json);
+        json.SetKey(key);
+
+        var existingETag = json.GetETag();
+        string newETag;
+        if (existingETag != null)
+        {
+            try
+            {
+                newETag = await _tableAdapter.ReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, existingETag, cancellationToken);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+            {
+                throw new ConcurrencyException(key, typeof(JsonDocument));
+            }
+        }
+        else
+        {
+            newETag = await _tableAdapter.UpsertJsonDocumentAsync(_lottaCatalog.Name, key, schema.StorageTypeName, json, schema, cancellationToken);
+        }
+        json.SetETag(newETag);
+
+        // Index in Lucene
+        var mapper = _dynamicMappers[schemaName];
+        lock (_lock)
+        {
+            _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+            var document = new Document();
+            mapper.ToDocument(json, document);
+            document.Add(new StoredField(ETAG_FIELD, newETag));
+            _indexWriter.AddDocument(document);
+        }
+        ScheduleRefresh();
+
+        var change = new ObjectChange { Type = typeof(JsonDocument), Key = key, Kind = ChangeKind.Saved };
+        var errors = new List<Exception>();
+        await RunSchemaHandlersAsync(schemaName, json, TriggerKind.Saved, errors, cancellationToken);
+        return new ObjectResult { Changes = [change], Errors = errors };
+    }
+
+    /// <summary>
+    /// Get a JSON document by schema name and key.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="key">The document key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<JsonDocument?> GetAsync(string schemaName, string key, CancellationToken cancellationToken = default)
+    {
+        GetSchema(schemaName); // validate schema exists
+        return await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
+    }
+
+    /// <summary>
+    /// Delete a JSON document by schema name and key.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="key">The document key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<ObjectResult> DeleteAsync(string schemaName, string key, CancellationToken cancellationToken = default)
+    {
+        GetSchema(schemaName); // validate schema exists
+
+        // Fetch document before deleting (needed for handlers)
+        var doc = await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
+
+        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
+        lock (_lock)
+        {
+            _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+        }
+        ScheduleRefresh();
+
+        var change = new ObjectChange { Type = typeof(JsonDocument), Key = key, Kind = ChangeKind.Deleted };
+        var errors = new List<Exception>();
+        if (doc != null)
+            await RunSchemaHandlersAsync(schemaName, doc, TriggerKind.Deleted, errors, cancellationToken);
+        return new ObjectResult { Changes = [change], Errors = errors };
+    }
+
+    /// <summary>
+    /// Search dynamic documents using a Lucene query string.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="query">Optional Lucene query string (e.g. "Name:Tom AND Age:[20 TO 30]").</param>
+    public IEnumerable<JsonDocument> Search(string schemaName, string? query = null)
+    {
+        ReloadSearcher();
+        var schema = GetSchema(schemaName);
+        var mapper = _dynamicMappers[schemaName];
+
+        // Build query: type filter AND user query
+        var boolQuery = new Lucene.Net.Search.BooleanQuery();
+        boolQuery.Add(new Lucene.Net.Search.TermQuery(new Term("_type_", schema.StorageTypeName)),
+            Lucene.Net.Search.Occur.MUST);
+
+        if (!string.IsNullOrEmpty(query))
+        {
+            var parser = new FieldMappingQueryParser(
+                LuceneVersion.LUCENE_48, mapper.DefaultSearchProperty, mapper.Analyzer, mapper);
+            boolQuery.Add(parser.Parse(query), Lucene.Net.Search.Occur.MUST);
+        }
+
+        // Execute search using IndexWriter's reader
+        using var reader = _indexWriter.GetReader(applyAllDeletes: true);
+        var searcher = new Lucene.Net.Search.IndexSearcher(reader);
+        var hits = searcher.Search(boolQuery, int.MaxValue);
+        var results = new List<JsonDocument>();
+        foreach (var hit in hits.ScoreDocs)
+        {
+            var doc = searcher.Doc(hit.Doc);
+            var json = doc.Get(OBJECT_FIELD);
+            if (json != null)
+            {
+                var jsonDoc = JsonDocument.Parse(json);
+                var etag = doc.Get(ETAG_FIELD);
+                if (etag != null) jsonDoc.SetETag(etag);
+                var keyValue = doc.Get(KEY_FIELD);
+                if (keyValue != null) jsonDoc.SetKey(keyValue);
+                results.Add(jsonDoc);
+            }
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Get many dynamic documents from Table Storage with an optional OData filter on queryable columns.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="filter">Optional OData filter expression (e.g. "Age gt 20 and Name eq 'Tom'").</param>
+    /// <param name="maxPerPage">Maximum items per page for the underlying Azure Table Storage query.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async IAsyncEnumerable<JsonDocument> GetManyAsync(string schemaName,
+        string? filter = null, int? maxPerPage = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var schema = GetSchema(schemaName); // validate schema exists
+        await foreach (var doc in _tableAdapter.GetManyJsonDocumentsAsync(_lottaCatalog.Name, schema.StorageTypeName, filter, maxPerPage, cancellationToken))
+        {
+            yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// <summary>
+    /// Save (upsert) multiple dynamic JSON documents in bulk. Table storage writes are batched
+    /// transactionally (auto-flushed at 100 ops or on duplicate key). Lucene indexing and
+    /// OnSchema handlers run after each batch commit.
+    /// </summary>
+    /// <param name="schemaName">The registered schema name.</param>
+    /// <param name="documents">The JSON documents to save.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<ObjectResult> SaveManyAsync(string schemaName, IEnumerable<JsonDocument> documents, CancellationToken cancellationToken = default)
+    {
+        var schema = GetSchema(schemaName);
+        var mapper = _dynamicMappers[schemaName];
+        var allChanges = new List<ObjectChange>();
+        var allErrors = new List<Exception>();
+        var pendingActions = new List<TableTransactionAction>();
+        var pendingKeys = new HashSet<string>();
+        var pendingDocs = new List<(JsonDocument doc, string key)>();
+
+        async Task FlushAsync()
+        {
+            var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+
+            // Annotate each document with its ETag from the batch response
+            for (int i = 0; i < pendingDocs.Count; i++)
+            {
+                if (etags[i] != null)
+                    pendingDocs[i].doc.SetETag(etags[i]!);
+            }
+
+            // Index in Lucene after batch commit
+            lock (_lock)
+            {
+                foreach (var (doc, key) in pendingDocs)
+                {
+                    _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+                    var document = new Document();
+                    mapper.ToDocument(doc, document);
+                    var etag = doc.GetETag();
+                    if (etag != null)
+                        document.Add(new StoredField(ETAG_FIELD, etag));
+                    _indexWriter.AddDocument(document);
+                }
+                _indexDirty = true;
+            }
+
+            // Run OnSchema handlers after batch commit
+            foreach (var (doc, key) in pendingDocs)
+            {
+                allChanges.Add(new ObjectChange { Type = typeof(JsonDocument), Key = key, Kind = ChangeKind.Saved });
+                await RunSchemaHandlersAsync(schemaName, doc, TriggerKind.Saved, allErrors, cancellationToken);
+            }
+
+            pendingActions.Clear();
+            pendingKeys.Clear();
+            pendingDocs.Clear();
+        }
+
+        foreach (var json in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var key = schema.ExtractKey(json);
+            var doc = json;
+            doc.SetKey(key);
+
+            // Auto-flush on duplicate key
+            if (pendingKeys.Contains(key))
+                await FlushAsync();
+
+            pendingActions.Add(_tableAdapter.CreateJsonDocumentUpsertAction(key, schema.StorageTypeName, doc, schema));
+            pendingKeys.Add(key);
+            pendingDocs.Add((doc, key));
+
+            // Auto-flush at 100 operations
+            if (pendingActions.Count >= 100)
+                await FlushAsync();
+        }
+
+        // Flush remaining
+        if (pendingActions.Count > 0)
+            await FlushAsync();
+
+        ScheduleRefresh();
+        return new ObjectResult { Changes = allChanges, Errors = allErrors };
+    }
+
+    /// <summary>
+    /// Hot-swap a dynamic schema definition at runtime. Re-indexes only this schema's
+    /// documents in Lucene (not the whole index). New queryable properties will be indexed
+    /// on existing documents; removed properties will no longer be indexed but the data
+    /// remains in the JSON blob.
+    /// </summary>
+    /// <param name="schemaName">The schema name to update (must already be registered).</param>
+    /// <param name="schema">The new JSON Schema definition.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task UpdateSchemaAsync(string schemaName, JsonElement schema, CancellationToken cancellationToken = default)
+    {
+        var newSchema = DynamicSchema.Parse(schemaName, schema);
+        _schemas[schemaName] = newSchema;
+
+        var mapper = new DynamicDocumentMapper(newSchema, LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer);
+        _dynamicMappers[schemaName] = mapper;
+
+        // Merge updated analyzer into the IndexWriter
+        lock (_lock)
+        {
+            var writerAnalyzer = (Lucene.Net.Linq.Analysis.PerFieldAnalyzer)_indexWriter.Analyzer;
+            writerAnalyzer.Merge(mapper.Analyzer);
+        }
+
+        // Re-index only this schema's documents
+        var storageTypeName = newSchema.StorageTypeName;
+        lock (_lock)
+        {
+            _indexWriter.DeleteDocuments([new Term("_type_", storageTypeName)]);
+            _indexDirty = true;
+        }
+
+        await foreach (var json in _tableAdapter.GetManyJsonDocumentsAsync(
+            _lottaCatalog.Name, storageTypeName, cancellationToken: cancellationToken))
+        {
+            var document = new Document();
+            mapper.ToDocument(json, document);
+            var etag = json.GetETag();
+            if (etag != null)
+                document.Add(new StoredField(ETAG_FIELD, etag));
+            lock (_lock)
+            {
+                _indexWriter.AddDocument(document);
+                _indexDirty = true;
+            }
+        }
+
+        ReloadSearcher();
+    }
+
+    private async Task RunSchemaHandlersAsync(string schemaName, JsonDocument doc, TriggerKind kind, List<Exception> errors, CancellationToken cancellationToken)
+    {
+        if (!_schemaHandlers.TryGetValue(schemaName, out var handlers)) return;
+        foreach (var handler in handlers)
+        {
+            try
+            {
+                await handler(doc, kind, this);
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        }
+    }
+
+    private DynamicSchema GetSchema(string schemaName)
+    {
+        if (_schemas.TryGetValue(schemaName, out var schema))
+            return schema;
+        throw new InvalidOperationException(
+            $"Schema '{schemaName}' not registered. Call opts.StoreSchema(\"{schemaName}\", schema).");
+    }
 
     /// <summary>
     /// Force a Lucene index commit and refresh the searcher if there are pending writes.
@@ -759,14 +1166,14 @@ public class LottaDB : IDisposable
 
         if (recursive)
         {
-            await foreach (var item in container.GetBlobsAsync(prefix: fullPrefix, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsAsync(traits: BlobTraits.None, states: BlobStates.None, prefix: fullPrefix, cancellationToken: cancellationToken))
             {
                 blobs.Add(StripDbPrefix(item.Name, dbPrefix));
             }
         }
         else
         {
-            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsByHierarchyAsync(traits: BlobTraits.None, states: BlobStates.None, delimiter: "/", prefix: fullPrefix, cancellationToken: cancellationToken))
             {
                 if (item.IsBlob)
                     blobs.Add(StripDbPrefix(item.Blob.Name, dbPrefix));
@@ -799,7 +1206,7 @@ public class LottaDB : IDisposable
         while (queue.Count > 0)
         {
             var current = queue.Dequeue();
-            await foreach (var item in container.GetBlobsByHierarchyAsync(delimiter: "/", prefix: current, cancellationToken: cancellationToken))
+            await foreach (var item in container.GetBlobsByHierarchyAsync(traits: BlobTraits.None, states: BlobStates.None, delimiter: "/", prefix: current, cancellationToken: cancellationToken))
             {
                 if (item.IsPrefix)
                 {
@@ -825,6 +1232,21 @@ public class LottaDB : IDisposable
     }
 
     // === Maintain ===
+
+    /// <summary>
+    /// Deletes all documents from the Lucene index without touching Table Storage.
+    /// Used by tests to verify that RebuildSearchIndex repopulates the index.
+    /// </summary>
+    internal void DeleteSearchIndex()
+    {
+        lock (_lock)
+        {
+            _indexWriter.DeleteAll();
+            _indexWriter.Commit();
+            _lucene.Refresh();
+            _indexDirty = false;
+        }
+    }
 
     /// <summary>
     /// Reset this database: deletes all rows in this database's partition and clears the Lucene index.
@@ -902,12 +1324,7 @@ public class LottaDB : IDisposable
 
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
-                {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
-                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
-                    pendingActions.Clear();
-                    pendingKeys.Clear();
-                }
+                    await FlushTypedAsync();
 
                 pendingActions.Add(_tableAdapter.CreateUpsertAction(key, entity, meta));
                 pendingKeys.Add(key);
@@ -915,19 +1332,25 @@ public class LottaDB : IDisposable
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
-                {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
-                    await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
-                    pendingActions.Clear();
-                    pendingKeys.Clear();
-                }
+                    await FlushTypedAsync();
             }
 
             // Flush remaining
             if (pendingActions.Count > 0)
+                await FlushTypedAsync();
+
+            async Task FlushTypedAsync()
             {
-                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                // Annotate each entity with its ETag from the batch response
+                for (int i = 0; i < pendingEntities.Count; i++)
+                {
+                    if (etags[i] != null)
+                        pendingEntities[i].entity.SetETag(etags[i]!);
+                }
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
+                pendingActions.Clear();
+                pendingKeys.Clear();
             }
         }
         finally
