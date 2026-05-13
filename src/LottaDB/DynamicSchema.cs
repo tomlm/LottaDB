@@ -103,7 +103,7 @@ public class DynamicSchema
         foreach (var prop in json.RootElement.EnumerateObject())
             dict[prop.Name] = prop.Value.Clone();
 
-        dict[KeyProperty] = JsonDocument.Parse($"\"{key}\"").RootElement;
+        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(dict);
         return JsonDocument.Parse(bytes);
@@ -120,7 +120,7 @@ public class DynamicSchema
         foreach (var prop in doc.RootElement.EnumerateObject())
             dict[prop.Name] = prop.Value.Clone();
 
-        dict[KeyProperty] = JsonDocument.Parse($"\"{key}\"").RootElement;
+        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
 
         return JsonSerializer.SerializeToElement(dict);
     }

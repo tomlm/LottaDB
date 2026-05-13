@@ -262,6 +262,7 @@ internal class TableStorageAdapter
         if (obj != null) return null;
         // Fallback: try deserializing as T directly
         var bytes = entity.GetObjectBytes();
+        if (bytes.Length == 0) return null;
         return JsonSerializer.Deserialize<T>(bytes);
     }
 
@@ -436,6 +437,7 @@ internal class TableStorageAdapter
             var bytes = response.Value.GetObjectBytes();
             if (bytes.Length == 0) return null;
             var doc = JsonDocument.Parse(bytes);
+            doc.SetKey(DecodeKey(response.Value.RowKey));
             doc.SetETag(response.Value.ETag.ToString());
             return doc;
         }
@@ -454,6 +456,8 @@ internal class TableStorageAdapter
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
+        if (!string.IsNullOrEmpty(filter))
+            ValidateODataFilter(filter);
         var query = $"PartitionKey eq '{_partitionKey}' and Type eq '{schemaName}'";
         if (!string.IsNullOrEmpty(filter))
             query += $" and ({filter})";
@@ -464,6 +468,7 @@ internal class TableStorageAdapter
             if (bytes.Length > 0)
             {
                 var doc = JsonDocument.Parse(bytes);
+                doc.SetKey(DecodeKey(entity.RowKey));
                 doc.SetETag(entity.ETag.ToString());
                 yield return doc;
             }
@@ -491,6 +496,21 @@ internal class TableStorageAdapter
         catch (RequestFailedException ex) when (ex.Status == 412)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Validates that a user-supplied OData filter does not attempt to override
+    /// the fixed PartitionKey or Type constraints, preventing cross-database reads.
+    /// </summary>
+    private static void ValidateODataFilter(string filter)
+    {
+        if (filter.Contains("PartitionKey", StringComparison.OrdinalIgnoreCase) ||
+            filter.Contains("Type eq", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "OData filter must not reference 'PartitionKey' or 'Type' columns. " +
+                "These are managed internally by LottaDB for isolation.", nameof(filter));
         }
     }
 

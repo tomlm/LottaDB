@@ -35,15 +35,14 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         Analyzer.AddAnalyzer(LottaDB.CONTENT_FIELD, contentAnalyzer);
 
         // Build field mappings for each schema property
-        var propertyAnalyzer = new StandardAnalyzer(version);
         foreach (var prop in schema.Properties)
         {
             var mapping = new DynamicFieldMappingInfo(
-                prop.Name, prop.ClrType, prop.IsAnalyzed, version, propertyAnalyzer);
+                prop.Name, prop.ClrType, prop.IsAnalyzed, version);
             _fieldMappings[prop.Name] = mapping;
 
             Analyzer.AddAnalyzer(prop.Name,
-                prop.IsAnalyzed ? propertyAnalyzer : new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+                prop.IsAnalyzed ? new StandardAnalyzer(version) : new Lucene.Net.Analysis.Core.KeywordAnalyzer());
         }
     }
 
@@ -84,8 +83,11 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
 
     public void ToDocument(object source, Document target)
     {
-        var json = source is JsonDocument jd ? jd.RootElement : (JsonElement)source;
-        var key = _schema.ExtractKey(json);
+        var jsonDoc = source as JsonDocument;
+        var json = jsonDoc != null ? jsonDoc.RootElement : (JsonElement)source;
+        // Use the authoritative key from metadata if available (set by SaveAsync),
+        // otherwise extract from JSON. This prevents auto-key from generating a new ULID.
+        var key = jsonDoc?.GetKey() ?? _schema.ExtractKey(json);
 
         // _key_ field
         target.Add(new StringField(LottaDB.KEY_FIELD, key, Field.Store.YES));

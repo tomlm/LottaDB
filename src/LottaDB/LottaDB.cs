@@ -596,9 +596,7 @@ public class LottaDB : IDisposable
     public async Task<JsonDocument?> GetAsync(string schemaName, string key, CancellationToken cancellationToken = default)
     {
         GetSchema(schemaName); // validate schema exists
-        var result = await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
-        if (result != null) result.SetKey(key);
-        return result;
+        return await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
     }
 
     /// <summary>
@@ -636,11 +634,11 @@ public class LottaDB : IDisposable
     public IEnumerable<JsonDocument> Search(string schemaName, string? query = null)
     {
         ReloadSearcher();
+        var schema = GetSchema(schemaName);
         var mapper = _dynamicMappers[schemaName];
 
         // Build query: type filter AND user query
         var boolQuery = new Lucene.Net.Search.BooleanQuery();
-        var schema = GetSchema(schemaName);
         boolQuery.Add(new Lucene.Net.Search.TermQuery(new Term("_type_", schema.StorageTypeName)),
             Lucene.Net.Search.Occur.MUST);
 
@@ -687,24 +685,15 @@ public class LottaDB : IDisposable
         var schema = GetSchema(schemaName); // validate schema exists
         await foreach (var doc in _tableAdapter.GetManyJsonDocumentsAsync(_lottaCatalog.Name, schema.StorageTypeName, filter, maxPerPage, cancellationToken))
         {
-            doc.SetKey(schema.ExtractKey(doc));
             yield return doc;
         }
     }
 
     /// <summary>
-    /// Hot-swap a dynamic schema definition at runtime. Re-indexes only this schema's
-    /// documents in Lucene (not the whole index). New queryable properties will be indexed
-    /// on existing documents; removed properties will no longer be indexed but the data
-    /// remains in the JSON blob.
-    /// </summary>
-    /// <param name="schemaName">The schema name to update (must already be registered).</param>
-    /// <param name="schema">The new JSON Schema definition.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
     /// <summary>
     /// Save (upsert) multiple dynamic JSON documents in bulk. Table storage writes are batched
-    /// transactionally (auto-flushed at 100 ops or on duplicate key). Lucene indexing runs after
-    /// each batch commit.
+    /// transactionally (auto-flushed at 100 ops or on duplicate key). Lucene indexing and
+    /// OnSchema handlers run after each batch commit.
     /// </summary>
     /// <param name="schemaName">The registered schema name.</param>
     /// <param name="documents">The JSON documents to save.</param>
@@ -787,6 +776,15 @@ public class LottaDB : IDisposable
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
     }
 
+    /// <summary>
+    /// Hot-swap a dynamic schema definition at runtime. Re-indexes only this schema's
+    /// documents in Lucene (not the whole index). New queryable properties will be indexed
+    /// on existing documents; removed properties will no longer be indexed but the data
+    /// remains in the JSON blob.
+    /// </summary>
+    /// <param name="schemaName">The schema name to update (must already be registered).</param>
+    /// <param name="schema">The new JSON Schema definition.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task UpdateSchemaAsync(string schemaName, JsonElement schema, CancellationToken cancellationToken = default)
     {
         var newSchema = DynamicSchema.Parse(schemaName, schema);

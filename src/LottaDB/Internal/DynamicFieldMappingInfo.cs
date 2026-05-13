@@ -20,7 +20,7 @@ internal class DynamicFieldMappingInfo : IFieldMappingInfo
     private readonly bool _isNumeric;
     private readonly Type _clrType;
 
-    public DynamicFieldMappingInfo(string fieldName, Type clrType, bool isAnalyzed, Version version, Analyzer externalAnalyzer)
+    public DynamicFieldMappingInfo(string fieldName, Type clrType, bool isAnalyzed, Version version, Analyzer? analyzer = null)
     {
         FieldName = fieldName;
         PropertyName = fieldName;
@@ -30,7 +30,7 @@ internal class DynamicFieldMappingInfo : IFieldMappingInfo
                   || clrType == typeof(double) || clrType == typeof(float);
 
         _analyzer = isAnalyzed
-            ? new StandardAnalyzer(version)
+            ? analyzer ?? new StandardAnalyzer(version)
             : new Lucene.Net.Analysis.Core.KeywordAnalyzer();
     }
 
