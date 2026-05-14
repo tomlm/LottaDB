@@ -330,14 +330,14 @@ internal class TableStorageAdapter
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
-    internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, DynamicSchema schema)
+    internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, JsonMetadata schema)
     {
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
         entity[TableEntityExtensions.TypeProperty] = schemaName;
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
         foreach (var prop in schema.Properties)
         {
-            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
@@ -399,7 +399,7 @@ internal class TableStorageAdapter
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The new ETag after upsert.</returns>
     public async Task<string> UpsertJsonDocumentAsync(string tableName, string key, string schemaName,
-        JsonDocument json, DynamicSchema schema, CancellationToken cancellationToken = default)
+        JsonDocument json, JsonMetadata schema, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
@@ -408,7 +408,7 @@ internal class TableStorageAdapter
 
         foreach (var prop in schema.Properties)
         {
-            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
 
@@ -474,7 +474,7 @@ internal class TableStorageAdapter
     /// Throws <see cref="RequestFailedException"/> (412) if another writer changed the row.
     /// </summary>
     public async Task<string> ReplaceJsonDocumentAsync(string tableName, string key, string schemaName,
-        JsonDocument json, DynamicSchema schema, string etag, CancellationToken cancellationToken = default)
+        JsonDocument json, JsonMetadata schema, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
@@ -482,7 +482,7 @@ internal class TableStorageAdapter
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
         foreach (var prop in schema.Properties)
         {
-            if (json.RootElement.TryGetProperty(prop.Name, out var val) && val.ValueKind != JsonValueKind.Null)
+            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);

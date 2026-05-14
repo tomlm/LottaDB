@@ -55,22 +55,6 @@ public interface ILottaConfiguration
     /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>
     ILottaConfiguration OnUpload(BlobUploadHandler? handler = null);
 
-    /// <summary>
-    /// Register a dynamic type defined by a JSON Schema. The schema specifies only the queryable properties;
-    /// the full JSON document is stored and retrieved as-is.
-    /// </summary>
-    /// <param name="typeName">A unique name for this document type (e.g. "Person").</param>
-    /// <param name="schema">JSON Schema subset defining queryable properties. See <see cref="DynamicSchema.Parse"/>.</param>
-    ILottaConfiguration StoreSchema(string typeName, JsonElement schema);
-
-    /// <summary>
-    /// Register a handler that runs inline after every save or delete of a dynamic schema document.
-    /// The handler has full DB access — it can save, delete, query, or search any type.
-    /// Multiple handlers per schema are allowed and run in registration order.
-    /// </summary>
-    /// <param name="schemaName">The schema name to react to.</param>
-    /// <param name="handler">Async handler receiving the document, trigger kind, and DB instance.</param>
-    ILottaConfiguration OnSchema(string schemaName, Func<JsonDocument, TriggerKind, LottaDB, Task> handler);
 }
 
 /// <summary>

@@ -108,7 +108,7 @@ public class LottaCatalog : IDisposable
             {
                 var checkConfig = new LottaConfiguration();
                 configure.Invoke(checkConfig);
-                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values, existing._schemas.Values);
+                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values);
                 var newSchema = TypeMetadata.ComputeSchemaFromConfig(checkConfig);
                 if (existingSchema != newSchema)
                     throw new InvalidOperationException(
@@ -127,6 +127,9 @@ public class LottaCatalog : IDisposable
             db.Dispose();
             return _databases[databaseId];
         }
+
+        // Load dynamic schemas from Table Storage before computing the schema hash
+        await db.InitializeJsonDocumentTypesAsync();
 
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);

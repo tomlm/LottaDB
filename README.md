@@ -63,13 +63,13 @@ var found = db.Search<Actor>()
 
 Full documentation is available in the [wiki](https://github.com/tomlm/LottaDB/wiki):
 
-- [Architecture: Catalogs and Databases](https://github.com/tomlm/LottaDB/wiki/Architecture) -- multi-tenancy, catalog settings
-- [Modeling: Keys and Queryable Properties](https://github.com/tomlm/LottaDB/wiki/Modeling) -- attributes, fluent config, default search
-- [CRUD Operations](https://github.com/tomlm/LottaDB/wiki/CRUD-Operations) -- Save, Get, Delete, Change, bulk operations
-- [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ) -- full-text search, LINQ queries
-- [Vector Similarity Search](https://github.com/tomlm/LottaDB/wiki/Vector-Search) -- embeddings, .Similar() queries
-- [Dynamic Schemas](https://github.com/tomlm/LottaDB/wiki/Dynamic-Schemas) -- JSON Schema types, runtime schema updates
-- [Object Metadata and Concurrency](https://github.com/tomlm/LottaDB/wiki/Object-Metadata) -- ETags, keys, cached JSON
+- [Architecture](https://github.com/tomlm/LottaDB/wiki/Architecture) -- catalogs, databases, multi-tenancy
+- [Storing Typed Objects](https://github.com/tomlm/LottaDB/wiki/Storing-Typed-Objects) -- C# classes, attributes, fluent config, polymorphism
+- [Storing Dynamic Objects](https://github.com/tomlm/LottaDB/wiki/Storing-Dynamic-Objects) -- JsonDocumentType, QueryableProperty, JsonPath
+- [CRUD Operations](https://github.com/tomlm/LottaDB/wiki/CRUD-Operations) -- Save, Get, Delete, Change, bulk ops
+- [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ) -- full-text search, LINQ queries, joins
+- [Vector Search](https://github.com/tomlm/LottaDB/wiki/Vector-Search) -- embeddings, .Similar() queries
+- [Object Metadata](https://github.com/tomlm/LottaDB/wiki/Object-Metadata) -- ETags, keys, cached JSON, concurrency
 - [Blob Storage](https://github.com/tomlm/LottaDB/wiki/Blob-Storage) -- upload, download, metadata extraction
-- [Triggers and Materialized Views](https://github.com/tomlm/LottaDB/wiki/Triggers-and-Views) -- On<T> handlers, cascading views
+- [Triggers and Views](https://github.com/tomlm/LottaDB/wiki/Triggers-and-Views) -- On<T> handlers, materialized views
 - [Schema Migration](https://github.com/tomlm/LottaDB/wiki/Schema-Migration) -- automatic index rebuilds
