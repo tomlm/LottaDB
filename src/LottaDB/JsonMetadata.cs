@@ -36,17 +36,6 @@ public class JsonMetadata
     /// <summary>The queryable properties defined by this schema. These are indexed in Lucene and promoted to Table Storage columns.</summary>
     public List<IndexedJsonProperty> Properties { get; set; } = new();
 
-    /// <summary>
-    /// Parse a JSON Schema subset into a JsonMetadata.
-    /// Expected format:
-    /// <code>
-    /// {
-    ///   "properties": { "Name": { "type": "string" }, "Age": { "type": "integer" } },
-    ///   "key": "Id",        // optional, default "Id"
-    ///   "keyMode": "Auto"   // optional, default "Auto"
-    /// }
-    /// </code>
-    /// </summary>
     /// <summary>Parse from a <see cref="JsonDocumentType"/> entity.</summary>
     public static JsonMetadata Parse(JsonDocumentType docType)
     {
@@ -197,7 +186,15 @@ public class JsonMetadata
             KeyMode = schema.KeyMode.ToString(),
             Properties = schema.Properties
                 .OrderBy(p => p.Name)
-                .Select(p => new { p.Name, Type = p.ClrType.FullName, p.IsAnalyzed })
+                .Select(p => new
+                {
+                    p.Name,
+                    Type = p.ClrType.FullName,
+                    p.IsAnalyzed,
+                    p.JsonPath,
+                    p.DefaultSearchProperty,
+                    p.IsVectorField
+                })
         };
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = false });
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
