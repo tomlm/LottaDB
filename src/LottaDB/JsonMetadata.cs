@@ -197,7 +197,15 @@ public class JsonMetadata
             KeyMode = schema.KeyMode.ToString(),
             Properties = schema.Properties
                 .OrderBy(p => p.Name)
-                .Select(p => new { p.Name, Type = p.ClrType.FullName, p.IsAnalyzed })
+                .Select(p => new
+                {
+                    p.Name,
+                    Type = p.ClrType.FullName,
+                    p.IsAnalyzed,
+                    p.JsonPath,
+                    p.DefaultSearchProperty,
+                    p.IsVectorField
+                })
         };
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = false });
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
