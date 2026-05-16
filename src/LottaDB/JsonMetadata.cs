@@ -36,17 +36,6 @@ public class JsonMetadata
     /// <summary>The queryable properties defined by this schema. These are indexed in Lucene and promoted to Table Storage columns.</summary>
     public List<IndexedJsonProperty> Properties { get; set; } = new();
 
-    /// <summary>
-    /// Parse a JSON Schema subset into a JsonMetadata.
-    /// Expected format:
-    /// <code>
-    /// {
-    ///   "properties": { "Name": { "type": "string" }, "Age": { "type": "integer" } },
-    ///   "key": "Id",        // optional, default "Id"
-    ///   "keyMode": "Auto"   // optional, default "Auto"
-    /// }
-    /// </code>
-    /// </summary>
     /// <summary>Parse from a <see cref="JsonDocumentType"/> entity.</summary>
     public static JsonMetadata Parse(JsonDocumentType docType)
     {
