@@ -5,12 +5,13 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_MaterializeThenJoinInMemory()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new Actor { Domain = "join.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Actor { Domain = "join.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n1", AuthorId = "alice", Content = "Hello from Alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "join.test", Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Actor { Domain = "join.test", Username = "bob", DisplayName = "Bob" }, ct);
+        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n1", AuthorId = "alice", Content = "Hello from Alice", Published = DateTimeOffset.UtcNow }, ct);
+        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow }, ct);
 
         // Ad-hoc join: materialize both sides via SearchAsync, then LINQ join in memory
 
@@ -29,11 +30,12 @@ public class AdHocJoinTests
     [Fact]
     public async Task AdHocJoin_WithWhereClause()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new Actor { Domain = "join.test", Username = "carol", DisplayName = "Carol" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "join.test", Username = "carol", DisplayName = "Carol" }, ct);
+        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow }, ct);
+        await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow }, ct);
 
         var joined = (
             from note in db.Search<Note>().Where(n => n.Content.Contains("Important")).ToList()
@@ -49,10 +51,11 @@ public class AdHocJoinTests
     [Fact]
     public async Task SearchAsync_WithQueryString_FiltersResults()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, ct);
 
         // SearchAsync with no query returns all
         var all = db.Search<Actor>().ToList();
@@ -67,10 +70,11 @@ public class AdHocJoinTests
     [Fact]
     public async Task SearchAsync_WithOpenQueryString_FiltersResults()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, ct);
 
         // SearchAsync with no query returns all
         var all = db.Search<Actor>().ToList();

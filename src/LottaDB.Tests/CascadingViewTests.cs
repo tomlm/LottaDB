@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public class CascadingViewTests
 {
-    private async Task<LottaDB> CreateDbAsync([CallerMemberName] string? testName = null)
+    private async Task<LottaDB> CreateDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
@@ -73,72 +73,77 @@ public class CascadingViewTests
                     Published = nv.Published,
                 });
             });
-        }, testName: testName);
+        }, testName: testName, cancellationToken: cancellationToken);
     }
 
     [Fact]
     public async Task CascadingView_NoteCreates_NoteViewAndFeedEntry()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, ct);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c1", TestContext.Current.CancellationToken));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c1", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c1", ct));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c1", ct));
     }
 
     [Fact]
     public async Task CascadingView_ActorChange_UpdatesBothViews()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "c2", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, ct);
+        await db.SaveAsync(new Note { NoteId = "c2", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, ct);
 
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" }, TestContext.Current.CancellationToken);
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" }, ct);
 
-        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-c2", TestContext.Current.CancellationToken))!.AuthorDisplay);
-        Assert.Contains("After", (await db.GetAsync<FeedEntry>("fe-nv-c2", TestContext.Current.CancellationToken))!.Title);
+        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-c2", ct))!.AuthorDisplay);
+        Assert.Contains("After", (await db.GetAsync<FeedEntry>("fe-nv-c2", ct))!.Title);
     }
 
     [Fact]
     public async Task CascadingView_NoteDeleted_DeletesBothViews()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, ct);
         var note = new Note { NoteId = "c3", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note, TestContext.Current.CancellationToken);
+        await db.SaveAsync(note, ct);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c3", TestContext.Current.CancellationToken));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c3", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c3", ct));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c3", ct));
 
-        await db.DeleteAsync(note, TestContext.Current.CancellationToken);
+        await db.DeleteAsync(note, ct);
 
-        Assert.Null(await db.GetAsync<NoteView>("nv-c3", TestContext.Current.CancellationToken));
-        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c3", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<NoteView>("nv-c3", ct));
+        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c3", ct));
     }
 
     [Fact]
     public async Task CascadingView_ActorDeleted_DeletesAllViews()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "gone-actor", DisplayName = "Gone" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "c4", AuthorId = "gone-actor", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "gone-actor", DisplayName = "Gone" }, ct);
+        await db.SaveAsync(new Note { NoteId = "c4", AuthorId = "gone-actor", Content = "A", Published = DateTimeOffset.UtcNow }, ct);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-c4", TestContext.Current.CancellationToken));
-        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c4", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-c4", ct));
+        Assert.NotNull(await db.GetAsync<FeedEntry>("fe-nv-c4", ct));
 
-        await db.DeleteAsync<Actor>("gone-actor", TestContext.Current.CancellationToken);
+        await db.DeleteAsync<Actor>("gone-actor", ct);
 
-        Assert.Null(await db.GetAsync<NoteView>("nv-c4", TestContext.Current.CancellationToken));
-        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c4", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<NoteView>("nv-c4", ct));
+        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-c4", ct));
     }
 
     [Fact]
     public async Task CascadingView_ResultContainsAllChanges()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "result-actor", DisplayName = "R" }, TestContext.Current.CancellationToken);
-        var result = await db.SaveAsync(new Note { NoteId = "c5", AuthorId = "result-actor", Content = "Chain", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "result-actor", DisplayName = "R" }, ct);
+        var result = await db.SaveAsync(new Note { NoteId = "c5", AuthorId = "result-actor", Content = "Chain", Published = DateTimeOffset.UtcNow }, ct);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(Note));
         Assert.Contains(result.Changes, c => c.Type == typeof(NoteView));

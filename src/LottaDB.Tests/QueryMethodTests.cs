@@ -3,8 +3,6 @@ using ElBruno.LocalEmbeddings.Options;
 using Lucene.Net.Linq;
 using Microsoft.Extensions.AI;
 
-#pragma warning disable xUnit1051
-
 namespace Lotta.Tests;
 
 /// <summary>
@@ -21,10 +19,11 @@ public class QueryMethodTests
             PreferQuantized = true
         }));
 
-    private static Task<LottaDB> CreateVectorDbAsync([System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
+    private static Task<LottaDB> CreateVectorDbAsync(CancellationToken cancellationToken = default, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {
         return LottaDBFixture.CreateDbAsync(
             configureCatalog: catalog => catalog.EmbeddingGenerator = _generator.Value,
+            cancellationToken: cancellationToken,
             testName: testName);
     }
 
@@ -35,9 +34,10 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnObject_DefaultProperty_MatchesContent()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene indexes documents" });
-        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure tables store rows" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene indexes documents" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure tables store rows" }, ct);
 
         // t.Query("lucene") should search the default _content_ field
         var results = db.Search<Note>(n => n.Query("lucene")).ToList();
@@ -48,8 +48,9 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnObject_DefaultProperty_NoMatch_ReturnsEmpty()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello world" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello world" }, ct);
 
         var results = db.Search<Note>(n => n.Query("banana")).ToList();
         Assert.Empty(results);
@@ -58,9 +59,10 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnObject_DefaultProperty_Wildcard()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene search engine" });
-        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure storage" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene search engine" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure storage" }, ct);
 
         var results = db.Search<Note>(n => n.Query("luc*")).ToList();
         Assert.Single(results);
@@ -74,9 +76,10 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnProperty_MatchesNamedField()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "bob wrote something" });
-        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "alice wrote something" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "bob wrote something" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "alice wrote something" }, ct);
 
         // n.Content.Query("bob") targets the Content field specifically
         var results = db.Search<Note>(n => n.Content.Query("bob")).ToList();
@@ -87,8 +90,9 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnProperty_DoesNotMatchOtherFields()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello world" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello world" }, ct);
 
         // "alice" is in AuthorId but not in Content — property query on Content should miss it
         var results = db.Search<Note>(n => n.Content.Query("alice")).ToList();
@@ -98,9 +102,10 @@ public class QueryMethodTests
     [Fact]
     public async Task Query_OnProperty_Wildcard()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new FeedEntry { Id = "f1", NoteViewId = "nv1", Title = "Introduction to Lucene" });
-        await db.SaveAsync(new FeedEntry { Id = "f2", NoteViewId = "nv2", Title = "Azure storage overview" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new FeedEntry { Id = "f1", NoteViewId = "nv1", Title = "Introduction to Lucene" }, ct);
+        await db.SaveAsync(new FeedEntry { Id = "f2", NoteViewId = "nv2", Title = "Azure storage overview" }, ct);
 
         var results = db.Search<FeedEntry>(f => f.Title.Query("intro*")).ToList();
         Assert.Single(results);
@@ -114,10 +119,11 @@ public class QueryMethodTests
     [Fact]
     public async Task Similar_OnObject_DefaultProperty_ReturnsResults()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog" });
-        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping on a warm blanket" });
-        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory research paper" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping on a warm blanket" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory research paper" }, ct);
 
         var results = db.Search<VectorNote>(n => n.Similar("cute cat napping")).ToList();
         Assert.NotEmpty(results);
@@ -126,10 +132,11 @@ public class QueryMethodTests
     [Fact]
     public async Task Similar_OnObject_DefaultProperty_RanksSemantically()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog in the park" });
-        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping peacefully on a warm soft blanket" });
-        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory and particle research" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog in the park" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping peacefully on a warm soft blanket" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory and particle research" }, ct);
 
         var results = db.Search<VectorNote>(n => n.Similar("cute cat napping on a bed")).ToList();
         Assert.NotEmpty(results);
@@ -143,10 +150,11 @@ public class QueryMethodTests
     [Fact]
     public async Task Similar_OnProperty_ReturnsResults()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" });
-        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" });
-        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
 
         var results = db.Search<VectorNote>(n => n.Title.Similar("a cute cat napping")).ToList();
         Assert.NotEmpty(results);
@@ -155,10 +163,11 @@ public class QueryMethodTests
     [Fact]
     public async Task Similar_OnProperty_RanksSemantically()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" });
-        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" });
-        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
+        await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
 
         var results = db.Search<VectorNote>(n => n.Title.Similar("a cute cat napping")).ToList();
         Assert.NotEmpty(results);
@@ -172,9 +181,10 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_SearchString_UsesUserDefinedProperty()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" });
-        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" }, ct);
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" }, ct);
 
         // Search("Lucene") should target the Content property (which is Title + Body)
         var results = db.Search<Article>("lucene").ToList();
@@ -185,9 +195,10 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_QueryOnObject_UsesUserDefinedProperty()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" });
-        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene", Body = "full-text search engine" }, ct);
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure", Body = "cloud platform" }, ct);
 
         // t.Query("...") on object should target Content property
         var results = db.Search<Article>(a => a.Query("lucene")).ToList();
@@ -198,9 +209,10 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_QueryOnProperty_StillWorks()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene search", Body = "engine" });
-        await db.SaveAsync(new Article { Id = "a2", Title = "Azure cloud", Body = "Lucene compatible" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "Lucene search", Body = "engine" }, ct);
+        await db.SaveAsync(new Article { Id = "a2", Title = "Azure cloud", Body = "Lucene compatible" }, ct);
 
         // Property-level query targets Title specifically, not Content
         var results = db.Search<Article>(a => a.Title.Query("lucene*")).ToList();
@@ -211,8 +223,9 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_ComposedContent_SearchesAcrossFields()
     {
-        using var db = await LottaDBFixture.CreateDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "Intro", Body = "Lucene is a search engine" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "Intro", Body = "Lucene is a search engine" }, ct);
 
         // "lucene" is only in Body, but Content = Title + Body, so it should match
         var results = db.Search<Article>("lucene").ToList();
@@ -223,6 +236,7 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_Fluent_UsesUserDefinedProperty()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(config =>
         {
             config.Store<BareArticle>(s =>
@@ -233,9 +247,9 @@ public class QueryMethodTests
                 s.AddQueryable(x => x.Content);
                 s.DefaultSearch(x => x.Content);
             });
-        });
-        await db.SaveAsync(new BareArticle { Id = "a1", Title = "Lucene", Body = "search engine" });
-        await db.SaveAsync(new BareArticle { Id = "a2", Title = "Azure", Body = "cloud platform" });
+        }, cancellationToken: ct);
+        await db.SaveAsync(new BareArticle { Id = "a1", Title = "Lucene", Body = "search engine" }, ct);
+        await db.SaveAsync(new BareArticle { Id = "a2", Title = "Azure", Body = "cloud platform" }, ct);
 
         var results = db.Search<BareArticle>("lucene").ToList();
         Assert.Single(results);
@@ -245,10 +259,11 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_Similar_OnObject_UsesUserDefinedProperty()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox", Body = "jumps over the lazy dog" });
-        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten", Body = "sleeping on a warm blanket" });
-        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics", Body = "string theory research" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox", Body = "jumps over the lazy dog" }, ct);
+        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten", Body = "sleeping on a warm blanket" }, ct);
+        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics", Body = "string theory research" }, ct);
 
         // a.Similar("...") should target Content (the DefaultSearch property)
         var results = db.Search<Article>(a => a.Similar("cute cat napping")).ToList();
@@ -259,10 +274,11 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_Similar_OnProperty_StillWorks()
     {
-        using var db = await CreateVectorDbAsync();
-        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox jumps over the lazy dog", Body = "nature documentary" });
-        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten sleeping on a warm blanket", Body = "pet care" });
-        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics and string theory research", Body = "science journal" });
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateVectorDbAsync(ct);
+        await db.SaveAsync(new Article { Id = "a1", Title = "the quick brown fox jumps over the lazy dog", Body = "nature documentary" }, ct);
+        await db.SaveAsync(new Article { Id = "a2", Title = "a small kitten sleeping on a warm blanket", Body = "pet care" }, ct);
+        await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics and string theory research", Body = "science journal" }, ct);
 
         // a.Title.Similar("...") targets Title specifically, not Content
         var results = db.Search<Article>(a => a.Title.Similar("a cute cat napping")).ToList();
@@ -273,12 +289,13 @@ public class QueryMethodTests
     [Fact]
     public async Task DefaultSearch_InvalidProperty_ThrowsAtInit()
     {
+        var ct = TestContext.Current.CancellationToken;
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
             using var db = await LottaDBFixture.CreateDbAsync(config =>
             {
                 config.Store<BadDefaultSearch>();
-            });
+            }, cancellationToken: ct);
         });
 
         // The InvalidOperationException may be wrapped in TargetInvocationException

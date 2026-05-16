@@ -67,8 +67,9 @@ public class DefaultBlobHandlerTests
     [InlineData("data/archive.zip", typeof(BlobFile))]
     public async Task HandleAsync_CreatesCorrectBlobFileType(string path, Type expectedType)
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[] { 0x00 });
-        var result = await DefaultBlobHandler.HandleAsync(path, null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync(path, null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.IsType(expectedType, result);
@@ -79,8 +80,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_SetsBasicProperties()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[1024]);
-        var result = await DefaultBlobHandler.HandleAsync("photos/vacation.jpg", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("photos/vacation.jpg", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("photos/vacation.jpg", result.Path);
@@ -93,8 +95,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_SetsNameWithoutFolder()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[10]);
-        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("readme.txt", result.Name);
@@ -104,8 +107,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_SetsNestedFolderPath()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[10]);
-        var result = await DefaultBlobHandler.HandleAsync("a/b/c/file.txt", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("a/b/c/file.txt", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("file.txt", result.Name);
@@ -136,9 +140,10 @@ public class DefaultBlobHandlerTests
     [InlineData("doc.toml")]
     public async Task HandleAsync_ExtractsTextContent_ForTextFormats(string fileName)
     {
+        var ct = TestContext.Current.CancellationToken;
         var text = "Hello, this is test content!";
         using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text));
-        var result = await DefaultBlobHandler.HandleAsync(fileName, null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync(fileName, null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal(text, result.Content);
@@ -147,8 +152,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_DoesNotExtractContent_ForBinaryFormats()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[] { 0x89, 0x50, 0x4E, 0x47 }); // PNG header
-        var result = await DefaultBlobHandler.HandleAsync("image.png", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("image.png", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Null(result.Content);
@@ -157,10 +163,11 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_SetsContentLength_ForTextFiles()
     {
+        var ct = TestContext.Current.CancellationToken;
         var text = "Hello world";
         var bytes = System.Text.Encoding.UTF8.GetBytes(text);
         using var stream = new MemoryStream(bytes);
-        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal(bytes.Length, result.ContentLength);
@@ -169,9 +176,10 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_SetsContentLength_ForBinaryFiles()
     {
+        var ct = TestContext.Current.CancellationToken;
         var data = new byte[2048];
         using var stream = new MemoryStream(data);
-        var result = await DefaultBlobHandler.HandleAsync("photo.jpg", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("photo.jpg", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal(2048, result.ContentLength);
@@ -182,8 +190,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_UsesExplicitContentType_OverExtension()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[10]);
-        var result = await DefaultBlobHandler.HandleAsync("data.bin", "image/png", stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("data.bin", "image/png", stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("image/png", result.MediaType);
@@ -193,8 +202,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_ExplicitContentType_CreatesCorrectType()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[10]);
-        var result = await DefaultBlobHandler.HandleAsync("file.dat", "audio/mpeg", stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("file.dat", "audio/mpeg", stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("audio/mpeg", result.MediaType);
@@ -204,8 +214,9 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_FallsBackToExtension_WhenContentTypeIsNull()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var stream = new MemoryStream(new byte[10]);
-        var result = await DefaultBlobHandler.HandleAsync("photo.jpg", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("photo.jpg", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal("image/jpeg", result.MediaType);
@@ -217,9 +228,10 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_ReturnsNonNull_ForAllPaths()
     {
+        var ct = TestContext.Current.CancellationToken;
         // Default handler always returns a BlobFile, never null
         using var stream = new MemoryStream(new byte[1]);
-        var result = await DefaultBlobHandler.HandleAsync("unknown.zzzzz", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("unknown.zzzzz", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.IsType<BlobFile>(result);
@@ -264,15 +276,16 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_CalculatesContentLength_FromText_WhenStreamNotSeekable()
     {
+        var ct = TestContext.Current.CancellationToken;
         var text = "Hello world";
         var bytes = System.Text.Encoding.UTF8.GetBytes(text);
         // Pipe streams are non-seekable
         var pipe = new System.IO.Pipelines.Pipe();
-        await pipe.Writer.WriteAsync(bytes);
+        await pipe.Writer.WriteAsync(bytes, ct);
         pipe.Writer.Complete();
         var stream = pipe.Reader.AsStream();
 
-        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("readme.txt", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Equal(text, result.Content);
@@ -282,12 +295,13 @@ public class DefaultBlobHandlerTests
     [Fact]
     public async Task HandleAsync_ContentLength_IsNull_ForBinaryNonSeekableStream()
     {
+        var ct = TestContext.Current.CancellationToken;
         var pipe = new System.IO.Pipelines.Pipe();
-        await pipe.Writer.WriteAsync(new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        await pipe.Writer.WriteAsync(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, ct);
         pipe.Writer.Complete();
         var stream = pipe.Reader.AsStream();
 
-        var result = await DefaultBlobHandler.HandleAsync("image.png", null, stream, null!);
+        var result = await DefaultBlobHandler.HandleAsync("image.png", null, stream, null!, ct);
 
         Assert.NotNull(result);
         Assert.Null(result.ContentLength); // non-seekable, can't determine length

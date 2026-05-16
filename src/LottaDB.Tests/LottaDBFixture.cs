@@ -14,6 +14,7 @@ public class LottaDBFixture : IDisposable
     public static async Task<LottaDB> CreateDbAsync(Action<ILottaConfiguration>? configureAction = null,
         Action<LottaCatalog>? configureCatalog = null,
         bool reset = true,
+        CancellationToken cancellationToken = default,
         [CallerMemberName] string? testName = null)
     {
         testName = string.Join("", testName!.Where(char.IsLetterOrDigit).Take(60));
@@ -40,9 +41,9 @@ public class LottaDBFixture : IDisposable
             config.Store<Product>();
 
             configureAction?.Invoke(config);
-        });
+        }, cancellationToken);
         if (reset)
-            await db.ResetDatabaseAsync();
+            await db.ResetDatabaseAsync(cancellationToken);
         return db;
     }
 

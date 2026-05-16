@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public class CreateViewTests
 {
-    private async Task<LottaDB> CreateDbAsync([CallerMemberName] string? testName = null)
+    private async Task<LottaDB> CreateDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
@@ -59,17 +59,18 @@ public class CreateViewTests
                     });
                 }
             });
-        }, testName: testName);
+        }, testName: testName, cancellationToken: cancellationToken);
     }
 
     [Fact]
     public async Task NoteAndActor_ProducesNoteView()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, ct);
 
-        var view = await db.GetAsync<NoteView>("nv-n1", TestContext.Current.CancellationToken);
+        var view = await db.GetAsync<NoteView>("nv-n1", ct);
         Assert.NotNull(view);
         Assert.Equal("Alice", view.AuthorDisplay);
     }
@@ -77,61 +78,66 @@ public class CreateViewTests
     [Fact]
     public async Task ActorChange_UpdatesNoteView()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "n-update", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n-update", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, ct);
 
-        Assert.Equal("Before", (await db.GetAsync<NoteView>("nv-n-update", TestContext.Current.CancellationToken))!.AuthorDisplay);
-        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" }, TestContext.Current.CancellationToken);
-        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-n-update", TestContext.Current.CancellationToken))!.AuthorDisplay);
+        Assert.Equal("Before", (await db.GetAsync<NoteView>("nv-n-update", ct))!.AuthorDisplay);
+        await db.SaveAsync(new Actor { Username = "updater", DisplayName = "After" }, ct);
+        Assert.Equal("After", (await db.GetAsync<NoteView>("nv-n-update", ct))!.AuthorDisplay);
     }
 
     [Fact]
     public async Task NoteDeleted_DeletesNoteView()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, ct);
         var note = new Note { NoteId = "n-del", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
-        await db.SaveAsync(note, TestContext.Current.CancellationToken);
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-n-del", TestContext.Current.CancellationToken));
+        await db.SaveAsync(note, ct);
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-n-del", ct));
 
-        await db.DeleteAsync(note, TestContext.Current.CancellationToken);
-        Assert.Null(await db.GetAsync<NoteView>("nv-n-del", TestContext.Current.CancellationToken));
+        await db.DeleteAsync(note, ct);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n-del", ct));
     }
 
     [Fact]
     public async Task ActorDeleted_DeletesRelatedNoteViews()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "gone", DisplayName = "Gone" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "orphan1", AuthorId = "gone", Content = "A", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "orphan2", AuthorId = "gone", Content = "B", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "gone", DisplayName = "Gone" }, ct);
+        await db.SaveAsync(new Note { NoteId = "orphan1", AuthorId = "gone", Content = "A", Published = DateTimeOffset.UtcNow }, ct);
+        await db.SaveAsync(new Note { NoteId = "orphan2", AuthorId = "gone", Content = "B", Published = DateTimeOffset.UtcNow }, ct);
 
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-orphan1", TestContext.Current.CancellationToken));
-        Assert.NotNull(await db.GetAsync<NoteView>("nv-orphan2", TestContext.Current.CancellationToken));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-orphan1", ct));
+        Assert.NotNull(await db.GetAsync<NoteView>("nv-orphan2", ct));
 
-        await db.DeleteAsync<Actor>("gone", TestContext.Current.CancellationToken);
+        await db.DeleteAsync<Actor>("gone", ct);
 
-        Assert.Null(await db.GetAsync<NoteView>("nv-orphan1", TestContext.Current.CancellationToken));
-        Assert.Null(await db.GetAsync<NoteView>("nv-orphan2", TestContext.Current.CancellationToken));
+        Assert.Null(await db.GetAsync<NoteView>("nv-orphan1", ct));
+        Assert.Null(await db.GetAsync<NoteView>("nv-orphan2", ct));
     }
 
     [Fact]
     public async Task NoMatchingActor_NoViewCreated()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Note { NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        Assert.Null(await db.GetAsync<NoteView>("nv-n-orphan", TestContext.Current.CancellationToken));
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Note { NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow }, ct);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n-orphan", ct));
     }
 
     [Fact]
     public async Task MultipleNotes_SameActor_AllViews()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "prolific", DisplayName = "Prolific" }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "p1", AuthorId = "prolific", Content = "One", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "p2", AuthorId = "prolific", Content = "Two", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
-        await db.SaveAsync(new Note { NoteId = "p3", AuthorId = "prolific", Content = "Three", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "prolific", DisplayName = "Prolific" }, ct);
+        await db.SaveAsync(new Note { NoteId = "p1", AuthorId = "prolific", Content = "One", Published = DateTimeOffset.UtcNow }, ct);
+        await db.SaveAsync(new Note { NoteId = "p2", AuthorId = "prolific", Content = "Two", Published = DateTimeOffset.UtcNow }, ct);
+        await db.SaveAsync(new Note { NoteId = "p3", AuthorId = "prolific", Content = "Three", Published = DateTimeOffset.UtcNow }, ct);
 
         var views = db.Search<NoteView>().Where(v => v.AuthorUsername == "prolific").ToList();
         Assert.Equal(3, views.Count);
@@ -140,9 +146,10 @@ public class CreateViewTests
     [Fact]
     public async Task SaveResult_ContainsDerivedChanges()
     {
-        using var db = await CreateDbAsync();
-        await db.SaveAsync(new Actor { Username = "result", DisplayName = "R" }, TestContext.Current.CancellationToken);
-        var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "result", Content = "Check", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        using var db = await CreateDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "result", DisplayName = "R" }, ct);
+        var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "result", Content = "Check", Published = DateTimeOffset.UtcNow }, ct);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(Note));
         Assert.Contains(result.Changes, c => c.Type == typeof(NoteView));
