@@ -21,7 +21,7 @@ public static class TikiConfigurationExtensions
     {
         engine ??= new TikiEngine();
 
-        config.OnUpload(async (path, contentType, stream, db) =>
+        config.OnUpload(async (path, contentType, stream, db, cancellationToken) =>
         {
             var tikiFile = await engine.ParseAsync(stream);
             return BlobFileMapper.FromTikiFile(tikiFile, path);

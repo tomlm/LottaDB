@@ -19,7 +19,7 @@ internal class TypeMetadata
     public List<TagInfo> Tags { get; } = new();
 
     /// <summary>Properties indexed in Lucene for search.</summary>
-    public List<IndexedPropertyInfo> IndexedProperties { get; } = new();
+    public List<IndexedTypeProperty> IndexedProperties { get; } = new();
 
     /// <summary>User-defined default search property. When set, the _content_ composite field is not created.</summary>
     public PropertyInfo? DefaultSearchProperty { get; set; }
@@ -130,7 +130,7 @@ internal class TypeMetadata
                 if (fieldAttr != null)
                 {
                     var vectorAttr = prop.GetCustomAttribute<Lucene.Net.Linq.Mapping.VectorFieldAttribute>();
-                    meta.IndexedProperties.Add(new IndexedPropertyInfo
+                    meta.IndexedProperties.Add(new IndexedTypeProperty
                     {
                         Property = prop,
                         IsNotAnalyzed = fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzed
@@ -179,7 +179,7 @@ internal class TypeMetadata
             var propInfo = ExtractPropertyInfo(config.Expression);
             if (propInfo != null && !meta.IndexedProperties.Any(i => i.Property == propInfo))
             {
-                meta.IndexedProperties.Add(new IndexedPropertyInfo
+                meta.IndexedProperties.Add(new IndexedTypeProperty
                 {
                     Property = propInfo,
                     IsNotAnalyzed = config.IsNotAnalyzed,
@@ -238,7 +238,7 @@ internal class TypeMetadata
             _ => prop.PropertyType != typeof(string)
         };
 
-        meta.IndexedProperties.Add(new IndexedPropertyInfo
+        meta.IndexedProperties.Add(new IndexedTypeProperty
         {
             Property = prop,
             IsNotAnalyzed = isNotAnalyzed,
@@ -253,7 +253,7 @@ internal class TypeMetadata
     /// to stay well within the Azure Table Storage 64KB property limit.
     /// </summary>
     internal static string ComputeSchemaJson(IEnumerable<TypeMetadata> metadatas,
-        IEnumerable<DynamicSchema>? dynamicSchemas = null)
+        IEnumerable<JsonMetadata>? dynamicSchemas = null)
     {
         var typedSchema = metadatas
             .OrderBy(m => m.Type.FullName)
@@ -281,7 +281,7 @@ internal class TypeMetadata
                     }),
             });
 
-        var dynamicSchema = (dynamicSchemas ?? Enumerable.Empty<DynamicSchema>())
+        var dynamicSchema = (dynamicSchemas ?? Enumerable.Empty<JsonMetadata>())
             .OrderBy(s => s.TypeName)
             .Select(s => new
             {
@@ -313,13 +313,18 @@ internal class TypeMetadata
     /// </summary>
     internal static string ComputeSchemaFromConfig(LottaConfiguration config)
     {
+        // Auto-register JsonDocumentType the same way the LottaDB constructor does,
+        // so the hash matches even when the caller didn't explicitly register it.
+        if (!config.StorageConfigurations.ContainsKey(typeof(JsonDocumentType)))
+            config.StorageConfigurations[typeof(JsonDocumentType)] = new StorageConfiguration<JsonDocumentType>();
+
         var metadatas = new List<TypeMetadata>();
         foreach (var (type, configObj) in config.StorageConfigurations)
         {
             var m = typeof(TypeMetadata).GetMethod(nameof(Build))!.MakeGenericMethod(type);
             metadatas.Add((TypeMetadata)m.Invoke(null, new[] { configObj })!);
         }
-        return ComputeSchemaJson(metadatas, config.SchemaConfigurations.Values);
+        return ComputeSchemaJson(metadatas);
     }
 
     private static PropertyInfo? ExtractPropertyInfo(LambdaExpression expr)
@@ -340,7 +345,7 @@ internal class TagInfo
     public required Func<object, object?> GetValue { get; init; }
 }
 
-internal class IndexedPropertyInfo
+internal class IndexedTypeProperty
 {
     public required PropertyInfo Property { get; init; }
     public bool IsNotAnalyzed { get; init; }

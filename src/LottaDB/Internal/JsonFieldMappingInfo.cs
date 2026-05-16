@@ -13,14 +13,14 @@ namespace Lotta.Internal;
 /// IFieldMappingInfo implementation for a schema-defined property.
 /// Used by FieldMappingQueryParser to resolve field names in Lucene queries.
 /// </summary>
-internal class DynamicFieldMappingInfo : IFieldMappingInfo
+internal class JsonFieldMappingInfo : IFieldMappingInfo
 {
     private readonly Version _version;
     private readonly Analyzer _analyzer;
     private readonly bool _isNumeric;
     private readonly Type _clrType;
 
-    public DynamicFieldMappingInfo(string fieldName, Type clrType, bool isAnalyzed, Version version, Analyzer? analyzer = null)
+    public JsonFieldMappingInfo(string fieldName, Type clrType, bool isAnalyzed, Version version, Analyzer? analyzer = null)
     {
         FieldName = fieldName;
         PropertyName = fieldName;

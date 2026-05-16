@@ -6,6 +6,7 @@ using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.QueryParsers.Classic;
 using Lucene.Net.Search;
+using Microsoft.Extensions.AI;
 using System.Text;
 using System.Text.Json;
 using Version = Lucene.Net.Util.LuceneVersion;
@@ -16,18 +17,21 @@ namespace Lotta.Internal;
 /// Document mapper for dynamic (JSON Schema-defined) documents.
 /// Implements IDocumentMapper and IFieldMappingInfoProvider to work with JsonElement directly.
 /// </summary>
-internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
+internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
 {
-    private readonly DynamicSchema _schema;
+    private readonly JsonMetadata _schema;
     private readonly Version _version;
-    private readonly Dictionary<string, DynamicFieldMappingInfo> _fieldMappings = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, JsonFieldMappingInfo> _fieldMappings = new(StringComparer.Ordinal);
     private readonly Analyzer _contentAnalyzer;
+    private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
 
-    public DynamicDocumentMapper(DynamicSchema schema, Version version, Analyzer contentAnalyzer)
+    public JsonDocumentMapper(JsonMetadata schema, Version version, Analyzer contentAnalyzer,
+        IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null)
     {
         _schema = schema;
         _version = version;
         _contentAnalyzer = contentAnalyzer;
+        _embeddingGenerator = embeddingGenerator;
 
         // Build per-field analyzer
         Analyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
@@ -37,7 +41,7 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         // Build field mappings for each schema property
         foreach (var prop in schema.Properties)
         {
-            var mapping = new DynamicFieldMappingInfo(
+            var mapping = new JsonFieldMappingInfo(
                 prop.Name, prop.ClrType, prop.IsAnalyzed, version);
             _fieldMappings[prop.Name] = mapping;
 
@@ -61,12 +65,12 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
     public IEnumerable<string> IndexedProperties =>
         _fieldMappings.Keys;
 
-    public string DefaultSearchProperty => LottaDB.CONTENT_FIELD;
+    public string DefaultSearchProperty => _schema.DefaultSearchProperty ?? LottaDB.CONTENT_FIELD;
 
     public IFieldMappingInfo GetMappingInfo(string propertyName)
     {
         if (propertyName == LottaDB.CONTENT_FIELD)
-            return new DynamicContentFieldMappingInfo(_version, _contentAnalyzer);
+            return new JsonContentFieldMapper(_version, _contentAnalyzer);
         if (_fieldMappings.TryGetValue(propertyName, out var mapping))
             return mapping;
         throw new KeyNotFoundException($"Unrecognized field: '{propertyName}'");
@@ -87,7 +91,7 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         var json = jsonDoc != null ? jsonDoc.RootElement : (JsonElement)source;
         // Use the authoritative key from metadata if available (set by SaveAsync),
         // otherwise extract from JSON. This prevents auto-key from generating a new ULID.
-        var key = jsonDoc?.GetKey() ?? _schema.ExtractKey(json);
+        var key = jsonDoc?.GetKey() ?? _schema.GetKey(json);
 
         // _key_ field
         target.Add(new StringField(LottaDB.KEY_FIELD, key, Field.Store.YES));
@@ -102,15 +106,16 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         var contentBuilder = new StringBuilder();
         foreach (var prop in _schema.Properties)
         {
-            if (!json.TryGetProperty(prop.Name, out var val) || val.ValueKind == JsonValueKind.Null)
+            var val = JsonMetadata.GetValue(json, prop);
+            if (val == null || val.Value.ValueKind == JsonValueKind.Null)
                 continue;
 
-            AddFieldToDocument(target, prop, val);
+            AddFieldToDocument(target, prop, val.Value, _embeddingGenerator);
 
             // Accumulate analyzed string fields into _content_
             if (prop.IsAnalyzed && prop.ClrType == typeof(string))
             {
-                var s = val.GetString();
+                var s = val.Value.GetString();
                 if (!string.IsNullOrEmpty(s))
                 {
                     if (contentBuilder.Length > 0) contentBuilder.Append(' ');
@@ -121,7 +126,26 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
 
         // _content_ composite field
         if (contentBuilder.Length > 0)
-            target.Add(new TextField(LottaDB.CONTENT_FIELD, contentBuilder.ToString(), Field.Store.NO));
+        {
+            var contentText = contentBuilder.ToString();
+            target.Add(new TextField(LottaDB.CONTENT_FIELD, contentText, Field.Store.NO));
+
+            // Generate vector embedding for _content_ if embedding generator is available
+            if (_embeddingGenerator != null)
+            {
+                var result = _embeddingGenerator.GenerateAsync(new[] { contentText })
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                if (result != null && result.Count > 0)
+                {
+                    var vectorFieldName = LottaDB.CONTENT_FIELD + "_vector";
+                    target.RemoveFields(vectorFieldName);
+                    var floats = result[0].Vector.Span;
+                    var bytes = new byte[floats.Length * sizeof(float)];
+                    System.Buffer.BlockCopy(floats.ToArray(), 0, bytes, 0, bytes.Length);
+                    target.Add(new BinaryDocValuesField(vectorFieldName, new Lucene.Net.Util.BytesRef(bytes)));
+                }
+            }
+        }
     }
 
     public void ToObject(Document source, object target)
@@ -134,7 +158,8 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         // No special settings needed
     }
 
-    private static void AddFieldToDocument(Document target, SchemaPropertyDef prop, JsonElement val)
+    private static void AddFieldToDocument(Document target, IndexedJsonProperty prop, JsonElement val,
+        IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator)
     {
         if (prop.ClrType == typeof(int))
         {
@@ -148,7 +173,6 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
         }
         else if (prop.ClrType == typeof(bool))
         {
-            // Index booleans as "true"/"false" strings (not analyzed)
             target.Add(new StringField(prop.Name, val.GetBoolean().ToString().ToLowerInvariant(), Field.Store.NO));
         }
         else // string (and fallback)
@@ -158,6 +182,22 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
                 target.Add(new TextField(prop.Name, s, Field.Store.NO));
             else
                 target.Add(new StringField(prop.Name, s, Field.Store.NO));
+
+            // Generate vector embedding for vector-enabled string fields
+            if (prop.IsVectorField && embeddingGenerator != null && s != null)
+            {
+                var result = embeddingGenerator.GenerateAsync(new[] { s })
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
+                if (result != null && result.Count > 0)
+                {
+                    var vectorFieldName = prop.Name + "_vector";
+                    target.RemoveFields(vectorFieldName);
+                    var floats = result[0].Vector.Span;
+                    var bytes = new byte[floats.Length * sizeof(float)];
+                    System.Buffer.BlockCopy(floats.ToArray(), 0, bytes, 0, bytes.Length);
+                    target.Add(new BinaryDocValuesField(vectorFieldName, new Lucene.Net.Util.BytesRef(bytes)));
+                }
+            }
         }
     }
 }
@@ -166,12 +206,12 @@ internal class DynamicDocumentMapper : IDocumentMapper, IFieldMappingInfoProvide
 /// Minimal IFieldMappingInfo for the _content_ composite field.
 /// Used by query parser when no specific field is targeted.
 /// </summary>
-internal class DynamicContentFieldMappingInfo : IFieldMappingInfo
+internal class JsonContentFieldMapper : IFieldMappingInfo
 {
     private readonly Version _version;
     private readonly Analyzer _analyzer;
 
-    public DynamicContentFieldMappingInfo(Version version, Analyzer analyzer)
+    public JsonContentFieldMapper(Version version, Analyzer analyzer)
     {
         _version = version;
         _analyzer = analyzer;

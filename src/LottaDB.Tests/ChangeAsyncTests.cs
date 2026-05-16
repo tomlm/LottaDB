@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Lotta.Tests;
 
 public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
@@ -222,7 +224,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var handlerCalls = new List<string>();
         var handlerLock = new object();
-        using var handle = db.On<Actor>((a, _, _) =>
+        using var handle = db.On<Actor>((a, _, _, _) =>
         {
             if (a.Username == username)
                 lock (handlerLock) handlerCalls.Add(a.DisplayName);
@@ -276,7 +278,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         using var db = await LottaDBFixture.CreateDbAsync();
         var ct = TestContext.Current.CancellationToken;
         var username = "parallel-counter";
-        const int N = 5;
+        const int N = 20;
 
         await db.SaveAsync(new Actor
         {
@@ -285,7 +287,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
             Counter = 0
         }, ct);
 
-        var tasks = Enumerable.Range(0, N).Select(_ => Task.Run(() =>
+        var tasks = Enumerable.Range(0, N).Select(i => Task.Run(() =>
             db.ChangeAsync<Actor>(username, a =>
             {
                 a.Counter++;
@@ -295,9 +297,9 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         await Task.WhenAll(tasks);
 
         var final = await db.GetAsync<Actor>(username, ct);
-        Assert.Equal(N, final!.Counter);
+        Assert.True(N == final!.Counter, "GetAsync() Counter is wrong");
         var final2 = db.Search<Actor>(a => a.Username == final.Username).Single();
-        Assert.Equal(N, final2!.Counter);
+        Assert.True(N == final2!.Counter, "Search() Counter is wrong");
     }
 
     /// <summary>

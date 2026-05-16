@@ -67,7 +67,7 @@ public class LottaCatalog : IDisposable
     /// <param name="configure">Optional callback to configure catalog-level settings.</param>
     public LottaCatalog(string catalogName, string connectionString, Action<LottaCatalog>? configure = null)
     {
-        Name = catalogName;
+        Name = SanitizeName(catalogName);
         connectionString ??= "UseDevelopmentStorage=true";
         TableServiceClientFactory = name => new TableServiceClient(connectionString);
         LuceneDirectoryFactory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
@@ -84,7 +84,7 @@ public class LottaCatalog : IDisposable
     /// <param name="configure">Optional callback to configure catalog-level settings.</param>
     public LottaCatalog(string catalogName, Action<LottaCatalog>? configure = null)
     {
-        Name = catalogName;
+        Name = SanitizeName(catalogName);
         TableServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.TableServiceClientFactory is not configured.");
         LuceneDirectoryFactory = _ => throw new InvalidOperationException("LottaCatalog.LuceneDirectoryFactory is not configured.");
         BlobServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
@@ -99,7 +99,7 @@ public class LottaCatalog : IDisposable
     /// </summary>
     /// <param name="databaseId">Database ID within this catalog.</param>
     /// <param name="configure">Configuration callback for registering types and handlers for this database.</param>
-    public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null)
+    public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null, CancellationToken cancellationToken = default)
     {
         if (_databases.TryGetValue(databaseId, out var existing))
         {
@@ -108,7 +108,7 @@ public class LottaCatalog : IDisposable
             {
                 var checkConfig = new LottaConfiguration();
                 configure.Invoke(checkConfig);
-                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values, existing._schemas.Values);
+                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values);
                 var newSchema = TypeMetadata.ComputeSchemaFromConfig(checkConfig);
                 if (existingSchema != newSchema)
                     throw new InvalidOperationException(
@@ -128,6 +128,9 @@ public class LottaCatalog : IDisposable
             return _databases[databaseId];
         }
 
+        // Load dynamic schemas from Table Storage before computing the schema hash
+        await db.InitializeJsonDocumentTypesAsync(cancellationToken);
+
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);
         var table = GetTableClient();
@@ -135,7 +138,7 @@ public class LottaCatalog : IDisposable
 
         try
         {
-            var response = await table.GetEntityAsync<TableEntity>(ManifestPartitionKey, databaseId);
+            var response = await table.GetEntityAsync<TableEntity>(ManifestPartitionKey, databaseId, cancellationToken: cancellationToken);
             if (response.Value.TryGetValue(SchemaColumn, out var schemaObj))
                 storedSchema = schemaObj as string;
         }
@@ -149,12 +152,12 @@ public class LottaCatalog : IDisposable
         {
             { SchemaColumn, currentSchema }
         };
-        await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace);
+        await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace, cancellationToken);
 
         // If schema changed, rebuild the index
         if (storedSchema != null && storedSchema != currentSchema)
         {
-            await db.RebuildSearchIndex();
+            await db.RebuildSearchIndex(cancellationToken);
         }
 
         return db;
@@ -220,6 +223,21 @@ public class LottaCatalog : IDisposable
     }
 
     /// <summary>
+    /// <summary>
+    /// Sanitizes a catalog name for use as an Azure Table name and blob container name.
+    /// Azure Table: alphanumeric only, 3-63 chars. Blob container: lowercase alphanumeric + hyphens, 3-63 chars.
+    /// We use the stricter intersection: lowercase alphanumeric, 3-63 chars.
+    /// </summary>
+    private static string SanitizeName(string name)
+    {
+        var sanitized = new string(name.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (sanitized.Length < 3)
+            sanitized = sanitized.PadRight(3, 'x');
+        if (sanitized.Length > 63)
+            sanitized = sanitized[..63];
+        return sanitized;
+    }
+
     /// Dispose all database instances managed by this catalog.
     /// </summary>
     public void Dispose()

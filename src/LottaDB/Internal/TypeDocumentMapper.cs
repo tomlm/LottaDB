@@ -18,7 +18,7 @@ namespace Lotta.Internal;
 /// Only maps properties explicitly marked with [Key], [Queryable], [Field], or
 /// configured via fluent AddQueryable/AddField. Stores _json for full POCO roundtrip.
 /// </summary>
-internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
+internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     where T : class, new()
 {
     private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("yyyyMMddTHHmmssfffZ");
@@ -28,7 +28,7 @@ internal class LottaDocumentMapper<T> : DocumentMapperBase<T>
 
     private readonly LottaDB _db;
 
-    public LottaDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
+    public TypeDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
         : base(version, analyzer)
     {
         _db = db;

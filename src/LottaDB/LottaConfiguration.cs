@@ -10,9 +10,7 @@ namespace Lotta;
 public class LottaConfiguration : ILottaConfiguration
 {
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
-    internal Dictionary<string, DynamicSchema> SchemaConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
-    internal List<OnSchemaRegistration> OnSchemaRegistrations { get; } = new();
     internal BlobUploadHandler? UploadHandler { get; private set; }
 
     /// <summary>
@@ -58,20 +56,6 @@ public class LottaConfiguration : ILottaConfiguration
         return this;
     }
 
-    /// <inheritdoc/>
-    public ILottaConfiguration StoreSchema(string typeName, JsonElement schema)
-    {
-        SchemaConfigurations[typeName] = DynamicSchema.Parse(typeName, schema);
-        return this;
-    }
-
-    /// <inheritdoc/>
-    public ILottaConfiguration OnSchema(string schemaName, Func<JsonDocument, TriggerKind, LottaDB, Task> handler)
-    {
-        OnSchemaRegistrations.Add(new OnSchemaRegistration(schemaName, handler));
-        return this;
-    }
-
     private void StoreBlobFileTypes()
     {
         RegisterIfMissing<BlobFile>();
@@ -95,4 +79,3 @@ public class LottaConfiguration : ILottaConfiguration
 }
 
 internal record OnRegistration(Type ObjectType, object Handler);
-internal record OnSchemaRegistration(string SchemaName, Func<JsonDocument, TriggerKind, LottaDB, Task> Handler);

@@ -191,7 +191,7 @@ public class CrudTests : IClassFixture<LottaDBFixture>
         int deleteCount = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, d) =>
+            opts.On<Note>(async (note, kind, d, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                     Interlocked.Increment(ref deleteCount);
