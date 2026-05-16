@@ -183,6 +183,7 @@ public class JsonMetadata
         {
             schema.TypeName,
             schema.KeyProperty,
+            schema.DefaultSearchProperty,
             KeyMode = schema.KeyMode.ToString(),
             Properties = schema.Properties
                 .OrderBy(p => p.Name)
@@ -192,7 +193,6 @@ public class JsonMetadata
                     Type = p.ClrType.FullName,
                     p.IsAnalyzed,
                     p.JsonPath,
-                    p.DefaultSearchProperty,
                     p.IsVectorField
                 })
         };
