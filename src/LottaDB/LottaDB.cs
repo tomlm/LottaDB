@@ -742,8 +742,7 @@ public class LottaDB : IDisposable
             await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
             lock (_lock)
             {
-                foreach (var key in pendingKeys)
-                    _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
+                _indexWriter.DeleteDocuments(pendingKeys.ConvertAll(key => new Term(KEY_FIELD, key)).ToArray());
                 _indexDirty = true;
             }
             foreach (var key in pendingKeys)
