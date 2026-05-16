@@ -8,7 +8,7 @@ public class CreateViewTests
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                 {
@@ -31,7 +31,7 @@ public class CreateViewTests
                 });
             });
 
-            opts.On<Actor>(async (actor, kind, db) =>
+            opts.On<Actor>(async (actor, kind, db, _) =>
             {
                 var affected = db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();

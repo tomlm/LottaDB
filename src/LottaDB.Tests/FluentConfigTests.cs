@@ -384,7 +384,7 @@ public class FluentConfigTests
 
         using var db = await CreateFluentDbAsync(opts =>
         {
-            opts.On<BareActor>((actor, kind, _) =>
+            opts.On<BareActor>((actor, kind, _, _) =>
             {
                 captured = actor;
                 capturedKind = kind;
@@ -406,7 +406,7 @@ public class FluentConfigTests
 
         using var db = await CreateFluentDbAsync(opts =>
         {
-            opts.On<BareActor>((_, kind, __) =>
+            opts.On<BareActor>((_, kind, __, ___) =>
             {
                 capturedKind = kind;
                 return Task.CompletedTask;

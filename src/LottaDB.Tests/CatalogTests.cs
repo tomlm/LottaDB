@@ -394,7 +394,7 @@ public class CatalogTests : IDisposable
         var db1 = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.Store<Actor>();
-            config.On<Actor>((actor, kind, db) =>
+            config.On<Actor>((actor, kind, db, _) =>
             {
                 db1Triggered = true;
                 return Task.CompletedTask;
@@ -403,7 +403,7 @@ public class CatalogTests : IDisposable
         var db2 = await catalog.GetDatabaseAsync("db2", config =>
         {
             config.Store<Actor>();
-            config.On<Actor>((actor, kind, db) =>
+            config.On<Actor>((actor, kind, db, _) =>
             {
                 db2Triggered = true;
                 return Task.CompletedTask;
@@ -1228,11 +1228,11 @@ public class CatalogTests : IDisposable
         {
             config.OnUpload();
 
-            config.On<BlobFile>(async (file, kind, db) =>
+            config.On<BlobFile>(async (file, kind, db, _) =>
             {
                 firedTypes.Add("BlobFile");
             });
-            config.On<BlobPhoto>(async (photo, kind, db) =>
+            config.On<BlobPhoto>(async (photo, kind, db, _) =>
             {
                 firedTypes.Add("BlobPhoto");
             });
@@ -1255,7 +1255,7 @@ public class CatalogTests : IDisposable
         {
             config.OnUpload();
 
-            config.On<BlobFile>(async (file, kind, db) =>
+            config.On<BlobFile>(async (file, kind, db, _) =>
             {
                 received = file;
             });
@@ -1276,7 +1276,7 @@ public class CatalogTests : IDisposable
         {
             config.OnUpload();
 
-            config.On<BlobMusic>(async (music, kind, db) =>
+            config.On<BlobMusic>(async (music, kind, db, _) =>
             {
                 fired = true;
             });

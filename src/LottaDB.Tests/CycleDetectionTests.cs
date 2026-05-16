@@ -8,13 +8,13 @@ public class CycleDetectionTests
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<CycleA>(async (a, kind, db) =>
+            opts.On<CycleA>(async (a, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });
             });
 
-            opts.On<CycleB>(async (b, kind, db) =>
+            opts.On<CycleB>(async (b, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleA { Id = $"ca-{b.Id}", Value = $"from-b-{b.Value}" });
@@ -64,7 +64,7 @@ public class CycleDetectionTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<CycleA>(async (a, kind, db) =>
+            opts.On<CycleA>(async (a, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });

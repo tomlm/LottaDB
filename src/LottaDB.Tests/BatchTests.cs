@@ -95,7 +95,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView
@@ -133,7 +133,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView
@@ -209,7 +209,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
         int deleteCount = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (actor, kind, db) =>
+            opts.On<Actor>(async (actor, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                     Interlocked.Increment(ref deleteCount);

@@ -8,7 +8,7 @@ public class ObserveTests
         Actor? received = null;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (actor, kind, db) => { received = actor; });
+            opts.On<Actor>(async (actor, kind, db, _) => { received = actor; });
         });
 
         await db.SaveAsync(new Actor { Username = "saved", DisplayName = "Saved" }, TestContext.Current.CancellationToken);
@@ -22,7 +22,7 @@ public class ObserveTests
         TriggerKind? receivedKind = null;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (actor, kind, db) => { receivedKind = kind; });
+            opts.On<Actor>(async (actor, kind, db, _) => { receivedKind = kind; });
         });
 
         var actor = new Actor { Username = "deleted", DisplayName = "Gone" };
@@ -37,7 +37,7 @@ public class ObserveTests
         using var db = await LottaDBFixture.CreateDbAsync();
         Actor? received = null;
 
-        using var handle = db.On<Actor>(async (actor, kind, db) => { received = actor; });
+        using var handle = db.On<Actor>(async (actor, kind, db, _) => { received = actor; });
         await db.SaveAsync(new Actor { Username = "runtime", DisplayName = "Runtime" }, TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
@@ -49,7 +49,7 @@ public class ObserveTests
         using var db = await LottaDBFixture.CreateDbAsync();
         int count = 0;
 
-        var handle = db.On<Actor>(async (actor, kind, db) => { Interlocked.Increment(ref count); });
+        var handle = db.On<Actor>(async (actor, kind, db, _) => { Interlocked.Increment(ref count); });
         await db.SaveAsync(new Actor { Username = "before" }, TestContext.Current.CancellationToken);
         Assert.Equal(1, count);
 
@@ -64,8 +64,8 @@ public class ObserveTests
         int count = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
-            opts.On<Actor>(async (a, k, d) => { Interlocked.Increment(ref count); });
+            opts.On<Actor>(async (a, k, d, _) => { Interlocked.Increment(ref count); });
+            opts.On<Actor>(async (a, k, d, _) => { Interlocked.Increment(ref count); });
         });
 
         await db.SaveAsync(new Actor { Username = "multi" }, TestContext.Current.CancellationToken);

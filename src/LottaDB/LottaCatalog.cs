@@ -99,7 +99,7 @@ public class LottaCatalog : IDisposable
     /// </summary>
     /// <param name="databaseId">Database ID within this catalog.</param>
     /// <param name="configure">Configuration callback for registering types and handlers for this database.</param>
-    public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null)
+    public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null, CancellationToken cancellationToken = default)
     {
         if (_databases.TryGetValue(databaseId, out var existing))
         {
@@ -129,7 +129,7 @@ public class LottaCatalog : IDisposable
         }
 
         // Load dynamic schemas from Table Storage before computing the schema hash
-        await db.InitializeJsonDocumentTypesAsync();
+        await db.InitializeJsonDocumentTypesAsync(cancellationToken);
 
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);
@@ -138,7 +138,7 @@ public class LottaCatalog : IDisposable
 
         try
         {
-            var response = await table.GetEntityAsync<TableEntity>(ManifestPartitionKey, databaseId);
+            var response = await table.GetEntityAsync<TableEntity>(ManifestPartitionKey, databaseId, cancellationToken: cancellationToken);
             if (response.Value.TryGetValue(SchemaColumn, out var schemaObj))
                 storedSchema = schemaObj as string;
         }
@@ -152,12 +152,12 @@ public class LottaCatalog : IDisposable
         {
             { SchemaColumn, currentSchema }
         };
-        await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace);
+        await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace, cancellationToken);
 
         // If schema changed, rebuild the index
         if (storedSchema != null && storedSchema != currentSchema)
         {
-            await db.RebuildSearchIndex();
+            await db.RebuildSearchIndex(cancellationToken);
         }
 
         return db;

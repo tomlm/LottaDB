@@ -12,7 +12,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
@@ -42,7 +42,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
@@ -60,7 +60,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
@@ -78,7 +78,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                 {
@@ -103,7 +103,7 @@ public class BuilderTests
         TriggerKind? received = null;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) => { received = kind; });
+            opts.On<Note>(async (note, kind, db, _) => { received = kind; });
         });
 
         await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
@@ -116,7 +116,7 @@ public class BuilderTests
         TriggerKind? received = null;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) => { received = kind; });
+            opts.On<Note>(async (note, kind, db, _) => { received = kind; });
         });
 
         var note = new Note { NoteId = "td1", Published = DateTimeOffset.UtcNow };
@@ -130,7 +130,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
@@ -156,7 +156,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 throw new InvalidOperationException("Handler failed");
             });
@@ -173,7 +173,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 throw new InvalidOperationException("Handler failed intentionally");
             });
@@ -191,8 +191,8 @@ public class BuilderTests
         int count = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
-            opts.On<Note>(async (note, kind, db) => { Interlocked.Increment(ref count); });
+            opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
+            opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
         });
 
         await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
@@ -204,7 +204,7 @@ public class BuilderTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });

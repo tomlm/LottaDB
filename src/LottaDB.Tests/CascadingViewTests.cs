@@ -8,7 +8,7 @@ public class CascadingViewTests
     {
         return await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                 {
@@ -30,7 +30,7 @@ public class CascadingViewTests
                 });
             });
 
-            opts.On<Actor>(async (actor, kind, db) =>
+            opts.On<Actor>(async (actor, kind, db, _) =>
             {
                 var affected = db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();
@@ -57,7 +57,7 @@ public class CascadingViewTests
                 }
             });
 
-            opts.On<NoteView>(async (nv, kind, db) =>
+            opts.On<NoteView>(async (nv, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted)
                 {

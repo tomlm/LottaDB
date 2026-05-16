@@ -10,7 +10,7 @@ namespace Lotta;
 /// <param name="entity">The entity that was saved or deleted.</param>
 /// <param name="kind">Whether the entity was saved or deleted.</param>
 /// <param name="db">The database instance, for querying or saving related entities.</param>
-public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db);
+public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db, CancellationToken cancellationToken);
 
 /// <summary>
 /// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
@@ -20,7 +20,7 @@ public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db)
 /// <param name="content">A readable stream of the blob content.</param>
 /// <param name="db">The database instance, for querying or saving related entities.</param>
 /// <returns>A <see cref="BlobFile"/> (or subclass) to save as metadata, or null to skip.</returns>
-public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, LottaDB db);
+public delegate Task<BlobFile?> BlobUploadHandler(string path, string? contentType, Stream content, LottaDB db, CancellationToken cancellationToken);
 
 /// <summary>
 /// Per-database configuration for type registrations and handlers.

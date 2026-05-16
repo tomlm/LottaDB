@@ -132,13 +132,13 @@ internal class TableStorageAdapter
         }
     }
 
-    public async Task<bool> DeleteAsync(string tableName, string key)
+    public async Task<bool> DeleteAsync(string tableName, string key, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
         key = EncodeKey(key);
         try
         {
-            await table.DeleteEntityAsync(_partitionKey, key);
+            await table.DeleteEntityAsync(_partitionKey, key, cancellationToken: cancellationToken);
             return true;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -308,13 +308,13 @@ internal class TableStorageAdapter
 
             if (batch.Count >= 100)
             {
-                await SubmitTransactionAsync(tableName, batch);
+                await SubmitTransactionAsync(tableName, batch, cancellationToken);
                 batch.Clear();
             }
         }
 
         if (batch.Count > 0)
-            await SubmitTransactionAsync(tableName, batch);
+            await SubmitTransactionAsync(tableName, batch, cancellationToken);
     }
 
     /// <summary>
@@ -352,14 +352,14 @@ internal class TableStorageAdapter
     /// <summary>
     /// Submit a batch of table operations. Returns per-item ETags (null for deletes).
     /// </summary>
-    internal async Task<string?[]> SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions)
+    internal async Task<string?[]> SubmitTransactionAsync(string tableName, IReadOnlyList<TableTransactionAction> actions, CancellationToken cancellationToken = default)
     {
         var etags = new string?[actions.Count];
         if (actions.Count == 0) return etags;
         var table = GetTable(tableName);
         try
         {
-            var responses = await table.SubmitTransactionAsync(actions);
+            var responses = await table.SubmitTransactionAsync(actions, cancellationToken);
             for (int i = 0; i < responses.Value.Count; i++)
                 etags[i] = responses.Value[i].Headers.ETag?.ToString();
         }
@@ -372,11 +372,11 @@ internal class TableStorageAdapter
                 switch (action.ActionType)
                 {
                     case TableTransactionActionType.UpsertReplace:
-                        var response = await table.UpsertEntityAsync(action.Entity, TableUpdateMode.Replace);
+                        var response = await table.UpsertEntityAsync(action.Entity, TableUpdateMode.Replace, cancellationToken);
                         etags[i] = response.Headers.ETag?.ToString();
                         break;
                     case TableTransactionActionType.Delete:
-                        try { await table.DeleteEntityAsync(action.Entity.PartitionKey, action.Entity.RowKey); }
+                        try { await table.DeleteEntityAsync(action.Entity.PartitionKey, action.Entity.RowKey, cancellationToken: cancellationToken); }
                         catch (RequestFailedException ex) when (ex.Status == 404) { }
                         break;
                 }

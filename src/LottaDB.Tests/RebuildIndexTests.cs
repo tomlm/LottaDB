@@ -44,7 +44,7 @@ public class RebuildIndexTests
         // Rebuild only re-indexes from table storage, does not re-run On<T> handlers
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);

@@ -10,7 +10,7 @@ namespace Lotta;
 internal static class DefaultBlobHandler
 {
 
-    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, LottaDB db)
+    internal static async Task<BlobFile?> HandleAsync(string path, string? contentType, Stream stream, LottaDB db, CancellationToken cancellationToken = default)
     {
         var ext = Path.GetExtension(path);
         var mimeType = contentType ?? GetMimeType(ext);
@@ -26,7 +26,7 @@ internal static class DefaultBlobHandler
         if (IsTextContent(mimeType, ext))
         {
             using var reader = new StreamReader(stream, leaveOpen: true);
-            blobFile.Content = await reader.ReadToEndAsync();
+            blobFile.Content = await reader.ReadToEndAsync(cancellationToken);
             blobFile.ContentLength = stream.CanSeek ? stream.Length : System.Text.Encoding.UTF8.GetByteCount(blobFile.Content);
         }
         else

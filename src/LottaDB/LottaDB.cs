@@ -147,7 +147,7 @@ public class LottaDB : IDisposable
 
         // Built-in handler: when a JsonDocumentType is saved/deleted, update the dynamic mappers
         var jsonSchemaList = _handlers.GetOrAdd(typeof(JsonDocumentType), _ => new List<object>());
-        jsonSchemaList.Add((EntityHandler<JsonDocumentType>)(async (schema, kind, db) =>
+        jsonSchemaList.Add((EntityHandler<JsonDocumentType>)(async (schema, kind, db, cancellationToken) =>
         {
             if (kind == TriggerKind.Saved)
             {
@@ -162,7 +162,7 @@ public class LottaDB : IDisposable
                     var newHash = JsonMetadata.ComputeHash(newDynamic);
                     if (oldHash != newHash)
                     {
-                        await ReindexJsonMetadataAsync(schema.Name);
+                        await ReindexJsonMetadataAsync(schema.Name, cancellationToken);
                     }
                 }
             }
@@ -193,7 +193,7 @@ public class LottaDB : IDisposable
     private void RegisterLuceneHandler<T>() where T : class, new()
     {
         var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
-        list.Add((EntityHandler<T>)((entity, kind, db) =>
+        list.Add((EntityHandler<T>)((entity, kind, db, cancellationToken) =>
         {
             var meta = GetMeta<T>();
             var key = meta.GetKey(entity);
@@ -396,7 +396,7 @@ public class LottaDB : IDisposable
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
-        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
+        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
 
         var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
 
@@ -649,7 +649,7 @@ public class LottaDB : IDisposable
         // Fetch document before deleting (needed for handlers)
         var doc = await _tableAdapter.GetJsonDocumentAsync(_lottaCatalog.Name, key, cancellationToken);
 
-        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key);
+        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
         lock (_lock)
         {
             _indexWriter.DeleteDocuments([new Term(KEY_FIELD, key)]);
@@ -739,7 +739,7 @@ public class LottaDB : IDisposable
 
         async Task FlushAsync()
         {
-            await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+            await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
             lock (_lock)
             {
                 foreach (var key in pendingKeys)
@@ -792,7 +792,7 @@ public class LottaDB : IDisposable
 
         async Task FlushAsync()
         {
-            var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+            var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
 
             // Annotate each document with its ETag from the batch response
             for (int i = 0; i < pendingDocs.Count; i++)
@@ -861,9 +861,9 @@ public class LottaDB : IDisposable
     /// Loads all JsonDocumentType entities from Table Storage and registers their dynamic mappers.
     /// Called by LottaCatalog.GetDatabaseAsync after construction.
     /// </summary>
-    internal async Task InitializeJsonDocumentTypesAsync()
+    internal async Task InitializeJsonDocumentTypesAsync(CancellationToken cancellationToken = default)
     {
-        await foreach (var schema in _tableAdapter.GetManyAsync<JsonDocumentType>(_lottaCatalog.Name))
+        await foreach (var schema in _tableAdapter.GetManyAsync<JsonDocumentType>(_lottaCatalog.Name, cancellationToken: cancellationToken))
         {
             RegisterJsonMetadata(schema);
         }
@@ -1068,7 +1068,7 @@ public class LottaDB : IDisposable
         var handlerStream = pipe.Reader.AsStream();
 
         var uploadTask = blob.UploadAsync(teeStream, options, cancellationToken: cancellationToken);
-        var parseTask = handler(path, resolvedContentType, handlerStream, this);
+        var parseTask = handler(path, resolvedContentType, handlerStream, this, cancellationToken);
 
         await Task.WhenAll(uploadTask, parseTask);
         return await SaveBlobFileAsync(parseTask.Result, path, cancellationToken);
@@ -1102,7 +1102,7 @@ public class LottaDB : IDisposable
             return null;
 
         using var handlerStream = new MemoryStream(content);
-        var blobFile = await handler(path, resolvedContentType, handlerStream, this);
+        var blobFile = await handler(path, resolvedContentType, handlerStream, this, cancellationToken);
         return await SaveBlobFileAsync(blobFile, path, cancellationToken);
     }
 
@@ -1401,7 +1401,7 @@ public class LottaDB : IDisposable
 
             async Task FlushTypedAsync()
             {
-                var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
                 // Annotate each entity with its ETag from the batch response
                 for (int i = 0; i < pendingEntities.Count; i++)
                 {
@@ -1490,7 +1490,7 @@ public class LottaDB : IDisposable
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -1502,7 +1502,7 @@ public class LottaDB : IDisposable
 
                 if (pendingActions.Count >= 100)
                 {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
                     await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
                     pendingActions.Clear();
                     pendingKeys.Clear();
@@ -1511,7 +1511,7 @@ public class LottaDB : IDisposable
 
             if (pendingActions.Count > 0)
             {
-                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions);
+                await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
                 await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
             }
         }
@@ -1592,7 +1592,7 @@ public class LottaDB : IDisposable
                 {
                     try
                     {
-                        await typed(entity, kind, this);
+                        await typed(entity, kind, this, cancellationToken);
                     }
                     catch (Exception ex)
                     {

@@ -224,7 +224,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
 
         var handlerCalls = new List<string>();
         var handlerLock = new object();
-        using var handle = db.On<Actor>((a, _, _) =>
+        using var handle = db.On<Actor>((a, _, _, _) =>
         {
             if (a.Username == username)
                 lock (handlerLock) handlerCalls.Add(a.DisplayName);

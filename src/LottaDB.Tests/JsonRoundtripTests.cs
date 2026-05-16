@@ -291,7 +291,7 @@ public class JsonRoundtripTests
     {
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db) =>
+            opts.On<Note>(async (note, kind, db, _) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
