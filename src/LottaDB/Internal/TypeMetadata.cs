@@ -29,12 +29,12 @@ internal class TypeMetadata
         Type = type;
     }
 
-    public static TypeMetadata Build<T>(StorageConfiguration<T>? fluentConfig) where T : class, new()
+    public static TypeMetadata Build<T>(StorageConfiguration<T>? fluentConfig, string[]? autoKeyProperties = null) where T : class, new()
     {
         var type = typeof(T);
         var meta = new TypeMetadata(type);
 
-        var (getKey, keymode, keyProp) = ResolveKey<T>(fluentConfig);
+        var (getKey, keymode, keyProp) = ResolveKey<T>(fluentConfig, autoKeyProperties);
         meta.GetKey = getKey;
         meta.KeyMode = keymode;
         meta.KeyProperty = keyProp;
@@ -48,7 +48,7 @@ internal class TypeMetadata
         return meta;
     }
 
-    private static (Func<object, string> getter, KeyMode keymode, PropertyInfo? prop) ResolveKey<T>(StorageConfiguration<T>? fluent) where T : class, new()
+    private static (Func<object, string> getter, KeyMode keymode, PropertyInfo? prop) ResolveKey<T>(StorageConfiguration<T>? fluent, string[]? autoKeyProperties = null) where T : class, new()
     {
         // Fluent override with expression
         if (fluent?.KeyExpression is Expression<Func<T, string>> keyExpr)
@@ -71,11 +71,18 @@ internal class TypeMetadata
         var prop = typeof(T).GetProperties()
             .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
 
-        if (prop == null)
-            throw new InvalidOperationException($"Type {typeof(T).Name} has no [Key] attribute and no fluent SetKey was configured.");
+        if (prop != null)
+        {
+            var attrStrategy = prop.GetCustomAttribute<KeyAttribute>()!.Mode;
+            return (obj => GenerateKey(obj, attrStrategy, prop), attrStrategy, prop);
+        }
 
-        var attrStrategy = prop.GetCustomAttribute<KeyAttribute>()!.Mode;
-        return (obj => GenerateKey(obj, attrStrategy, prop), attrStrategy, prop);
+        // Convention-based key detection
+        var conventionProp = DetectKeyProperty(typeof(T), autoKeyProperties);
+        if (conventionProp != null)
+            return (obj => GenerateKey(obj, KeyMode.Auto, conventionProp), KeyMode.Auto, conventionProp);
+
+        throw new InvalidOperationException($"Type {typeof(T).Name} has no [Key] attribute, no fluent SetKey, and no convention key property (Id, _id, Key, etc.) was found.");
     }
 
     internal static string GenerateKey(object obj, KeyMode mode, PropertyInfo? prop)
@@ -153,6 +160,8 @@ internal class TypeMetadata
 
         if (fluent == null)
         {
+            // AutoQueryable is on by default — always apply unless explicitly disabled
+            ApplyAutoQueryable<T>(meta, ignoredProperties: null);
             ValidateDefaultSearch<T>(meta);
             return;
         }
@@ -196,7 +205,68 @@ internal class TypeMetadata
                 meta.DefaultSearchProperty = propInfo;
         }
 
+        // AutoQueryable: on by default, only off if explicitly disabled via .AutoQueryable(false)
+        if (!fluent.IsAutoQueryableDisabled)
+        {
+            var ignoredProps = new HashSet<string>(
+                (fluent.IgnoredProperties ?? [])
+                    .Select(e => ExtractPropertyInfo(e)?.Name)
+                    .Where(n => n != null)!);
+
+            ApplyAutoQueryable<T>(meta, ignoredProps);
+        }
+
         ValidateDefaultSearch<T>(meta);
+    }
+
+    /// <summary>Default convention-based key property names.</summary>
+    internal static readonly string[] DefaultAutoKeyProperties =
+        ["id", "_id", "key", "_key", "pk", "primaryKey", "uuid", "guid"];
+
+    private static PropertyInfo? DetectKeyProperty(Type type, string[]? autoKeyProperties = null)
+    {
+        var conventions = autoKeyProperties ?? DefaultAutoKeyProperties;
+        var props = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        foreach (var convention in conventions)
+        {
+            var match = props.FirstOrDefault(p =>
+                p.Name.Equals(convention, StringComparison.OrdinalIgnoreCase)
+                && (p.PropertyType == typeof(string) || p.PropertyType == typeof(int) || p.PropertyType == typeof(long) || p.PropertyType == typeof(Guid)));
+            if (match != null) return match;
+        }
+        return null;
+    }
+
+    private static void ApplyAutoQueryable<T>(TypeMetadata meta, HashSet<string>? ignoredProperties) where T : class, new()
+    {
+        foreach (var prop in typeof(T).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            // Skip if already configured, is the key, or is ignored
+            if (meta.Tags.Any(t => t.Property == prop)) continue;
+            if (meta.IndexedProperties.Any(i => i.Property == prop)) continue;
+            if (prop == meta.KeyProperty) continue;
+            if (ignoredProperties != null && ignoredProperties.Contains(prop.Name)) continue;
+            if (!IsAutoQueryableType(prop.PropertyType)) continue;
+
+            AddQueryable(meta, prop, QueryableMode.Auto);
+        }
+    }
+
+    /// <summary>
+    /// Types eligible for AutoQueryable promotion.
+    /// </summary>
+    private static bool IsAutoQueryableType(Type type)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        return type == typeof(string)
+            || type == typeof(string[])
+            || type == typeof(int)
+            || type == typeof(long)
+            || type == typeof(double)
+            || type == typeof(bool)
+            || type == typeof(DateTime)
+            || type == typeof(DateTimeOffset)
+            || type == typeof(Guid);
     }
 
     private static void ValidateDefaultSearch<T>(TypeMetadata meta)
@@ -234,8 +304,8 @@ internal class TypeMetadata
         {
             QueryableMode.NotAnalyzed => true,
             QueryableMode.Analyzed => false,
-            // Auto: strings are analyzed, everything else is not
-            _ => prop.PropertyType != typeof(string)
+            // Auto: strings and string arrays are analyzed, everything else is not
+            _ => prop.PropertyType != typeof(string) && prop.PropertyType != typeof(string[])
         };
 
         meta.IndexedProperties.Add(new IndexedTypeProperty
@@ -322,7 +392,7 @@ internal class TypeMetadata
         foreach (var (type, configObj) in config.StorageConfigurations)
         {
             var m = typeof(TypeMetadata).GetMethod(nameof(Build))!.MakeGenericMethod(type);
-            metadatas.Add((TypeMetadata)m.Invoke(null, new[] { configObj })!);
+            metadatas.Add((TypeMetadata)m.Invoke(null, new object?[] { configObj, config.AutoKeyProperties })!);
         }
         return ComputeSchemaJson(metadatas);
     }

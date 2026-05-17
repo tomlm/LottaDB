@@ -18,6 +18,9 @@ public class LottaConfiguration : ILottaConfiguration
     /// </summary>
     public int AutoCommitDelay { get; set; } = 1000;
 
+    /// <inheritdoc/>
+    public string[] AutoKeyProperties { get; set; } = ["id", "_id", "key", "_key", "pk", "primaryKey", "uuid", "guid"];
+
     /// <summary>
     /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database,
     /// including table name, partition key, row key, etc. If not configured, Lotta will use default conventions to determine these values.

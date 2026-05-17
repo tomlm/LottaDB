@@ -40,6 +40,16 @@ public class JsonDocumentType
     [JsonPropertyName("keyMode")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public KeyMode KeyMode { get; set; } = KeyMode.Auto;
+
+    /// <summary>
+    /// When true, all top-level simple-type properties are automatically promoted as queryable
+    /// (indexed in Lucene + promoted to Table Storage columns). Only applies when
+    /// <see cref="Properties"/> is empty — explicit properties take control.
+    /// Defaults to true for zero-config document storage.
+    /// </summary>
+    [JsonPropertyName("autoQueryable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AutoQueryable { get; set; } = true;
 }
 
 /// <summary>

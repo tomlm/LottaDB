@@ -39,6 +39,20 @@ namespace Lotta.Internal
             }
         }
 
+        internal static object? DeserializeFromTypeName(string json, string typeName)
+        {
+            var type = ResolveType(typeName);
+            if (type == null) return null;
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize(json, type);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         internal static List<Type> GetDerivedTypes(Type type)
         {
             lock (_derivedTypes)

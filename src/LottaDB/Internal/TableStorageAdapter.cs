@@ -43,7 +43,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -55,7 +55,7 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         var entity = BuildEntity(key, obj, meta);
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -236,6 +236,17 @@ internal class TableStorageAdapter
         var bytes = entity.GetObjectBytes();
         if (bytes.Length == 0) return null;
         var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
+
+        // Dynamic JSON document
+        if (JsonMetadata.IsJsonTypeName(typeName))
+        {
+            var doc = JsonDocument.Parse(bytes);
+            doc.SetKey(DecodeKey(entity.RowKey));
+            doc.SetETag(entity.ETag.ToString());
+            return doc;
+        }
+
+        // CLR typed entity
         var concreteType = TypeUtils.ResolveType(typeName);
         if (concreteType != null)
         {
@@ -340,6 +351,11 @@ internal class TableStorageAdapter
             if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
+        if (schema.AutoQueryable)
+        {
+            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
+        }
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
@@ -406,14 +422,67 @@ internal class TableStorageAdapter
         entity[TableEntityExtensions.TypeProperty] = schemaName;
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
 
+        // Explicit properties first
         foreach (var prop in schema.Properties)
         {
             if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
 
+        // AutoQueryable: promote remaining simple-type properties
+        if (schema.AutoQueryable)
+        {
+            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
+        }
+
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
+    }
+
+    /// <summary>
+    /// Promotes all top-level simple-type JSON properties to table entity columns.
+    /// Used when AutoQueryable is enabled.
+    /// </summary>
+    private static void PromoteAutoQueryableProperties(TableEntity entity, JsonElement root, string keyProperty, HashSet<string>? skip = null)
+    {
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (prop.Name.Equals(keyProperty, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (skip != null && skip.Contains(prop.Name))
+                continue;
+
+            switch (prop.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    entity[prop.Name] = prop.Value.GetString() ?? "";
+                    break;
+                case JsonValueKind.Number:
+                    if (prop.Value.TryGetInt64(out var l))
+                        entity[prop.Name] = l;
+                    else if (prop.Value.TryGetDouble(out var d))
+                        entity[prop.Name] = d;
+                    break;
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    entity[prop.Name] = prop.Value.GetBoolean();
+                    break;
+                case JsonValueKind.Array:
+                    // String arrays → comma-delimited
+                    var elements = new List<string>();
+                    foreach (var element in prop.Value.EnumerateArray())
+                    {
+                        if (element.ValueKind == JsonValueKind.String)
+                            elements.Add(element.GetString() ?? "");
+                        else
+                            break; // Not a pure string array, skip
+                    }
+                    if (elements.Count > 0)
+                        entity[prop.Name] = string.Join(",", elements);
+                    break;
+            }
+        }
     }
 
     /// <summary>
@@ -485,8 +554,13 @@ internal class TableStorageAdapter
             if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
                 entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
         }
+        if (schema.AutoQueryable)
+        {
+            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
+        }
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -524,6 +598,8 @@ internal class TableStorageAdapter
         return value switch
         {
             string s => s,
+            string[] arr => string.Join(",", arr),
+            IEnumerable<string> strings => string.Join(",", strings),
             int i => i,
             long l => l,
             double d => d,

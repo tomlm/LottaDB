@@ -104,6 +104,9 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
 
         // Per-property indexed fields
         var contentBuilder = new StringBuilder();
+        var indexedFieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Explicit properties always take precedence
         foreach (var prop in _schema.Properties)
         {
             var val = JsonMetadata.GetValue(json, prop);
@@ -111,15 +114,71 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
                 continue;
 
             AddFieldToDocument(target, prop, val.Value, _embeddingGenerator);
+            indexedFieldNames.Add(prop.Name);
 
             // Accumulate analyzed string fields into _content_
             if (prop.IsAnalyzed && prop.ClrType == typeof(string))
             {
-                var s = val.Value.GetString();
-                if (!string.IsNullOrEmpty(s))
+                var sv = val.Value.GetString();
+                if (!string.IsNullOrEmpty(sv))
                 {
                     if (contentBuilder.Length > 0) contentBuilder.Append(' ');
-                    contentBuilder.Append(s);
+                    contentBuilder.Append(sv);
+                }
+            }
+        }
+
+        // 2. AutoQueryable: auto-discover remaining top-level simple-type properties
+        if (_schema.AutoQueryable)
+        {
+            foreach (var prop in json.EnumerateObject())
+            {
+                // Skip key property and already-indexed explicit properties
+                if (prop.Name.Equals(_schema.KeyProperty, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (indexedFieldNames.Contains(prop.Name))
+                    continue;
+
+                switch (prop.Value.ValueKind)
+                {
+                    case JsonValueKind.String:
+                        var s = prop.Value.GetString();
+                        if (!string.IsNullOrEmpty(s))
+                        {
+                            target.Add(new TextField(prop.Name, s, Field.Store.NO));
+                            if (contentBuilder.Length > 0) contentBuilder.Append(' ');
+                            contentBuilder.Append(s);
+                        }
+                        break;
+
+                    case JsonValueKind.Number:
+                        if (prop.Value.TryGetInt64(out var l))
+                            target.Add(new Int64Field(prop.Name, l, Field.Store.NO));
+                        else if (prop.Value.TryGetDouble(out var d))
+                            target.Add(new DoubleField(prop.Name, d, Field.Store.NO));
+                        break;
+
+                    case JsonValueKind.True:
+                    case JsonValueKind.False:
+                        target.Add(new StringField(prop.Name, prop.Value.GetBoolean().ToString().ToLowerInvariant(), Field.Store.NO));
+                        break;
+
+                    case JsonValueKind.Array:
+                        // String arrays: add each element as a separate field
+                        foreach (var element in prop.Value.EnumerateArray())
+                        {
+                            if (element.ValueKind == JsonValueKind.String)
+                            {
+                                var elem = element.GetString();
+                                if (!string.IsNullOrEmpty(elem))
+                                {
+                                    target.Add(new TextField(prop.Name, elem, Field.Store.NO));
+                                    if (contentBuilder.Length > 0) contentBuilder.Append(' ');
+                                    contentBuilder.Append(elem);
+                                }
+                            }
+                        }
+                        break;
                 }
             }
         }

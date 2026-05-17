@@ -54,6 +54,9 @@ public class LottaDB : IDisposable
     internal const string KEY_FIELD = "_key_";
     internal const string CONTENT_FIELD = "_content_";
 
+    /// <summary>Internal schema name for the default schemaless document store.</summary>
+    internal const string DefaultSchemaName = "_default_";
+
     /// <summary>
     /// Create a LottaDB database instance. Use <see cref="LottaCatalog.GetDatabaseAsync"/> instead of calling this directly.
     /// </summary>
@@ -133,7 +136,7 @@ public class LottaDB : IDisposable
         foreach (var (type, configObj) in _config.StorageConfigurations)
         {
             var m = typeof(TypeMetadata).GetMethod(nameof(TypeMetadata.Build))!.MakeGenericMethod(type);
-            _metadata[type] = (TypeMetadata)m.Invoke(null, new[] { configObj })!;
+            _metadata[type] = (TypeMetadata)m.Invoke(null, new object[] { configObj, _config.AutoKeyProperties })!;
         }
     }
 
@@ -238,7 +241,7 @@ public class LottaDB : IDisposable
 
             var document = new Document();
 
-            if (JsonMetadata.IsDynamicTypeName(typeName))
+            if (JsonMetadata.IsJsonTypeName(typeName))
             {
                 // Dynamic schema entity — look up by unprefixed name
                 var schemaName = JsonMetadata.UnprefixTypeName(typeName);
@@ -316,6 +319,10 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
     public async Task<ObjectResult> SaveAsync(object entity, CancellationToken cancellationToken = default)
     {
+        // JsonDocument → route to default schema
+        if (entity is JsonDocument jsonDoc)
+            return await SaveAsync(DefaultSchemaName, jsonDoc, cancellationToken);
+
         var meta = GetMeta(entity.GetType());
         var key = meta.GetKey(entity);
 
@@ -549,6 +556,41 @@ public class LottaDB : IDisposable
     /// <param name="query">Optional Lucene query string to pre-filter results.</param>
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
+        // Search<object>() → untyped search across all types using ObjectDocumentMapper
+        if (typeof(T) == typeof(object))
+        {
+            ReloadSearcher();
+            lock (_lock)
+            {
+                var objectMapper = new ObjectDocumentMapper(Lucene.Net.Util.LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer, this);
+
+                Lucene.Net.Search.Query luceneQuery;
+                if (!String.IsNullOrEmpty(query))
+                {
+                    var parser = new Lucene.Net.QueryParsers.Classic.QueryParser(
+                        Lucene.Net.Util.LuceneVersion.LUCENE_48, CONTENT_FIELD, _lottaCatalog.Analyzer);
+                    parser.AllowLeadingWildcard = true;
+                    luceneQuery = parser.Parse(query);
+                }
+                else
+                {
+                    luceneQuery = new Lucene.Net.Search.MatchAllDocsQuery();
+                }
+
+                using var reader = _indexWriter.GetReader(applyAllDeletes: true);
+                var searcher = new Lucene.Net.Search.IndexSearcher(reader);
+                var hits = searcher.Search(luceneQuery, int.MaxValue);
+                var results = new List<T>();
+                foreach (var hit in hits.ScoreDocs)
+                {
+                    var doc = searcher.Doc(hit.Doc);
+                    var obj = objectMapper.CreateFromDocument(doc, null!, null!, null!);
+                    results.Add((T)obj);
+                }
+                return results.AsQueryable();
+            }
+        }
+
         ReloadSearcher();
 
         lock (_lock)
@@ -856,6 +898,22 @@ public class LottaDB : IDisposable
         return new ObjectResult { Changes = allChanges, Errors = allErrors };
     }
 
+    // === Untyped API ===
+
+    /// <summary>
+    /// Get any object by key, regardless of type. Returns a typed CLR object or JsonDocument.
+    /// Key uniqueness across types is the caller's responsibility.
+    /// </summary>
+    public async Task<object?> GetAsync(string key, CancellationToken cancellationToken = default)
+    {
+        var (result, etag) = await _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+        if (result == null) return null;
+        if (etag != null) result.SetETag(etag);
+        result.SetKey(key);
+        if (result is BlobFile bf) bf.Database = this;
+        return result;
+    }
+
     /// <summary>
     /// Loads all JsonDocumentType entities from Table Storage and registers their dynamic mappers.
     /// Called by LottaCatalog.GetDatabaseAsync after construction.
@@ -866,6 +924,17 @@ public class LottaDB : IDisposable
         {
             RegisterJsonMetadata(schema);
         }
+
+        // Register the default schema in memory for schemaless JsonDocument storage
+        if (!_schemas.ContainsKey(DefaultSchemaName))
+        {
+            RegisterJsonMetadata(new JsonDocumentType
+            {
+                Name = DefaultSchemaName,
+                KeyMode = KeyMode.Auto,
+                AutoQueryable = true,
+            });
+        }
     }
 
     /// <summary>
@@ -874,6 +943,7 @@ public class LottaDB : IDisposable
     internal void RegisterJsonMetadata(JsonDocumentType schema)
     {
         var dynSchema = JsonMetadata.Parse(schema);
+        dynSchema.AutoKeyProperties = _config.AutoKeyProperties;
         _schemas[schema.Name] = dynSchema;
         var mapper = new JsonDocumentMapper(dynSchema, LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer, _lottaCatalog.EmbeddingGenerator);
         _dynamicMappers[schema.Name] = mapper;

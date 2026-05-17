@@ -294,7 +294,8 @@ public class QueryMethodTests
         {
             using var db = await LottaDBFixture.CreateDbAsync(config =>
             {
-                config.Store<BadDefaultSearch>();
+                // Disable AutoQueryable so NotIndexed is truly not indexed
+                config.Store<BadDefaultSearch>(s => s.AutoQueryable(false));
             }, cancellationToken: ct);
         });
 

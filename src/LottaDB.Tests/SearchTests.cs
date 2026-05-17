@@ -140,13 +140,14 @@ public class SearchTests
     }
 
     [Fact]
-    public async Task SearchString_NonQueryableField_Unreachable()
+    public async Task SearchString_AllFieldsReachable_WithAutoQueryable()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello", NotQueryable = "xyzzy secret" }, ct);
 
-        Assert.Empty(db.Search<Note>("xyzzy").ToList());
+        // With AutoQueryable (default), all string properties are searchable
+        Assert.NotEmpty(db.Search<Note>("xyzzy").ToList());
     }
 
     [Fact]
