@@ -27,8 +27,6 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     private static UtcDateTimeConverter _dtConverter = new UtcDateTimeConverter("yyyyMMddTHHmmssfffZ");
     private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("yyyyMMddTHHmmssfffZ");
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
-    public const string KEY_FIELD = "_key_";
-
     private readonly LottaDB _db;
 
     public TypeDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
@@ -127,7 +125,7 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
             }
             AddField(contentMapper);
 
-            DefaultSearchProperty = LottaDB.CONTENT_FIELD;
+            DefaultSearchProperty = StorageFields.Content;
         }
     }
 
@@ -142,23 +140,12 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
     {
-        var json = source.Get(LottaDB.OBJECT_FIELD)
-            ?? throw new InvalidOperationException(
-                $"Lucene document missing '{LottaDB.OBJECT_FIELD}' field for type {typeof(T).Name}. Key: {source.Get(LottaDB.KEY_FIELD) ?? "unknown"}. Index may be corrupted — consider calling RebuildSearchIndex().");
-
-        var obj = (T)JsonSerializer.Deserialize(json, actualType ?? typeof(T))!;
-        obj.SetJson(json);
-        var etag = source.Get(LottaDB.ETAG_FIELD);
-        if (etag != null) obj.SetETag(etag);
-        var keyValue = source.Get(LottaDB.KEY_FIELD);
-        if (keyValue != null) obj.SetKey(keyValue);
-        if (obj is BlobFile bf) bf.Database = _db;
-        return obj;
+        return EntityMapper.FromLuceneDocument<T>(source, _db);
     }
 
     public override bool IsModified(T item, Document document)
     {
-        var json1 = document.Get(LottaDB.OBJECT_FIELD);
+        var json1 = document.Get(StorageFields.ObjectPrefix);
         if (String.IsNullOrEmpty(json1))
             return true;
         var json2 = JsonSerializer.Serialize(item, item.GetType());

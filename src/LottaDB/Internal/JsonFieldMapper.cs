@@ -21,7 +21,7 @@ internal class JsonFieldMapper<T> : IFieldMapper<T>
         _analyzer = analyzer;
     }
 
-    public string FieldName => LottaDB.OBJECT_FIELD;
+    public string FieldName => StorageFields.ObjectPrefix;
 
     public string PropertyName => FieldName;
 

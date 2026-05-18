@@ -21,6 +21,9 @@ public class ObjectMetadata
     /// it is NOT updated when the object is mutated in memory.
     /// </summary>
     public string? Json { get; set; }
+
+    /// <summary>The matched or assigned schema name for JSON documents.</summary>
+    public string? Schema { get; set; }
 }
 
 /// <summary>
@@ -92,5 +95,18 @@ public static class ObjectExtensions
     public static string? GetETag<T>(this T obj) where T : class
     {
         return _table.TryGetValue(obj, out var meta) ? meta.ETag : null;
+    }
+
+    /// <summary>Attach a schema name to a JSON document.</summary>
+    public static T SetSchema<T>(this T obj, string schema) where T : class
+    {
+        _table.GetOrCreateValue(obj).Schema = schema;
+        return obj;
+    }
+
+    /// <summary>Get the schema name previously attached to this object, or null if none.</summary>
+    public static string? GetSchema<T>(this T obj) where T : class
+    {
+        return _table.TryGetValue(obj, out var meta) ? meta.Schema : null;
     }
 }

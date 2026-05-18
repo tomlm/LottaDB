@@ -21,7 +21,7 @@ internal class ObjectDocumentMapper : DocumentMapperBase<object>
         : base(version, analyzer)
     {
         _db = db;
-        DefaultSearchProperty = LottaDB.CONTENT_FIELD;
+        DefaultSearchProperty = StorageFields.Content;
         AddField(new JsonFieldMapper<object>(version, analyzer));
         AddField(new ContentFieldMapper<object>(version, analyzer, []));
     }
@@ -29,35 +29,7 @@ internal class ObjectDocumentMapper : DocumentMapperBase<object>
     public override object CreateFromDocument(Document source, IQueryExecutionContext context,
         Type actualType, ObjectLookup<object> factory)
     {
-        var json = source.Get(LottaDB.OBJECT_FIELD);
-        if (json == null)
-            throw new InvalidOperationException(
-                $"Lucene document missing '{LottaDB.OBJECT_FIELD}' field. Key: {source.Get(LottaDB.KEY_FIELD) ?? "unknown"}. Index may be corrupted — consider calling RebuildSearchIndex().");
-
-        var typeName = source.Get("_type_");
-        var etag = source.Get(LottaDB.ETAG_FIELD);
-        var keyValue = source.Get(LottaDB.KEY_FIELD);
-
-        object result;
-        if (typeName != null && JsonMetadata.IsJsonTypeName(typeName))
-        {
-            var jsonDoc = JsonDocument.Parse(json);
-            if (etag != null) jsonDoc.SetETag(etag);
-            if (keyValue != null) jsonDoc.SetKey(keyValue);
-            result = jsonDoc;
-        }
-        else
-        {
-            var obj = TypeUtils.DeserializeFromTypeName(json, typeName!)
-                ?? throw new InvalidOperationException(
-                    $"Failed to deserialize type '{typeName}' from Lucene document. Key: {source.Get(LottaDB.KEY_FIELD) ?? "unknown"}. Index may be corrupted — consider calling RebuildSearchIndex().");
-            if (etag != null) obj.SetETag(etag);
-            if (keyValue != null) obj.SetKey(keyValue);
-            if (obj is BlobFile bf && _db != null) bf.Database = _db;
-            result = obj;
-        }
-
-        return result;
+        return EntityMapper.FromLuceneDocument(source, _db);
     }
 
     public override bool IsModified(object item, Document document) => true;

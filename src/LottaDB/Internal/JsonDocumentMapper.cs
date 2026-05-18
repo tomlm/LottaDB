@@ -35,8 +35,8 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
 
         // Build per-field analyzer
         Analyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
-        Analyzer.AddAnalyzer(LottaDB.KEY_FIELD, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
-        Analyzer.AddAnalyzer(LottaDB.CONTENT_FIELD, contentAnalyzer);
+        Analyzer.AddAnalyzer(StorageFields.Key, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+        Analyzer.AddAnalyzer(StorageFields.Content, contentAnalyzer);
 
         // Build field mappings for each schema property
         foreach (var prop in schema.Properties)
@@ -57,19 +57,19 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
     // === IFieldMappingInfoProvider ===
 
     public IEnumerable<string> AllProperties =>
-        new[] { LottaDB.KEY_FIELD, LottaDB.CONTENT_FIELD }
+        new[] { StorageFields.Key, StorageFields.Content }
         .Concat(_fieldMappings.Keys);
 
-    public IEnumerable<string> KeyProperties => new[] { LottaDB.KEY_FIELD };
+    public IEnumerable<string> KeyProperties => new[] { StorageFields.Key };
 
     public IEnumerable<string> IndexedProperties =>
         _fieldMappings.Keys;
 
-    public string DefaultSearchProperty => _schema.DefaultSearchProperty ?? LottaDB.CONTENT_FIELD;
+    public string DefaultSearchProperty => _schema.DefaultSearchProperty ?? StorageFields.Content;
 
     public IFieldMappingInfo GetMappingInfo(string propertyName)
     {
-        if (propertyName == LottaDB.CONTENT_FIELD)
+        if (propertyName == StorageFields.Content)
             return new JsonContentFieldMapper(_version, _contentAnalyzer);
         if (_fieldMappings.TryGetValue(propertyName, out var mapping))
             return mapping;
@@ -94,13 +94,17 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
         var key = jsonDoc?.GetKey() ?? _schema.GetKey(json);
 
         // _key_ field
-        target.Add(new StringField(LottaDB.KEY_FIELD, key, Field.Store.YES));
+        target.Add(new StringField(StorageFields.Key, key, Field.Store.YES));
 
-        // _type_ field — prefixed schema name as type discriminator
-        target.Add(new StringField("_type_", _schema.StorageTypeName, Field.Store.YES));
+        // _type_ field — always JsonDocument for all JSON documents
+        target.Add(new StringField(StorageFields.Type, typeof(System.Text.Json.JsonDocument).FullName!, Field.Store.YES));
+
+        // Schema field — the matched/assigned schema name (searchable)
+        if (_schema.TypeName != StorageFields.DefaultSchema)
+            target.Add(new StringField(StorageFields.Schema, _schema.TypeName, Field.Store.YES));
 
         // _object_ field — full JSON stored (not indexed)
-        target.Add(new StoredField(LottaDB.OBJECT_FIELD, json.GetRawText()));
+        target.Add(new StoredField(StorageFields.ObjectPrefix, json.GetRawText()));
 
         // Per-property indexed fields
         var contentBuilder = new StringBuilder();
@@ -187,7 +191,7 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
         if (contentBuilder.Length > 0)
         {
             var contentText = contentBuilder.ToString();
-            target.Add(new TextField(LottaDB.CONTENT_FIELD, contentText, Field.Store.NO));
+            target.Add(new TextField(StorageFields.Content, contentText, Field.Store.NO));
 
             // Generate vector embedding for _content_ if embedding generator is available
             if (_embeddingGenerator != null)
@@ -196,7 +200,7 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
                     .ConfigureAwait(false).GetAwaiter().GetResult();
                 if (result != null && result.Count > 0)
                 {
-                    var vectorFieldName = LottaDB.CONTENT_FIELD + "_vector";
+                    var vectorFieldName = StorageFields.Content + "_vector";
                     target.RemoveFields(vectorFieldName);
                     var floats = result[0].Vector.Span;
                     var bytes = new byte[floats.Length * sizeof(float)];
@@ -276,8 +280,8 @@ internal class JsonContentFieldMapper : IFieldMappingInfo
         _analyzer = analyzer;
     }
 
-    public string FieldName => LottaDB.CONTENT_FIELD;
-    public string PropertyName => LottaDB.CONTENT_FIELD;
+    public string FieldName => StorageFields.Content;
+    public string PropertyName => StorageFields.Content;
 
     public string ConvertToQueryExpression(object value) => value?.ToString() ?? string.Empty;
 

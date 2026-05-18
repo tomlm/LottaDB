@@ -35,12 +35,12 @@ public class ODataFilterValidationTests
     }
 
     [Theory]
-    [InlineData("Type eq 'SomeType'")]
-    [InlineData("type eq 'SomeType'")]
-    [InlineData("Age gt 20 and Type eq 'Other'")]
-    [InlineData("Type ne '_dynamic_Person'")]
-    [InlineData("(Type eq 'SomeType')")]
-    [InlineData("Age gt 20 and (Type eq 'Other' or Age lt 10)")]
+    [InlineData("_type eq 'SomeType'")]
+    [InlineData("_Type eq 'SomeType'")]
+    [InlineData("Age gt 20 and _type eq 'Other'")]
+    [InlineData("_type ne 'SomeType'")]
+    [InlineData("(_type eq 'SomeType')")]
+    [InlineData("Age gt 20 and (_type eq 'Other' or Age lt 10)")]
     public void Filter_WithType_Throws(string filter)
     {
         Assert.Throws<ArgumentException>(() => TableStorageAdapter.ValidateODataFilter(filter));

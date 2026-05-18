@@ -388,7 +388,7 @@ public class SearchTests
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "B" }, ct);
 
-        Query q = new TermQuery(new Term("_key_", "alice"));
+        Query q = new TermQuery(new Term("RowKey", "alice"));
         var results = db.Search<Actor>().Where(q).ToList();
         Assert.Single(results);
         Assert.Equal("alice", results[0].Username);

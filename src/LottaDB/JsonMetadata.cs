@@ -8,18 +8,9 @@ namespace Lotta;
 /// </summary>
 public class JsonMetadata
 {
-    /// <summary>Prefix applied to schema names when stored in the Type column and Lucene _type_ field.
-    /// Any entity with this prefix is always deserialized as a JsonDocument.</summary>
-    internal const string StoragePrefix = "_json_";
-
-    /// <summary>Returns the prefixed type name used in storage and Lucene (e.g. "_json_Person").</summary>
-    internal string StorageTypeName => StoragePrefix + TypeName;
-
     /// <summary>Returns true if the given stored type name is a JSON document type.</summary>
-    internal static bool IsJsonTypeName(string? typeName) => typeName != null && typeName.StartsWith(StoragePrefix);
-
-    /// <summary>Strips the storage prefix to recover the original schema name.</summary>
-    internal static string UnprefixTypeName(string typeName) => typeName.Substring(StoragePrefix.Length);
+    internal static bool IsJsonTypeName(string? typeName) =>
+        typeName == typeof(System.Text.Json.JsonDocument).FullName;
 
     /// <summary>A unique name for this document type (e.g. "Person"). Used as the type discriminator in storage and search.</summary>
     public string TypeName { get; set; } = null!;
@@ -42,6 +33,9 @@ public class JsonMetadata
     /// <summary>Convention-based key property names for auto-detecting document keys. Set from database config.</summary>
     public string[]? AutoKeyProperties { get; set; }
 
+    /// <summary>Optional discriminator expression for auto-classifying documents (e.g. "$.type == 'Person'").</summary>
+    public string? Match { get; set; }
+
     /// <summary>Parse from a <see cref="JsonDocumentType"/> entity.</summary>
     public static JsonMetadata Parse(JsonDocumentType docType)
     {
@@ -51,6 +45,7 @@ public class JsonMetadata
             KeyProperty = docType.Key ?? "Id",
             KeyMode = docType.KeyMode,
             AutoQueryable = docType.AutoQueryable,
+            Match = docType.Match,
         };
 
         foreach (var prop in docType.Properties)
@@ -285,6 +280,56 @@ public class JsonMetadata
             current = next;
         }
         return current;
+    }
+
+    /// <summary>
+    /// Evaluate whether a JSON document matches this schema's match expression.
+    /// Returns true if the discriminator matches or if no discriminator is set.
+    /// Supports simple equality expressions like <c>$.type == 'Person'</c>.
+    /// </summary>
+    public bool MatchesDocument(JsonElement root)
+    {
+        if (string.IsNullOrEmpty(Match)) return false;
+
+        // Parse discriminator: "$.path == 'value'" or "$.path != 'value'"
+        var disc = Match.AsSpan().Trim();
+        var eqIndex = disc.IndexOf("==");
+        var neqIndex = disc.IndexOf("!=");
+        bool isNegated = false;
+        int opIndex;
+
+        if (neqIndex >= 0)
+        {
+            opIndex = neqIndex;
+            isNegated = true;
+        }
+        else if (eqIndex >= 0)
+        {
+            opIndex = eqIndex;
+        }
+        else
+        {
+            return false; // unsupported operator
+        }
+
+        var pathPart = disc[..opIndex].Trim().ToString();
+        var valuePart = disc[(opIndex + 2)..].Trim().ToString().Trim('\'', '"');
+
+        // Navigate JSON path
+        var element = NavigatePath(root, pathPart);
+        if (element == null) return isNegated;
+
+        var actual = element.Value.ValueKind switch
+        {
+            JsonValueKind.String => element.Value.GetString(),
+            JsonValueKind.Number => element.Value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
+
+        var matches = string.Equals(actual, valuePart, StringComparison.OrdinalIgnoreCase);
+        return isNegated ? !matches : matches;
     }
 }
 

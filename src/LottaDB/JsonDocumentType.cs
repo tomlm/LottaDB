@@ -42,6 +42,15 @@ public class JsonDocumentType
     public KeyMode KeyMode { get; set; } = KeyMode.Auto;
 
     /// <summary>
+    /// Optional discriminator expression for auto-classifying JSON documents on save.
+    /// Uses JSONPath equality syntax, e.g. <c>"$.type == 'Person'"</c>.
+    /// When a document matches, this schema's indexing rules apply automatically.
+    /// </summary>
+    [JsonPropertyName("match")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Match { get; set; }
+
+    /// <summary>
     /// When true, all top-level simple-type properties are automatically promoted as queryable
     /// (indexed in Lucene + promoted to Table Storage columns). Only applies when
     /// <see cref="Properties"/> is empty — explicit properties take control.

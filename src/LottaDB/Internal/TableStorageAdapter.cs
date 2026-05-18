@@ -17,6 +17,8 @@ internal class TableStorageAdapter
     private readonly Dictionary<string, TableClient> _tables = new();
     private readonly string _partitionKey;
 
+    internal string PartitionKey => _partitionKey;
+
     public TableStorageAdapter(TableServiceClient serviceClient, string partitionKey)
     {
         _serviceClient = serviceClient;
@@ -82,7 +84,8 @@ internal class TableStorageAdapter
     private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
     {
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = obj.GetType().FullName!;
+        entity[StorageFields.Type] = obj.GetType().FullName!;
+        entity[StorageFields.Schema] = obj.GetType().Name;
 
         // Serialize as UTF-8 JSON bytes, split across properties if >64KB
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
@@ -232,31 +235,7 @@ internal class TableStorageAdapter
     /// to resolve the concrete type. Returns null if the type cannot be resolved.
     /// </summary>
     internal static object? DeserializeEntity(TableEntity entity)
-    {
-        var bytes = entity.GetObjectBytes();
-        if (bytes.Length == 0) return null;
-        var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
-
-        // Dynamic JSON document
-        if (JsonMetadata.IsJsonTypeName(typeName))
-        {
-            var doc = JsonDocument.Parse(bytes);
-            doc.SetKey(DecodeKey(entity.RowKey));
-            doc.SetETag(entity.ETag.ToString());
-            return doc;
-        }
-
-        // CLR typed entity
-        var concreteType = TypeUtils.ResolveType(typeName);
-        if (concreteType != null)
-        {
-            var obj = JsonSerializer.Deserialize(bytes, concreteType);
-            if (obj != null)
-                obj.SetJson(System.Text.Encoding.UTF8.GetString(bytes));
-            return obj;
-        }
-        return null;
-    }
+        => EntityMapper.FromTableEntity(entity);
 
     private static T? DeserializeEntity<T>(TableEntity entity) where T : class
     {
@@ -277,7 +256,7 @@ internal class TableStorageAdapter
         var derivedTypes = TypeUtils.GetDerivedTypes(typeof(T));
         if (derivedTypes.Any())
         {
-            sb.Append($" and ({String.Join(" or ", derivedTypes.Select(t => $"Type eq '{t.FullName}'"))})");
+            sb.Append($" and ({String.Join(" or ", derivedTypes.Select(t => $"{StorageFields.Type} eq '{t.FullName}'"))})");
         }
         if (predicate != null)
         {
@@ -344,7 +323,9 @@ internal class TableStorageAdapter
     internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, JsonMetadata schema)
     {
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
+        if (schema.TypeName != StorageFields.DefaultSchema)
+            entity[StorageFields.Schema] = schema.TypeName;
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
         foreach (var prop in schema.Properties)
         {
@@ -419,7 +400,9 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
+        if (schema.TypeName != StorageFields.DefaultSchema)
+            entity[StorageFields.Schema] = schema.TypeName;
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
 
         // Explicit properties first
@@ -444,7 +427,7 @@ internal class TableStorageAdapter
     /// Promotes all top-level simple-type JSON properties to table entity columns.
     /// Used when AutoQueryable is enabled.
     /// </summary>
-    private static void PromoteAutoQueryableProperties(TableEntity entity, JsonElement root, string keyProperty, HashSet<string>? skip = null)
+    internal static void PromoteAutoQueryableProperties(TableEntity entity, JsonElement root, string keyProperty, HashSet<string>? skip = null)
     {
         foreach (var prop in root.EnumerateObject())
         {
@@ -500,6 +483,8 @@ internal class TableStorageAdapter
             var doc = JsonDocument.Parse(bytes);
             doc.SetKey(DecodeKey(response.Value.RowKey));
             doc.SetETag(response.Value.ETag.ToString());
+            if (response.Value.TryGetValue(StorageFields.Schema, out var schemaVal) && schemaVal is string schemaStr)
+                doc.SetSchema(schemaStr);
             return doc;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -519,7 +504,9 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         if (!string.IsNullOrEmpty(filter))
             ValidateODataFilter(filter);
-        var query = $"PartitionKey eq '{_partitionKey}' and Type eq '{schemaName}'";
+        var query = $"PartitionKey eq '{_partitionKey}' and {StorageFields.Type} eq '{typeof(JsonDocument).FullName}'";
+        if (schemaName != StorageFields.DefaultSchema)
+            query += $" and {StorageFields.Schema} eq '{schemaName}'";
         if (!string.IsNullOrEmpty(filter))
             query += $" and ({filter})";
 
@@ -531,6 +518,31 @@ internal class TableStorageAdapter
                 var doc = JsonDocument.Parse(bytes);
                 doc.SetKey(DecodeKey(entity.RowKey));
                 doc.SetETag(entity.ETag.ToString());
+                if (entity.TryGetValue(StorageFields.Schema, out var schemaVal) && schemaVal is string schemaStr)
+                    doc.SetSchema(schemaStr);
+                yield return doc;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Query JSON documents using a raw OData filter (pre-built, includes PartitionKey and Type).
+    /// </summary>
+    internal async IAsyncEnumerable<JsonDocument> QueryJsonDocumentsRawAsync(string tableName, string filter,
+        int? maxPerPage = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        await foreach (var entity in table.QueryAsync<TableEntity>(filter, maxPerPage: maxPerPage, cancellationToken: cancellationToken))
+        {
+            var bytes = entity.GetObjectBytes();
+            if (bytes.Length > 0)
+            {
+                var doc = JsonDocument.Parse(bytes);
+                doc.SetKey(DecodeKey(entity.RowKey));
+                doc.SetETag(entity.ETag.ToString());
+                if (entity.TryGetValue(StorageFields.Schema, out var schema) && schema is string schemaStr)
+                    doc.SetSchema(schemaStr);
                 yield return doc;
             }
         }
@@ -547,7 +559,9 @@ internal class TableStorageAdapter
     {
         var table = GetTable(tableName);
         var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
+        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
+        if (schema.TypeName != StorageFields.DefaultSchema)
+            entity[StorageFields.Schema] = schema.TypeName;
         entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
         foreach (var prop in schema.Properties)
         {
@@ -575,15 +589,15 @@ internal class TableStorageAdapter
     {
         if (filter.Contains("PartitionKey", StringComparison.OrdinalIgnoreCase) ||
             filter.Contains("RowKey", StringComparison.OrdinalIgnoreCase) ||
-            System.Text.RegularExpressions.Regex.IsMatch(filter, @"\bType\s+(eq|ne|gt|ge|lt|le)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            System.Text.RegularExpressions.Regex.IsMatch(filter, $@"\b{StorageFields.Type}\s+(eq|ne|gt|ge|lt|le)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
             throw new ArgumentException(
-                "OData filter must not reference 'PartitionKey', 'RowKey', or 'Type' columns. " +
+                $"OData filter must not reference 'PartitionKey', 'RowKey', or '{StorageFields.Type}' columns. " +
                 "These are managed internally by LottaDB for isolation.", nameof(filter));
         }
     }
 
-    private static object ConvertJsonElementToTableValue(JsonElement val, Type clrType)
+    internal static object ConvertJsonElementToTableValue(JsonElement val, Type clrType)
     {
         if (clrType == typeof(string)) return val.GetString() ?? "";
         if (clrType == typeof(int)) return val.TryGetInt32(out var i) ? i : 0;
@@ -593,7 +607,7 @@ internal class TableStorageAdapter
         return val.ToString();
     }
 
-    private static object ConvertToTableValue(object value)
+    internal static object ConvertToTableValue(object value)
     {
         return value switch
         {

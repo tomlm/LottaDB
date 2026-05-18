@@ -8,8 +8,6 @@ namespace Lotta.Internal;
 /// </summary>
 internal static class TableEntityExtensions
 {
-    internal const string TypeProperty = "Type";
-    internal const string ObjectPropertyPrefix = "Object";
     internal const int MaxPropertySize = 63 * 1024; // 63KB to stay safely under 64KB limit
 
     /// <summary>
@@ -17,14 +15,14 @@ internal static class TableEntityExtensions
     /// </summary>
     internal static byte[] GetObjectBytes(this TableEntity entity)
     {
-        var first = entity.TryGetValue(ObjectPropertyPrefix, out var rawVal) ? (byte[])rawVal : null;
+        var first = entity.TryGetValue(StorageFields.ObjectPrefix, out var rawVal) ? (byte[])rawVal : null;
         if (first == null) return Array.Empty<byte>();
 
         // Check for split properties
         var chunks = new List<byte[]> { first };
         for (int i = 2; ; i++)
         {
-            var key = $"{ObjectPropertyPrefix}{i}";
+            var key = $"{StorageFields.ObjectPrefix}{i}";
             if (entity.TryGetValue(key, out var chunk))
             {
                 var chunkBytes = (byte[])chunk;
@@ -58,7 +56,7 @@ internal static class TableEntityExtensions
     {
         if (data.Length <= MaxPropertySize)
         {
-            entity[ObjectPropertyPrefix] = data;
+            entity[StorageFields.ObjectPrefix] = data;
             return;
         }
 
@@ -70,7 +68,7 @@ internal static class TableEntityExtensions
             var chunk = new byte[length];
             Buffer.BlockCopy(data, offset, chunk, 0, length);
 
-            var key = chunkIndex == 0 ? ObjectPropertyPrefix : $"{ObjectPropertyPrefix}{chunkIndex + 1}";
+            var key = chunkIndex == 0 ? StorageFields.ObjectPrefix : $"{StorageFields.ObjectPrefix}{chunkIndex + 1}";
             entity[key] = chunk;
             chunkIndex++;
         }
