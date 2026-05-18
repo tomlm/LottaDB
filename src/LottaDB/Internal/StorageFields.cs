@@ -23,7 +23,7 @@ internal static class StorageFields
     /// <summary>Prefix for serialized JSON object columns (split across Object, Object2, Object3... if >64KB).</summary>
     public const string ObjectPrefix = "_object";
 
-    /// <summary>The schema name. POCO = type name, POJO = JsonDocumentType name.</summary>
+    /// <summary>The schema name. POCO = type name, POJO = JsonSchema name.</summary>
     public const string Schema = "Schema";
 
     // ── Lucene fields ──

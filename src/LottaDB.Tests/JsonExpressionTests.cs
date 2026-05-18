@@ -60,7 +60,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
         // Define schema with match expression
-        await db.SaveAsync(new JsonDocumentType
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Person",
             Match = "$.type == 'Person'",
@@ -79,8 +79,8 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Person", Match = "$.type == 'person'" }, ct);
-        await db.SaveAsync(new JsonDocumentType { Name = "Product", Match = "$.type == 'product'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Product", Match = "$.type == 'product'" }, ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","type":"person","name":"Alice"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","type":"product","name":"Widget"}"""), ct);
@@ -100,8 +100,8 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Person", Match = "$.type == 'person'" }, ct);
-        await db.SaveAsync(new JsonDocumentType { Name = "VIP" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "VIP" }, ct);
 
         // Explicitly set schema — should override discriminator matching
         var doc = JsonDocument.Parse("""{"id":"1","type":"person","name":"Alice"}""");
@@ -124,7 +124,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Person", Match = "$.type == 'person'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","type":"person","name":"Alice"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","type":"person","name":"Bob"}"""), ct);

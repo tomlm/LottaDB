@@ -119,7 +119,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Person", Match = "$.type == 'person'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
 
         var doc = JsonDocument.Parse("""{"id":"1","type":"person","name":"Alice"}""");
         await db.SaveAsync(doc, ct);
@@ -161,7 +161,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Item", Match = "$.kind == 'item'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "Item", Match = "$.kind == 'item'" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","kind":"item","value":42}"""), ct);
 
         var retrieved = await db.GetAsync("1", ct);
@@ -252,7 +252,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "NonPerson", Match = "$.type != 'person'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "NonPerson", Match = "$.type != 'person'" }, ct);
 
         var doc = JsonDocument.Parse("""{"id":"1","type":"product","name":"Widget"}""");
         await db.SaveAsync(doc, ct);
@@ -314,7 +314,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "TempData", Match = "$.kind == 'temp'" }, ct);
+        await db.SaveAsync(new JsonSchema { Name = "TempData", Match = "$.kind == 'temp'" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","kind":"temp","value":1}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","kind":"temp","value":2}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"3","kind":"permanent","value":3}"""), ct);
@@ -374,7 +374,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
         await foreach (var entity in db.GetManyAsync(ct))
             all.Add(entity);
 
-        // Should contain at least the 3 we saved (plus JsonDocumentType for default schema)
+        // Should contain at least the 3 we saved (plus JsonSchema for default schema)
         Assert.True(all.Count >= 3, $"Expected at least 3, got {all.Count}");
         Assert.Contains(all, e => e is Actor);
         Assert.Contains(all, e => e is Note);

@@ -383,10 +383,10 @@ internal class TypeMetadata
     /// </summary>
     internal static string ComputeSchemaFromConfig(LottaConfiguration config)
     {
-        // Auto-register JsonDocumentType the same way the LottaDB constructor does,
+        // Auto-register JsonSchema the same way the LottaDB constructor does,
         // so the hash matches even when the caller didn't explicitly register it.
-        if (!config.StorageConfigurations.ContainsKey(typeof(JsonDocumentType)))
-            config.StorageConfigurations[typeof(JsonDocumentType)] = new StorageConfiguration<JsonDocumentType>();
+        if (!config.StorageConfigurations.ContainsKey(typeof(JsonSchema)))
+            config.StorageConfigurations[typeof(JsonSchema)] = new StorageConfiguration<JsonSchema>();
 
         var metadatas = new List<TypeMetadata>();
         foreach (var (type, configObj) in config.StorageConfigurations)

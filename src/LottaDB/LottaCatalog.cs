@@ -129,7 +129,7 @@ public class LottaCatalog : IDisposable
         }
 
         // Load dynamic schemas from Table Storage before computing the schema hash
-        await db.InitializeJsonDocumentTypesAsync(cancellationToken);
+        await db.InitializeJsonSchemasAsync(cancellationToken);
 
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);

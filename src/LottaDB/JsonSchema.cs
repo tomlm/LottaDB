@@ -8,7 +8,7 @@ namespace Lotta;
 /// and promotion to Table Storage columns for OData filtering.
 /// Managed through standard CRUD operations: <c>SaveAsync</c>, <c>GetAsync</c>, <c>DeleteAsync</c>.
 /// </summary>
-public class JsonDocumentType
+public class JsonSchema
 {
     /// <summary>The unique name for this document type (e.g. "Person", "Photo").</summary>
     [Key]

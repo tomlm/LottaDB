@@ -36,8 +36,8 @@ public class JsonMetadata
     /// <summary>Optional discriminator expression for auto-classifying documents (e.g. "$.type == 'Person'").</summary>
     public string? Match { get; set; }
 
-    /// <summary>Parse from a <see cref="JsonDocumentType"/> entity.</summary>
-    public static JsonMetadata Parse(JsonDocumentType docType)
+    /// <summary>Parse from a <see cref="JsonSchema"/> entity.</summary>
+    public static JsonMetadata Parse(JsonSchema docType)
     {
         var result = new JsonMetadata
         {

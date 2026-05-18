@@ -64,11 +64,11 @@ public class LottaDB : IDisposable
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), databaseId);
         _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
-        // Auto-register JsonDocumentType if not already registered
-        if (!_config.StorageConfigurations.ContainsKey(typeof(JsonDocumentType)))
+        // Auto-register JsonSchema if not already registered
+        if (!_config.StorageConfigurations.ContainsKey(typeof(JsonSchema)))
         {
-            var jsonSchemaConfig = new StorageConfiguration<JsonDocumentType>();
-            _config.StorageConfigurations[typeof(JsonDocumentType)] = jsonSchemaConfig;
+            var jsonSchemaConfig = new StorageConfiguration<JsonSchema>();
+            _config.StorageConfigurations[typeof(JsonSchema)] = jsonSchemaConfig;
         }
 
         InitializeMetadata();
@@ -166,9 +166,9 @@ public class LottaDB : IDisposable
             return Task.CompletedTask;
         }));
 
-        // Built-in handler: when a JsonDocumentType is saved/deleted, update the dynamic mappers
-        var jsonSchemaList = _handlers.GetOrAdd(typeof(JsonDocumentType), _ => new List<object>());
-        jsonSchemaList.Add((EntityHandler<JsonDocumentType>)(async (schema, kind, db, cancellationToken) =>
+        // Built-in handler: when a JsonSchema is saved/deleted, update the dynamic mappers
+        var jsonSchemaList = _handlers.GetOrAdd(typeof(JsonSchema), _ => new List<object>());
+        jsonSchemaList.Add((EntityHandler<JsonSchema>)(async (schema, kind, db, cancellationToken) =>
         {
             if (kind == TriggerKind.Saved)
             {
@@ -814,12 +814,12 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Loads all JsonDocumentType entities from Table Storage and registers their dynamic mappers.
+    /// Loads all JsonSchema entities from Table Storage and registers their dynamic mappers.
     /// Called by LottaCatalog.GetDatabaseAsync after construction.
     /// </summary>
-    internal async Task InitializeJsonDocumentTypesAsync(CancellationToken cancellationToken = default)
+    internal async Task InitializeJsonSchemasAsync(CancellationToken cancellationToken = default)
     {
-        await foreach (var schema in _tableAdapter.GetManyAsync<JsonDocumentType>(_lottaCatalog.Name, cancellationToken: cancellationToken))
+        await foreach (var schema in _tableAdapter.GetManyAsync<JsonSchema>(_lottaCatalog.Name, cancellationToken: cancellationToken))
         {
             RegisterJsonMetadata(schema);
         }
@@ -827,7 +827,7 @@ public class LottaDB : IDisposable
         // Register the default schema in memory for schemaless JsonDocument storage
         if (!_schemas.ContainsKey(Internal.StorageFields.DefaultSchema))
         {
-            RegisterJsonMetadata(new JsonDocumentType
+            RegisterJsonMetadata(new JsonSchema
             {
                 Name = Internal.StorageFields.DefaultSchema,
                 KeyMode = KeyMode.Auto,
@@ -837,9 +837,9 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Registers (or re-registers) a dynamic schema's mapper from a JsonDocumentType entity.
+    /// Registers (or re-registers) a dynamic schema's mapper from a JsonSchema entity.
     /// </summary>
-    internal void RegisterJsonMetadata(JsonDocumentType schema)
+    internal void RegisterJsonMetadata(JsonSchema schema)
     {
         var dynSchema = JsonMetadata.Parse(schema);
         dynSchema.AutoKeyProperties = _config.AutoKeyProperties;
@@ -917,7 +917,7 @@ public class LottaDB : IDisposable
         if (_schemas.TryGetValue(schemaName, out var schema))
             return schema;
         throw new InvalidOperationException(
-            $"Schema '{schemaName}' not registered. Save a JsonDocumentType with Name=\"{schemaName}\" first.");
+            $"Schema '{schemaName}' not registered. Save a JsonSchema with Name=\"{schemaName}\" first.");
     }
 
     /// <summary>

@@ -14,7 +14,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     private static async Task<LottaDB> CreateDbWithSchema(CancellationToken ct = default)
     {
         var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
-        await db.SaveAsync(new JsonDocumentType
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Person",
             Properties = PersonProperties
@@ -25,7 +25,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     // === Schema as Entity ===
 
     [Fact]
-    public async Task SaveJsonDocumentType_EnablesDynamicCRUD()
+    public async Task SaveJsonSchema_EnablesDynamicCRUD()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await CreateDbWithSchema(ct);
@@ -41,13 +41,13 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task UpdateJsonDocumentType_NewFieldBecomesSearchable()
+    public async Task UpdateJsonSchema_NewFieldBecomesSearchable()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
         // Create schema with AutoQueryable=false so only explicit properties are indexed
-        await db.SaveAsync(new JsonDocumentType
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Person",
             AutoQueryable = false,
@@ -69,8 +69,8 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
         var beforeResults = db.Search(j => j["Email"] == "alice-at-test").ToList();
         Assert.Empty(beforeResults);
 
-        // Update schema to add Email as queryable (On<JsonDocumentType> triggers reindex)
-        await db.SaveAsync(new JsonDocumentType
+        // Update schema to add Email as queryable (On<JsonSchema> triggers reindex)
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Person",
             AutoQueryable = false,
@@ -89,7 +89,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task DeleteJsonDocumentType_RemovesMapper()
+    public async Task DeleteJsonSchema_RemovesMapper()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await CreateDbWithSchema(ct);
@@ -100,7 +100,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
         await db.SaveAsync(doc, ct);
 
         // Delete the schema
-        await db.DeleteAsync<JsonDocumentType>("Person", ct);
+        await db.DeleteAsync<JsonSchema>("Person", ct);
 
         // Verify the schema is gone — searching by it should return nothing
         db.ReloadSearcher();
@@ -109,28 +109,28 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task GetManyAsync_JsonDocumentType_ListsAllSchemas()
+    public async Task GetManyAsync_JsonSchema_ListsAllSchemas()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType { Name = "Person", Properties = PersonProperties }, ct);
-        await db.SaveAsync(new JsonDocumentType
+        await db.SaveAsync(new JsonSchema { Name = "Person", Properties = PersonProperties }, ct);
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Photo",
             Properties = new() { new() { Name = "Width", Type = "integer" }, new() { Name = "Height", Type = "integer" } }
         }, ct);
 
-        var schemas = await db.GetManyAsync<JsonDocumentType>(cancellationToken: ct).ToListAsync(ct);
+        var schemas = await db.GetManyAsync<JsonSchema>(cancellationToken: ct).ToListAsync(ct);
         Assert.Equal(2, schemas.Count);
     }
 
     // === Schema Parsing ===
 
     [Fact]
-    public void Parse_FromJsonDocumentType_ExtractsProperties()
+    public void Parse_FromJsonSchema_ExtractsProperties()
     {
-        var schema = JsonMetadata.Parse(new JsonDocumentType
+        var schema = JsonMetadata.Parse(new JsonSchema
         {
             Name = "Person",
             Properties = PersonProperties,
@@ -997,7 +997,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        await db.SaveAsync(new JsonDocumentType
+        await db.SaveAsync(new JsonSchema
         {
             Name = "Contact",
             Properties = new()

@@ -128,16 +128,16 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         Assert.Empty(results);
     }
 
-    // === POJO (JsonDocumentType) AutoQueryable tests ===
+    // === POJO (JsonSchema) AutoQueryable tests ===
 
     [Fact]
-    public async Task AutoQueryable_JsonDocumentType_AutoDiscovery()
+    public async Task AutoQueryable_JsonSchema_AutoDiscovery()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
         // Define a schema with AutoQueryable=true (default) and no explicit properties
-        var schema = new JsonDocumentType { Name = "people", KeyMode = KeyMode.Auto };
+        var schema = new JsonSchema { Name = "people", KeyMode = KeyMode.Auto };
         await db.SaveAsync(schema, ct);
 
         // Save a document
@@ -158,7 +158,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
         // Schema with all defaults (AutoQueryable=true, no properties)
-        var schema = new JsonDocumentType { Name = "items" };
+        var schema = new JsonSchema { Name = "items" };
         await db.SaveAsync(schema, ct);
 
         var doc = JsonDocument.Parse("""{"title":"Hello World","count":5}""");
@@ -177,7 +177,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
         // Schema with explicit property for "sku" (NotAnalyzed) — AutoQueryable still applies to other fields
-        var schema = new JsonDocumentType
+        var schema = new JsonSchema
         {
             Name = "products",
             KeyMode = KeyMode.Auto,
@@ -205,7 +205,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        var schema = new JsonDocumentType
+        var schema = new JsonSchema
         {
             Name = "items",
             KeyMode = KeyMode.Auto,
@@ -224,12 +224,12 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     }
 
     [Fact]
-    public async Task AutoQueryable_JsonDocumentType_StringArray()
+    public async Task AutoQueryable_JsonSchema_StringArray()
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
 
-        var schema = new JsonDocumentType { Name = "articles", KeyMode = KeyMode.Auto };
+        var schema = new JsonSchema { Name = "articles", KeyMode = KeyMode.Auto };
         await db.SaveAsync(schema, ct);
 
         var doc = JsonDocument.Parse("""{"title":"Rust Guide","tags":["rust","programming","systems"]}""");
