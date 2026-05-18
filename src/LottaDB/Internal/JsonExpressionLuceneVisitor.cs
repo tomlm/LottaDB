@@ -182,7 +182,16 @@ internal static class JsonExpressionLuceneVisitor
             return new BooleanQuery(); // empty — no match
 
         if (value is int i)
-            return NumericRangeQuery.NewInt64Range(fieldName, (long)i, (long)i, true, true);
+        {
+            // Try Int32 range first (explicit schema properties use Int32Field),
+            // fall back to Int64 range (AutoQueryable properties use Int64Field).
+            // BooleanQuery with SHOULD matches whichever was actually indexed.
+            var bq = new BooleanQuery();
+            bq.Add(NumericRangeQuery.NewInt32Range(fieldName, i, i, true, true), Occur.SHOULD);
+            bq.Add(NumericRangeQuery.NewInt64Range(fieldName, (long)i, (long)i, true, true), Occur.SHOULD);
+            bq.MinimumNumberShouldMatch = 1;
+            return bq;
+        }
         if (value is long l)
             return NumericRangeQuery.NewInt64Range(fieldName, l, l, true, true);
         if (value is double d)
@@ -190,14 +199,29 @@ internal static class JsonExpressionLuceneVisitor
         if (value is bool b)
             return new TermQuery(new Term(fieldName, b.ToString().ToLowerInvariant()));
 
-        // String — TermQuery with lowercased value for all fields.
-        // AutoQueryable indexes text via TextField (which lowercases with default analyzer),
-        // so we match with lowercased terms.
+        // String — for metadata fields (Schema, Key, ETag) use exact match.
+        // For user-defined fields, parse through the analyzer so tokenization and casing
+        // match the index. This handles both analyzed (TextField/StandardAnalyzer → lowercase)
+        // and non-analyzed (StringField/KeywordAnalyzer → verbatim) fields correctly.
         var str = value.ToString()!;
         if (fieldName == StorageFields.Schema || fieldName == StorageFields.Key || fieldName == StorageFields.ETag)
             return new TermQuery(new Term(fieldName, str));
 
-        // AutoQueryable fields are indexed with KeywordAnalyzer (verbatim), so match exactly
+        // Use the shared analyzer to tokenize the value — produces the correct term
+        // for both analyzed fields (lowercase) and keyword fields (verbatim).
+        using var reader = new System.IO.StringReader(str);
+        using var tokenStream = analyzer.GetTokenStream(fieldName, reader);
+        var termAttr = tokenStream.GetAttribute<Lucene.Net.Analysis.TokenAttributes.ICharTermAttribute>();
+        tokenStream.Reset();
+        if (tokenStream.IncrementToken())
+        {
+            var term = termAttr.ToString();
+            tokenStream.End();
+            return new TermQuery(new Term(fieldName, term));
+        }
+        tokenStream.End();
+
+        // Fallback: empty token stream — use verbatim
         return new TermQuery(new Term(fieldName, str));
     }
 
@@ -217,12 +241,22 @@ internal static class JsonExpressionLuceneVisitor
     private static Query CreateRangeQuery(string fieldName, object? lower, bool lowerInclusive,
         object? upper, bool upperInclusive = false)
     {
-        // Numeric ranges — AutoQueryable stores all integers as Int64 in Lucene
-        if (lower is int li || upper is int ui)
-            return NumericRangeQuery.NewInt64Range(fieldName,
+        // Numeric ranges — explicit schema properties use Int32Field, AutoQueryable uses Int64Field.
+        // Query both to match whichever was indexed.
+        if (lower is int || upper is int)
+        {
+            var bq = new BooleanQuery();
+            bq.Add(NumericRangeQuery.NewInt32Range(fieldName,
+                lower != null ? Convert.ToInt32(lower) : (int?)null,
+                upper != null ? Convert.ToInt32(upper) : (int?)null,
+                lowerInclusive, upperInclusive), Occur.SHOULD);
+            bq.Add(NumericRangeQuery.NewInt64Range(fieldName,
                 lower != null ? Convert.ToInt64(lower) : null,
                 upper != null ? Convert.ToInt64(upper) : null,
-                lowerInclusive, upperInclusive);
+                lowerInclusive, upperInclusive), Occur.SHOULD);
+            bq.MinimumNumberShouldMatch = 1;
+            return bq;
+        }
         if (lower is long || upper is long)
             return NumericRangeQuery.NewInt64Range(fieldName,
                 lower as long?, upper as long?, lowerInclusive, upperInclusive);

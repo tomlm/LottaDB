@@ -142,11 +142,12 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
 
         // Save a document
         var doc = JsonDocument.Parse("""{"name":"Eve","age":28}""");
-        await db.SaveAsync("people", doc, ct);
+        doc.SetSchema("people");
+        await db.SaveAsync(doc, ct);
         db.ReloadSearcher();
 
         // Search should find by name (auto-indexed)
-        var results = db.Search("people", "Eve").ToList();
+        var results = db.Search<object>("Eve").OfType<JsonDocument>().ToList();
         Assert.Single(results);
     }
 
@@ -160,10 +161,12 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         var schema = new JsonDocumentType { Name = "items" };
         await db.SaveAsync(schema, ct);
 
-        await db.SaveAsync("items", JsonDocument.Parse("""{"title":"Hello World","count":5}"""), ct);
+        var doc = JsonDocument.Parse("""{"title":"Hello World","count":5}""");
+        doc.SetSchema("items");
+        await db.SaveAsync(doc, ct);
         db.ReloadSearcher();
 
-        var results = db.Search("items", "Hello").ToList();
+        var results = db.Search<object>("Hello").OfType<JsonDocument>().ToList();
         Assert.Single(results);
     }
 
@@ -182,15 +185,17 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         };
         await db.SaveAsync(schema, ct);
 
-        await db.SaveAsync("products", JsonDocument.Parse("""{"sku":"ABC-123","description":"Great product"}"""), ct);
+        var doc = JsonDocument.Parse("""{"sku":"ABC-123","description":"Great product"}""");
+        doc.SetSchema("products");
+        await db.SaveAsync(doc, ct);
         db.ReloadSearcher();
 
         // "description" IS searchable because AutoQueryable is on by default
-        var results = db.Search("products", "Great").ToList();
+        var results = db.Search<object>("Great").OfType<JsonDocument>().ToList();
         Assert.Single(results);
 
         // "sku" uses explicit NotAnalyzed mode — exact match only, not tokenized
-        var exactResults = db.Search("products", "sku:ABC-123").ToList();
+        var exactResults = db.Search(j => j["sku"] == "ABC-123").ToList();
         Assert.Single(exactResults);
     }
 
@@ -208,11 +213,13 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         };
         await db.SaveAsync(schema, ct);
 
-        await db.SaveAsync("items", JsonDocument.Parse("""{"name":"Hidden","value":42}"""), ct);
+        var doc = JsonDocument.Parse("""{"name":"Hidden","value":42}""");
+        doc.SetSchema("items");
+        await db.SaveAsync(doc, ct);
         db.ReloadSearcher();
 
         // AutoQueryable explicitly off — nothing indexed
-        var results = db.Search("items", "Hidden").ToList();
+        var results = db.Search<object>("Hidden").OfType<JsonDocument>().ToList();
         Assert.Empty(results);
     }
 
@@ -225,11 +232,13 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
         var schema = new JsonDocumentType { Name = "articles", KeyMode = KeyMode.Auto };
         await db.SaveAsync(schema, ct);
 
-        await db.SaveAsync("articles", JsonDocument.Parse("""{"title":"Rust Guide","tags":["rust","programming","systems"]}"""), ct);
+        var doc = JsonDocument.Parse("""{"title":"Rust Guide","tags":["rust","programming","systems"]}""");
+        doc.SetSchema("articles");
+        await db.SaveAsync(doc, ct);
         db.ReloadSearcher();
 
         // Should be searchable by individual tag element
-        var results = db.Search("articles", "programming").ToList();
+        var results = db.Search<object>("programming").OfType<JsonDocument>().ToList();
         Assert.Single(results);
     }
 

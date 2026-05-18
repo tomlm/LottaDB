@@ -69,8 +69,8 @@ public class CatalogTests : IDisposable
         await db1.SaveAsync(new Actor { Username = "charlie", DisplayName = "Charlie" }, ct);
         await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct);
 
-        var db1Results = await db1.GetManyAsync<Actor>().ToListAsync(ct);
-        var db2Results = await db2.GetManyAsync<Actor>().ToListAsync(ct);
+        var db1Results = await db1.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
+        var db2Results = await db2.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
 
         Assert.Equal(2, db1Results.Count);
         Assert.Single(db2Results);
@@ -390,12 +390,12 @@ public class CatalogTests : IDisposable
         await db1.DeleteAsync<Actor>("alice", ct);
 
         // db1 should have only bob left
-        var db1Results = await db1.GetManyAsync<Actor>().ToListAsync(ct);
+        var db1Results = await db1.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Single(db1Results);
         Assert.Equal("Bob", db1Results[0].DisplayName);
 
         // db2 should be unaffected
-        var db2Results = await db2.GetManyAsync<Actor>().ToListAsync(ct);
+        var db2Results = await db2.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Single(db2Results);
         Assert.Equal("Charlie", db2Results[0].DisplayName);
     }
@@ -624,11 +624,11 @@ public class CatalogTests : IDisposable
         await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct);
 
         // Predicate that would match db2's data if partition leaked
-        var results = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Bob").ToListAsync(ct);
+        var results = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Bob", cancellationToken: ct).ToListAsync(ct);
         Assert.Empty(results);
 
         // Predicate that matches db1's data
-        var results2 = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Alice").ToListAsync(ct);
+        var results2 = await db1.GetManyAsync<Actor>(a => a.DisplayName == "Alice", cancellationToken: ct).ToListAsync(ct);
         Assert.Single(results2);
     }
 
@@ -646,7 +646,7 @@ public class CatalogTests : IDisposable
         await db2.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct);
 
         // All items from db1 — should not include db2's data
-        var all = await db1.GetManyAsync<Actor>().ToListAsync(ct);
+        var all = await db1.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Single(all);
         Assert.Equal("alice", all[0].Username);
     }
@@ -747,11 +747,11 @@ public class CatalogTests : IDisposable
         await db1.DeleteManyAsync<Actor>(cancellationToken: ct);
 
         // db1 should be empty
-        var db1Results = await db1.GetManyAsync<Actor>().ToListAsync(ct);
+        var db1Results = await db1.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Empty(db1Results);
 
         // db2 should be untouched
-        var db2Results = await db2.GetManyAsync<Actor>().ToListAsync(ct);
+        var db2Results = await db2.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Single(db2Results);
         Assert.Equal("Bob", db2Results[0].DisplayName);
     }
@@ -772,7 +772,7 @@ public class CatalogTests : IDisposable
         var downloadStream = await db.DownloadBlobAsync("test.txt", cancellationToken: ct);
         Assert.NotNull(downloadStream);
         using var reader = new StreamReader(downloadStream);
-        var result = await reader.ReadToEndAsync();
+        var result = await reader.ReadToEndAsync(ct);
         Assert.Equal(content, result);
     }
 

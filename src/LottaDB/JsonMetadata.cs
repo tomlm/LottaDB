@@ -184,38 +184,6 @@ public class JsonMetadata
     public string GetKey(JsonDocument json) => GetKey(json.RootElement);
 
     /// <summary>
-    /// Returns a new JsonDocument with the key property set to the given value.
-    /// </summary>
-    public JsonDocument SetKey(JsonDocument json, string key)
-    {
-        var dict = new Dictionary<string, JsonElement>();
-
-        foreach (var prop in json.RootElement.EnumerateObject())
-            dict[prop.Name] = prop.Value.Clone();
-
-        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
-
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(dict);
-        return JsonDocument.Parse(bytes);
-    }
-
-    /// <summary>
-    /// Returns a new JsonElement with the key property set to the given value.
-    /// </summary>
-    public JsonElement SetKey(JsonElement json, string key)
-    {
-        using var doc = JsonDocument.Parse(json.GetRawText());
-        var dict = new Dictionary<string, JsonElement>();
-
-        foreach (var prop in doc.RootElement.EnumerateObject())
-            dict[prop.Name] = prop.Value.Clone();
-
-        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
-
-        return JsonSerializer.SerializeToElement(dict);
-    }
-
-    /// <summary>
     /// Computes a deterministic hash of a JsonMetadata's property definitions.
     /// Used to detect changes that require a Lucene reindex.
     /// </summary>

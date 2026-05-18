@@ -115,7 +115,8 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteDatabaseAsync_RemovesTableAndIndex()
     {
-        using (var db = await LottaDBFixture.CreateDbAsync(reset: true))
+        var ct = TestContext.Current.CancellationToken;
+        using (var db = await LottaDBFixture.CreateDbAsync(reset: true, cancellationToken: ct))
         {
             await db.SaveAsync(new Actor
             {
@@ -188,15 +189,16 @@ public class CrudTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_WithPredicate_RunsOnHandlers()
     {
+        var ct = TestContext.Current.CancellationToken;
         int deleteCount = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, d, _) =>
+            opts.On<Note>(async (note, kind, d, cancellationToken) =>
             {
                 if (kind == TriggerKind.Deleted)
                     Interlocked.Increment(ref deleteCount);
             });
-        });
+        }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "h1", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "h2", AuthorId = "alice", Published = DateTimeOffset.UtcNow }, TestContext.Current.CancellationToken);

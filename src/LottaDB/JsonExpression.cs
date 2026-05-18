@@ -59,6 +59,13 @@ public class JsonField
     public static bool operator ==(JsonField left, bool right) => throw new NotSupportedException();
     public static bool operator !=(JsonField left, bool right) => throw new NotSupportedException();
 
+    /// <summary>Wildcard contains match: *value*. For query expressions only.</summary>
+    public bool Contains(string value) => throw new NotSupportedException();
+    /// <summary>Wildcard prefix match: value*. For query expressions only.</summary>
+    public bool StartsWith(string value) => throw new NotSupportedException();
+    /// <summary>Wildcard suffix match: *value. For query expressions only.</summary>
+    public bool EndsWith(string value) => throw new NotSupportedException();
+
     public override bool Equals(object? obj) => throw new NotSupportedException();
     public override int GetHashCode() => throw new NotSupportedException();
 }

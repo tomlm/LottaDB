@@ -93,9 +93,10 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_OnHandlers_RunInline()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.On<Note>(async (note, kind, db, cancellationToken) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView
@@ -103,9 +104,9 @@ public class BatchTests : IClassFixture<LottaDBFixture>
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,
                     Content = note.Content,
-                });
+                }, cancellationToken);
             });
-        });
+        }, cancellationToken: ct);
 
         var notes = Enumerable.Range(1, 3).Select(i => new Note
         {
@@ -131,9 +132,10 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_OnHandlers_ShareLuceneSession()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.On<Note>(async (note, kind, db, cancellationToken) =>
             {
                 if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView
@@ -141,9 +143,9 @@ public class BatchTests : IClassFixture<LottaDBFixture>
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,
                     Content = note.Content,
-                });
+                }, cancellationToken);
             });
-        });
+        }, cancellationToken: ct);
 
         var notes = Enumerable.Range(1, 3).Select(i => new Note
         {
@@ -206,15 +208,16 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_OnHandlers_RunInline()
     {
+        var ct = TestContext.Current.CancellationToken;
         int deleteCount = 0;
         using var db = await LottaDBFixture.CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (actor, kind, db, _) =>
+            opts.On<Actor>(async (actor, kind, db, cancellationToken) =>
             {
                 if (kind == TriggerKind.Deleted)
                     Interlocked.Increment(ref deleteCount);
             });
-        });
+        }, cancellationToken: ct);
 
         var actors = Enumerable.Range(1, 3).Select(i => new Actor { Username = $"del-handler-{i}", DisplayName = $"Actor {i}" }).ToList();
         await db.SaveManyAsync(actors, TestContext.Current.CancellationToken);

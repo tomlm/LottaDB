@@ -96,13 +96,6 @@ internal class JsonDocumentMapper : IDocumentMapper, IFieldMappingInfoProvider
         // _key_ field
         target.Add(new StringField(StorageFields.Key, key, Field.Store.YES));
 
-        // _type_ field — always JsonDocument for all JSON documents
-        target.Add(new StringField(StorageFields.Type, typeof(System.Text.Json.JsonDocument).FullName!, Field.Store.YES));
-
-        // Schema field — the matched/assigned schema name (searchable)
-        if (_schema.TypeName != StorageFields.DefaultSchema)
-            target.Add(new StringField(StorageFields.Schema, _schema.TypeName, Field.Store.YES));
-
         // _object_ field — full JSON stored (not indexed)
         target.Add(new StoredField(StorageFields.ObjectPrefix, json.GetRawText()));
 

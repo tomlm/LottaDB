@@ -43,7 +43,7 @@ internal class TableStorageAdapter
     public async Task<string> UpsertAsync(string tableName, string key, object obj, TypeMetadata meta, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
         return response.Headers.ETag.ToString()!;
     }
@@ -55,7 +55,7 @@ internal class TableStorageAdapter
     public async Task<string> ReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
         return response.Headers.ETag.ToString()!;
     }
@@ -79,26 +79,6 @@ internal class TableStorageAdapter
         if (rowKey.IndexOf('%') < 0)
             return rowKey;
         return rowKey.Replace("%2F", "/").Replace("%5C", "\\").Replace("%23", "#").Replace("%3F", "?");
-    }
-
-    private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
-    {
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[StorageFields.Type] = obj.GetType().FullName!;
-        entity[StorageFields.Schema] = obj.GetType().Name;
-
-        // Serialize as UTF-8 JSON bytes, split across properties if >64KB
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
-        entity.SetObjectBytes(bytes);
-
-        // Promote tags
-        foreach (var tag in meta.Tags)
-        {
-            var value = tag.GetValue(obj);
-            if (value != null)
-                entity[tag.Name] = ConvertToTableValue(value);
-        }
-        return entity;
     }
 
     public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key, CancellationToken cancellationToken = default) where T : class, new()
@@ -316,27 +296,13 @@ internal class TableStorageAdapter
 
     internal TableTransactionAction CreateUpsertAction(string key, object obj, TypeMetadata meta)
     {
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
     internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, JsonMetadata schema)
     {
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
-        if (schema.TypeName != StorageFields.DefaultSchema)
-            entity[StorageFields.Schema] = schema.TypeName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
-        if (schema.AutoQueryable)
-        {
-            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
-            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
-        }
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
@@ -399,26 +365,7 @@ internal class TableStorageAdapter
         JsonDocument json, JsonMetadata schema, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
-        if (schema.TypeName != StorageFields.DefaultSchema)
-            entity[StorageFields.Schema] = schema.TypeName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-
-        // Explicit properties first
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
-
-        // AutoQueryable: promote remaining simple-type properties
-        if (schema.AutoQueryable)
-        {
-            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
-            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
-        }
-
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
         return response.Headers.ETag.ToString()!;
     }
@@ -558,21 +505,7 @@ internal class TableStorageAdapter
         JsonDocument json, JsonMetadata schema, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[StorageFields.Type] = typeof(JsonDocument).FullName!;
-        if (schema.TypeName != StorageFields.DefaultSchema)
-            entity[StorageFields.Schema] = schema.TypeName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
-        if (schema.AutoQueryable)
-        {
-            var explicitNames = new HashSet<string>(schema.Properties.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
-            PromoteAutoQueryableProperties(entity, json.RootElement, schema.KeyProperty, explicitNames);
-        }
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
         return response.Headers.ETag.ToString()!;
     }
