@@ -299,7 +299,7 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
         var final = await db.GetAsync<Actor>(username, ct);
         Assert.True(N == final!.Counter, "GetAsync() Counter is wrong");
         var final2 = db.Search<Actor>(a => a.Username == final.Username).Single();
-        Assert.True(N == final2!.Counter, "Search() Counter is wrong");
+        Assert.True(N == final2!.Counter, $"Search() Counter is wrong: expected {N}, got {final2.Counter}");
     }
 
     /// <summary>

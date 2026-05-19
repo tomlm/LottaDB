@@ -246,6 +246,7 @@ internal class TypeMetadata
             if (meta.IndexedProperties.Any(i => i.Property == prop)) continue;
             if (prop == meta.KeyProperty) continue;
             if (ignoredProperties != null && ignoredProperties.Contains(prop.Name)) continue;
+            if (prop.GetCustomAttributes(typeof(NotQueryableAttribute), true).Length > 0) continue;
             if (!IsAutoQueryableType(prop.PropertyType)) continue;
 
             AddQueryable(meta, prop, QueryableMode.Auto);

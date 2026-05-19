@@ -1,36 +1,71 @@
 using Azure.Data.Tables;
-using Iciclecreek.Azure.Storage.Memory;
+using Iciclecreek.Azure.Storage.FileSystem.Blobs;
+using Iciclecreek.Azure.Storage.FileSystem.Tables;
 using Iciclecreek.Azure.Storage.Memory.Blobs;
 using Iciclecreek.Azure.Storage.Memory.Tables;
-using Lucene.Net.Store;
+using Iciclecreek.Azure.Storage.SQLite.Blobs;
+using Iciclecreek.Azure.Storage.SQLite.Tables;
 
 namespace Lotta.Tests
 {
     public static class Extensions
     {
+        private static readonly string _runRoot;
+
         public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            var provider = new MemoryStorageProvider();
-            var account = provider.AddAccount(catalog.Name);
-
-            catalog.TableServiceClientFactory = _ => new MemoryTableServiceClient(account);
-            catalog.BlobServiceClientFactory = _ => MemoryBlobServiceClient.FromAccount(account);
-            catalog.LuceneDirectoryFactory = CreateMockDirectory;
+            // UseMemoryClient(catalog);
+            UseFileSystemClient(catalog);
+            // UseAzuriteClient(catalog);
             return catalog;
         }
 
-        public static TableServiceClient CreateMockTableServiceClient(string name)
+        static Extensions()
         {
-            var provider = new MemoryStorageProvider();
-            var account = provider.AddAccount(name);
-            return new MemoryTableServiceClient(account);
+            var baseDir = Path.Combine(Path.GetTempPath(), "LottaTests");
+            _runRoot = Path.Combine(baseDir, $"run-{DateTime.Now:yyyyMMdd-HHmmss}");
+            System.IO.Directory.CreateDirectory(_runRoot);
+
+            // Keep only the 2 most recent runs
+            if (System.IO.Directory.Exists(baseDir))
+            {
+                var oldRuns = System.IO.Directory.GetDirectories(baseDir, "run-*")
+                    .OrderByDescending(d => d)
+                    .Skip(2)
+                    .ToList();
+                foreach (var old in oldRuns)
+                    try { System.IO.Directory.Delete(old, true); } catch { }
+            }
         }
 
-        public static Lucene.Net.Store.Directory CreateMockDirectory(string name)
+        public static void UseAzuriteClient(LottaCatalog catalog)
         {
-            var directory = new RAMDirectory();
-            directory.SetLockFactory(NoLockFactory.GetNoLockFactory());
-            return directory;
+            var tableClient = new TableServiceClient("UseDevelopmentStorage=true");
+            var blobClient = new MemoryBlobServiceClient();
+            catalog.TableServiceClientFactory = () => tableClient;
+            catalog.BlobServiceClientFactory = () => blobClient;
         }
+
+        public static void UseMemoryClient(LottaCatalog catalog)
+        {
+            var tableClient = new MemoryTableServiceClient();
+            var blobClient = new MemoryBlobServiceClient();
+            catalog.TableServiceClientFactory = () => tableClient;
+            catalog.BlobServiceClientFactory = () => blobClient;
+        }
+
+        public static void UseFileSystemClient(LottaCatalog catalog)
+        {
+            catalog.TableServiceClientFactory = () => new FileTableServiceClient(_runRoot);
+            catalog.BlobServiceClientFactory = () => new FileBlobServiceClient(_runRoot);
+        }
+
+        public static void UseSQLite(LottaCatalog catalog)
+        {
+            var dbPath = Path.Combine(_runRoot, $"{catalog.Name}.db");
+            catalog.TableServiceClientFactory = () => new SqliteTableServiceClient(dbPath);
+            catalog.BlobServiceClientFactory = () => new SqliteBlobServiceClient(dbPath);
+        }
+
     }
 }

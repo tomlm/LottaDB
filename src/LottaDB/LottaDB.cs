@@ -61,7 +61,7 @@ public class LottaDB : IDisposable
         _lottaCatalog = catalog;
         _databaseId = databaseId;
         _config = config;
-        _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), databaseId);
+        _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
         _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
@@ -102,6 +102,11 @@ public class LottaDB : IDisposable
             _metadata.TryGetValue(type, out var meta);
             return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
+    }
+
+    private static string GetSearchBlobPath(LottaCatalog catalog, string databaseId)
+    {
+        return $"Search";
     }
 
 
@@ -161,6 +166,7 @@ public class LottaDB : IDisposable
                     Internal.EntityMapper.AddMetadataToLuceneDocument(document, typeof(JsonDocument).FullName!, etag, schemaName);
                     _indexWriter.AddDocument(document);
                 }
+                _indexDirty = true;
             }
             ScheduleRefresh();
             return Task.CompletedTask;
@@ -232,6 +238,7 @@ public class LottaDB : IDisposable
                     Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
                     _indexWriter.AddDocument(document);
                 }
+                _indexDirty = true;
             }
             ScheduleRefresh();
             return Task.CompletedTask;
@@ -977,8 +984,6 @@ public class LottaDB : IDisposable
                 if (_indexDirty)
                 {
                     _indexWriter?.Commit();
-                    _lucene?.Refresh();
-                    _indexDirty = false;
                 }
 
                 // Re-check: did a write arrive while we were committing?
@@ -1318,6 +1323,14 @@ public class LottaDB : IDisposable
             _indexWriter.Commit();
             _lucene.Refresh();
             _indexDirty = false;
+        }
+
+        // 3. delete all blobs except search index directory
+        var container = GetBlobContainer();
+        var blobsPath = GetBlobPath("");
+        await foreach (var blob in container.GetBlobsByHierarchyAsync(new GetBlobsByHierarchyOptions() { Prefix = blobsPath }, cancellationToken))
+        {
+            await container.DeleteBlobIfExistsAsync(blob.Blob.Name, cancellationToken: cancellationToken);
         }
     }
 

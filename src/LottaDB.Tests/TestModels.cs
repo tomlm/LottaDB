@@ -267,5 +267,6 @@ public class LargeDocument
     [Queryable]
     public string Title { get; set; } = "";
 
+    [NotQueryable]
     public string Payload { get; set; } = "";
 }
