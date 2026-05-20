@@ -217,9 +217,14 @@ public class LottaCatalog : IDisposable
     /// </summary>
     public async Task DeleteAsync(CancellationToken cancellationToken = default)
     {
+        // Dispose databases first to release Lucene locks before deleting storage
+        foreach (var db in _databases.Values)
+            db.Dispose();
+        _databases.Clear();
+
         var table = GetTableClient();
         await table.DeleteAsync(cancellationToken);
-       
+
         var blob = GetBlobServiceClient().GetBlobContainerClient(this.Name);
         await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
 
@@ -227,10 +232,6 @@ public class LottaCatalog : IDisposable
         _tableClient = null;
         _tableServiceClient = null;
         _blobServiceClient = null;
-
-        foreach (var db in _databases.Values)
-            db.Dispose();
-        _databases.Clear();
     }
 
     /// <summary>

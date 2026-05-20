@@ -550,7 +550,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> from the save operation.</returns>
     public async Task<ObjectResult> ChangeAsync<T>(string key, Func<T, T> mutate, CancellationToken cancellationToken = default) where T : class, new()
     {
-        const int maxAttempts = 16;
+        const int maxAttempts = 50;
         var meta = GetMeta<T>();
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
@@ -597,7 +597,7 @@ public class LottaDB : IDisposable
         }
 
         throw new InvalidOperationException(
-            $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts.");
+            $"ChangeAsync<{typeof(T).Name}>('{key}') exceeded {maxAttempts} attempts due to concurrent ETag conflicts. Last etag seen: unknown");
     }
 
     // === Read ===

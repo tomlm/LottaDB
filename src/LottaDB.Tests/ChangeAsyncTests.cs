@@ -272,10 +272,17 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
     /// N parallel ChangeAsync calls on the same row must all land — none may be lost to
     /// an ETag conflict. Each increments a counter field; the final value must equal N.
     /// </summary>
-    [Fact]
-    public async Task ChangeAsync_ParallelWriters_NoLostUpdates()
+    [Theory]
+    [InlineData("Memory")]
+    [InlineData("FileSystem")]
+    [InlineData("SQLite")]
+    [InlineData("Azurite")] 
+    public async Task ChangeAsync_ParallelWriters_NoLostUpdates(string provider)
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        using var db = await LottaDBFixture.CreateDbAsync(
+            configureCatalog: catalog => ConfigureProvider(catalog, provider),
+            cancellationToken: TestContext.Current.CancellationToken,
+            testName: $"ParallelWriters_{provider}");
         var ct = TestContext.Current.CancellationToken;
         var username = "parallel-counter";
         const int N = 20;
@@ -294,12 +301,31 @@ public class ChangeAsyncTests : IClassFixture<LottaDBFixture>
                 return a;
             }, ct), ct)).ToArray();
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            var faulted = tasks.Where(t => t.IsFaulted).ToList();
+            Assert.Fail($"Task.WhenAll failed: {faulted.Count} faulted tasks. First: {faulted.FirstOrDefault()?.Exception?.InnerException?.Message ?? ex.Message}");
+        }
 
         var final = await db.GetAsync<Actor>(username, ct);
-        Assert.True(N == final!.Counter, "GetAsync() Counter is wrong");
+        Assert.True(N == final!.Counter, $"GetAsync() Counter is wrong for {provider}: expected {N}, got {final.Counter}");
         var final2 = db.Search<Actor>(a => a.Username == final.Username).Single();
-        Assert.True(N == final2!.Counter, $"Search() Counter is wrong: expected {N}, got {final2.Counter}");
+        Assert.True(N == final2!.Counter, $"Search() Counter is wrong for {provider}: expected {N}, got {final2.Counter}");
+    }
+
+    private static void ConfigureProvider(LottaCatalog catalog, string provider)
+    {
+        switch (provider)
+        {
+            case "Memory": Extensions.UseMemoryClient(catalog); break;
+            case "FileSystem": Extensions.UseFileSystemClient(catalog); break;
+            case "SQLite": Extensions.UseSQLite(catalog); break;
+            case "Azurite": Extensions.UseAzuriteClient(catalog); break;
+        }
     }
 
     /// <summary>
