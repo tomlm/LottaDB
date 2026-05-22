@@ -5,6 +5,7 @@ using Iciclecreek.Azure.Storage.Memory.Blobs;
 using Iciclecreek.Azure.Storage.Memory.Tables;
 using Iciclecreek.Azure.Storage.SQLite.Blobs;
 using Iciclecreek.Azure.Storage.SQLite.Tables;
+using Lucene.Net.Store;
 
 namespace Lotta.Tests
 {
@@ -44,6 +45,7 @@ namespace Lotta.Tests
             var blobClient = new MemoryBlobServiceClient();
             catalog.TableServiceClientFactory = () => tableClient;
             catalog.BlobServiceClientFactory = () => blobClient;
+            // Azurite: AzureDirectory persists to blob storage with default FSDirectory cache
         }
 
         public static void UseMemoryClient(LottaCatalog catalog)
@@ -52,12 +54,26 @@ namespace Lotta.Tests
             var blobClient = new MemoryBlobServiceClient();
             catalog.TableServiceClientFactory = () => tableClient;
             catalog.BlobServiceClientFactory = () => blobClient;
+            // Memory: FSDirectory for Lucene to avoid RAMDirectory concurrency issues
+            catalog.LuceneDirectoryFactory = path =>
+            {
+                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                System.IO.Directory.CreateDirectory(dir);
+                return FSDirectory.Open(dir);
+            };
         }
 
         public static void UseFileSystemClient(LottaCatalog catalog)
         {
             catalog.TableServiceClientFactory = () => new FileTableServiceClient(_runRoot);
             catalog.BlobServiceClientFactory = () => new FileBlobServiceClient(_runRoot);
+            // FileSystem: FSDirectory alongside the data
+            catalog.LuceneDirectoryFactory = path =>
+            {
+                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                System.IO.Directory.CreateDirectory(dir);
+                return FSDirectory.Open(dir);
+            };
         }
 
         public static void UseSQLite(LottaCatalog catalog)
@@ -65,6 +81,13 @@ namespace Lotta.Tests
             var dbPath = Path.Combine(_runRoot, $"{catalog.Name}.db");
             catalog.TableServiceClientFactory = () => new SqliteTableServiceClient(dbPath);
             catalog.BlobServiceClientFactory = () => new SqliteBlobServiceClient(dbPath);
+            // SQLite: FSDirectory alongside the .db file
+            catalog.LuceneDirectoryFactory = path =>
+            {
+                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                System.IO.Directory.CreateDirectory(dir);
+                return FSDirectory.Open(dir);
+            };
         }
 
     }

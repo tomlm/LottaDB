@@ -206,6 +206,28 @@ public class CatalogTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteDatabase_CleansUpLuceneDirectory()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var catalog = await CreateCatalog();
+        var db = await CreateDbAsync(catalog, "cleanup", ct);
+        await db.ResetDatabaseAsync(ct);
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
+
+        // Get the Lucene directory path before delete
+        var directory = db.GetLuceneDirectory();
+        string? dirPath = null;
+        if (directory is Lucene.Net.Store.FSDirectory fsDir)
+            dirPath = fsDir.Directory.FullName;
+
+        await db.DeleteDatabaseAsync(ct);
+
+        // FSDirectory folder should be deleted
+        if (dirPath != null)
+            Assert.False(System.IO.Directory.Exists(dirPath), $"Lucene directory should be deleted: {dirPath}");
+    }
+
+    [Fact]
     public async Task SameKeyInDifferentDatabases_AreIndependent()
     {
         var ct = TestContext.Current.CancellationToken;

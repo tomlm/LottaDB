@@ -32,11 +32,14 @@ public class LottaDB : IDisposable
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private LuceneDirectory _directory;
+
+    /// <summary>Returns the underlying Lucene directory (for testing/diagnostics).</summary>
+    internal LuceneDirectory GetLuceneDirectory() => _directory;
     private ReadOnlyLuceneDataProvider _lucene;
     private long _lastWriteTimestamp;
     private Task? _refreshTask;
     private IndexWriter _indexWriter;
-    private bool _indexDirty;
+    private volatile bool _indexDirty;
     private bool _disposed;
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
@@ -62,7 +65,7 @@ public class LottaDB : IDisposable
         _databaseId = databaseId;
         _config = config;
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
-        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
+        _directory = catalog.CreateLuceneDirectory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
         if (!_config.StorageConfigurations.ContainsKey(typeof(JsonSchema)))
@@ -1351,12 +1354,23 @@ public class LottaDB : IDisposable
             _lucene.Dispose();
             _lucene = null!;
 
-            // Then delete the directory
+            // Delete files inside the Lucene directory
             foreach (var file in _directory.ListAll())
                 _directory.DeleteFile(file);
 
-            _directory.Dispose();
-            _directory = null!;
+            // For FSDirectory, also delete the folder itself
+            if (_directory is Lucene.Net.Store.FSDirectory fsDir)
+            {
+                var dirPath = fsDir.Directory.FullName;
+                _directory.Dispose();
+                _directory = null!;
+                try { System.IO.Directory.Delete(dirPath, true); } catch { }
+            }
+            else
+            {
+                _directory.Dispose();
+                _directory = null!;
+            }
         }
     }
 
