@@ -24,9 +24,6 @@ public class JsonExpression
     public string? GetKey()
         => throw new NotSupportedException("JsonExpression is for query expressions only.");
 
-    /// <summary>Get the ETag for filtering.</summary>
-    public string? GetETag()
-        => throw new NotSupportedException("JsonExpression is for query expressions only.");
 }
 
 /// <summary>

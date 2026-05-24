@@ -2,33 +2,33 @@ using Lotta.Tests;
 
 namespace Lotta.SQLite.Tests;
 
-public class AdHocJoinTests  : AdHocJoinTestBase { public AdHocJoinTests () : base(Provider.SQLite) { } }
-public class AutoQueryableTests  : AutoQueryableTestBase { public AutoQueryableTests () : base(Provider.SQLite) { } }
-public class BatchTests  : BatchTestBase { public BatchTests () : base(Provider.SQLite) { } }
-public class BlobOnUploadTests  : BlobOnUploadTestBase { public BlobOnUploadTests () : base(Provider.SQLite) { } }
-public class BlobTests  : BlobTestBase { public BlobTests () : base(Provider.SQLite) { } }
-public class BuilderTests  : BuilderTestBase { public BuilderTests () : base(Provider.SQLite) { } }
-public class CascadingViewTests  : CascadingViewTestBase { public CascadingViewTests () : base(Provider.SQLite) { } }
-public class ChangeAsyncTests  : ChangeAsyncTestBase { public ChangeAsyncTests () : base(Provider.SQLite) { } }
-public class CoverageTests  : CoverageTestBase { public CoverageTests () : base(Provider.SQLite) { } }
-public class CreateViewTests  : CreateViewTestBase { public CreateViewTests () : base(Provider.SQLite) { } }
-public class CrudTests  : CrudTestBase { public CrudTests () : base(Provider.SQLite) { } }
-public class CycleDetectionTests  : CycleDetectionTestBase { public CycleDetectionTests () : base(Provider.SQLite) { } }
-public class DatabaseIsolationTests  : DatabaseIsolationTestBase { public DatabaseIsolationTests () : base(Provider.SQLite) { } }
-public class DatabaseLifecycleTests  : DatabaseLifecycleTestBase { public DatabaseLifecycleTests () : base(Provider.SQLite) { } }
-public class ETagTests  : ETagTestBase { public ETagTests () : base(Provider.SQLite) { } }
-public class GetManyAsyncTests  : GetManyAsyncTestBase { public GetManyAsyncTests () : base(Provider.SQLite) { } }
-public class JsonExpressionTests  : JsonExpressionTestBase { public JsonExpressionTests () : base(Provider.SQLite) { } }
-public class JsonMetadataTests  : JsonMetadataTestBase { public JsonMetadataTests () : base(Provider.SQLite) { } }
-public class JsonRoundtripTests  : JsonRoundtripTestBase { public JsonRoundtripTests () : base(Provider.SQLite) { } }
-public class LargeObjectTests  : LargeObjectTestBase { public LargeObjectTests () : base(Provider.SQLite) { } }
-public class MatchTests  : MatchTestBase { public MatchTests () : base(Provider.SQLite) { } }
-public class ObserveTests  : ObserveTestBase { public ObserveTests () : base(Provider.SQLite) { } }
-public class PolymorphismTests  : PolymorphismTestBase { public PolymorphismTests () : base(Provider.SQLite) { } }
-public class QueryMethodTests  : QueryMethodTestBase { public QueryMethodTests () : base(Provider.SQLite) { } }
-public class QueryTests  : QueryTestBase { public QueryTests () : base(Provider.SQLite) { } }
-public class RebuildIndexTests  : RebuildIndexTestBase { public RebuildIndexTests () : base(Provider.SQLite) { } }
-public class SearchTests  : SearchTestBase { public SearchTests () : base(Provider.SQLite) { } }
-public class StoreRegistrationTests  : StoreRegistrationTestBase { public StoreRegistrationTests () : base(Provider.SQLite) { } }
-public class ToAsyncEnumerableTests  : ToAsyncEnumerableTestBase { public ToAsyncEnumerableTests () : base(Provider.SQLite) { } }
-public class VectorSearchTests  : VectorSearchTestBase { public VectorSearchTests () : base(Provider.SQLite) { } }
+public class SQLite_AdHocJoinTests : AdHocJoinTestBase { public SQLite_AdHocJoinTests() : base(Provider.SQLite) { } }
+public class SQLite_AutoQueryableTests : AutoQueryableTestBase { public SQLite_AutoQueryableTests() : base(Provider.SQLite) { } }
+public class SQLite_BatchTests : BatchTestBase { public SQLite_BatchTests() : base(Provider.SQLite) { } }
+public class SQLite_BlobOnUploadTests : BlobOnUploadTestBase { public SQLite_BlobOnUploadTests() : base(Provider.SQLite) { } }
+public class SQLite_BlobTests : BlobTestBase { public SQLite_BlobTests() : base(Provider.SQLite) { } }
+public class SQLite_BuilderTests : BuilderTestBase { public SQLite_BuilderTests() : base(Provider.SQLite) { } }
+public class SQLite_CascadingViewTests : CascadingViewTestBase { public SQLite_CascadingViewTests() : base(Provider.SQLite) { } }
+public class SQLite_ChangeAsyncTests : ChangeAsyncTestBase { public SQLite_ChangeAsyncTests() : base(Provider.SQLite) { } }
+public class SQLite_CoverageTests : CoverageTestBase { public SQLite_CoverageTests() : base(Provider.SQLite) { } }
+public class SQLite_CreateViewTests : CreateViewTestBase { public SQLite_CreateViewTests() : base(Provider.SQLite) { } }
+public class SQLite_CrudTests : CrudTestBase { public SQLite_CrudTests() : base(Provider.SQLite) { } }
+public class SQLite_CycleDetectionTests : CycleDetectionTestBase { public SQLite_CycleDetectionTests() : base(Provider.SQLite) { } }
+public class SQLite_DatabaseIsolationTests : DatabaseIsolationTestBase { public SQLite_DatabaseIsolationTests() : base(Provider.SQLite) { } }
+public class SQLite_DatabaseLifecycleTests : DatabaseLifecycleTestBase { public SQLite_DatabaseLifecycleTests() : base(Provider.SQLite) { } }
+public class SQLite_ETagTests : ETagTestBase { public SQLite_ETagTests() : base(Provider.SQLite) { } }
+public class SQLite_GetManyAsyncTests : GetManyAsyncTestBase { public SQLite_GetManyAsyncTests() : base(Provider.SQLite) { } }
+public class SQLite_JsonExpressionTests : JsonExpressionTestBase { public SQLite_JsonExpressionTests() : base(Provider.SQLite) { } }
+public class SQLite_JsonMetadataTests : JsonMetadataTestBase { public SQLite_JsonMetadataTests() : base(Provider.SQLite) { } }
+public class SQLite_JsonRoundtripTests : JsonRoundtripTestBase { public SQLite_JsonRoundtripTests() : base(Provider.SQLite) { } }
+public class SQLite_LargeObjectTests : LargeObjectTestBase { public SQLite_LargeObjectTests() : base(Provider.SQLite) { } }
+public class SQLite_MatchTests : MatchTestBase { public SQLite_MatchTests() : base(Provider.SQLite) { } }
+public class SQLite_ObserveTests : ObserveTestBase { public SQLite_ObserveTests() : base(Provider.SQLite) { } }
+public class SQLite_PolymorphismTests : PolymorphismTestBase { public SQLite_PolymorphismTests() : base(Provider.SQLite) { } }
+public class SQLite_QueryMethodTests : QueryMethodTestBase { public SQLite_QueryMethodTests() : base(Provider.SQLite) { } }
+public class SQLite_QueryTests : QueryTestBase { public SQLite_QueryTests() : base(Provider.SQLite) { } }
+public class SQLite_RebuildIndexTests : RebuildIndexTestBase { public SQLite_RebuildIndexTests() : base(Provider.SQLite) { } }
+public class SQLite_SearchTests : SearchTestBase { public SQLite_SearchTests() : base(Provider.SQLite) { } }
+public class SQLite_StoreRegistrationTests : StoreRegistrationTestBase { public SQLite_StoreRegistrationTests() : base(Provider.SQLite) { } }
+public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public SQLite_ToAsyncEnumerableTests() : base(Provider.SQLite) { } }
+public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Provider.SQLite) { } }

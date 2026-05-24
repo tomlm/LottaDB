@@ -299,8 +299,11 @@ public class LottaDB : IDisposable
 
             // Store metadata (ETag + Schema)
             var rebuildTypeName = tableEntity.GetString(Internal.StorageFields.Type) ?? "";
+            var schemaFallback = JsonMetadata.IsJsonTypeName(rebuildTypeName)
+                ? Internal.StorageFields.DefaultSchema
+                : rebuildTypeName;
             var rebuildSchema = tableEntity.TryGetValue(Internal.StorageFields.Schema, out var schemaObj) && schemaObj is string schemaStr
-                ? schemaStr : rebuildTypeName;
+                ? schemaStr : schemaFallback;
             Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema);
 
             lock (_lock)
@@ -648,7 +651,7 @@ public class LottaDB : IDisposable
         {
             if (etag != null) result.SetETag(etag);
             result.SetKey(key);
-            result.SetSchema(typeof(T).Name);
+            result.SetSchema(result.GetSchema() ?? result.GetType().Name);
             if (result is BlobFile bf) bf.Database = this;
         }
         return result;
@@ -693,8 +696,6 @@ public class LottaDB : IDisposable
             ReloadSearcher();
             lock (_lock)
             {
-                var objectMapper = new ObjectDocumentMapper(Lucene.Net.Util.LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer, this);
-
                 Lucene.Net.Search.Query luceneQuery;
                 if (!String.IsNullOrEmpty(query))
                 {

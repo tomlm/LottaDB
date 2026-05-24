@@ -75,7 +75,12 @@ internal static class JsonExpressionODataVisitor
         // j["fieldName"] → get_Item("fieldName")
         if (node is MethodCallExpression { Method.Name: "get_Item" } indexer
             && indexer.Arguments.Count == 1)
-            return GetConstantValue(indexer.Arguments[0])?.ToString();
+        {
+            var name = GetConstantValue(indexer.Arguments[0])?.ToString();
+            if (name != null && !name.All(c => char.IsLetterOrDigit(c) || c == '_'))
+                throw new ArgumentException($"Invalid field name '{name}'. Field names must be alphanumeric or underscore.");
+            return name;
+        }
 
         // j.GetSchema() → "Schema"
         if (node is MethodCallExpression { Method.Name: "GetSchema" })

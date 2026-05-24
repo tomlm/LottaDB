@@ -122,7 +122,10 @@ internal static class JsonExpressionLuceneVisitor
         if (node is MethodCallExpression { Method.Name: "get_Item" } indexer
             && indexer.Arguments.Count == 1)
         {
-            return GetConstantValue(indexer.Arguments[0])?.ToString();
+            var name = GetConstantValue(indexer.Arguments[0])?.ToString();
+            if (name != null && !name.All(c => char.IsLetterOrDigit(c) || c == '_'))
+                throw new ArgumentException($"Invalid field name '{name}'. Field names must be alphanumeric or underscore.");
+            return name;
         }
 
         // j.GetSchema() → "Schema"
@@ -132,10 +135,6 @@ internal static class JsonExpressionLuceneVisitor
         // j.GetKey() → "_key_"
         if (node is MethodCallExpression { Method.Name: "GetKey" })
             return StorageFields.Key;
-
-        // j.GetETag() → "_etag_"
-        if (node is MethodCallExpression { Method.Name: "GetETag" })
-            return StorageFields.ETag;
 
         // Unwrap Convert nodes (boxing)
         if (node is UnaryExpression { NodeType: ExpressionType.Convert } convert)
@@ -235,6 +234,10 @@ internal static class JsonExpressionLuceneVisitor
 
     private static Query CreateWildcardQuery(string fieldName, string pattern)
     {
+        // Lowercase the pattern for case-insensitive matching against analyzed fields.
+        // Lucene analyzers typically lowercase indexed terms, so the wildcard pattern
+        // must match that casing. For NotAnalyzed/keyword fields, users should use
+        // exact-match operators (==) instead of Contains/StartsWith/EndsWith.
         return new WildcardQuery(new Term(fieldName, pattern.ToLowerInvariant()));
     }
 
