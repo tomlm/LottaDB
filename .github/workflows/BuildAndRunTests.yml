@@ -31,5 +31,11 @@ jobs:
     - name: Build
       run: dotnet build --no-restore src/LottaDB.slnx --property WarningLevel=0
       
-    - name: Test
-      run: dotnet test --no-build --verbosity normal src/LottaDB.slnx
+    - name: Test Memory
+      run: dotnet test --no-build --verbosity normal src/LottaDB.Memory.Tests/LottaDB.Memory.Tests.csproj
+
+    - name: Test SQLite
+      run: dotnet test --no-build --verbosity normal src/LottaDB.SQLite.Tests/LottaDB.SQLite.Tests.csproj
+
+    - name: Test FileSystem
+      run: dotnet test --no-build --verbosity normal src/LottaDB.FileSystem.Tests/LottaDB.FileSystem.Tests.csproj
