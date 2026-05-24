@@ -81,9 +81,7 @@ public class LottaCatalog : IDisposable
     {
         Name = SanitizeName(catalogName);
         connectionString ??= "UseDevelopmentStorage=true";
-        TableServiceClientFactory = () => new TableServiceClient(connectionString);
-        BlobServiceClientFactory = () => new BlobServiceClient(connectionString);
-        LuceneDirectoryFactory = null; // Default: AzureDirectory with FSDirectory cache
+        this.UseAzure(connectionString);
         configure?.Invoke(this);
     }
 
@@ -97,9 +95,11 @@ public class LottaCatalog : IDisposable
     public LottaCatalog(string catalogName, Action<LottaCatalog>? configure = null)
     {
         Name = SanitizeName(catalogName);
+
         TableServiceClientFactory = () => throw new InvalidOperationException("LottaCatalog.TableServiceClientFactory is not configured.");
         BlobServiceClientFactory = () => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
         LuceneDirectoryFactory = null; // Caller should set via configure callback
+
         configure?.Invoke(this);
     }
 
