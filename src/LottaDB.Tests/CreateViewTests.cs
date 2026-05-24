@@ -2,11 +2,11 @@ using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
 
-public class CreateViewTests
+public class CreateViewTests : LottaTestBase
 {
-    private async Task<LottaDB> CreateDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
+    private async Task<LottaDB> CreateViewDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
-        return await LottaDBFixture.CreateDbAsync(opts =>
+        return await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -66,7 +66,7 @@ public class CreateViewTests
     public async Task NoteAndActor_ProducesNoteView()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -79,7 +79,7 @@ public class CreateViewTests
     public async Task ActorChange_UpdatesNoteView()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, ct);
         await db.SaveAsync(new Note { NoteId = "n-update", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -92,7 +92,7 @@ public class CreateViewTests
     public async Task NoteDeleted_DeletesNoteView()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, ct);
         var note = new Note { NoteId = "n-del", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note, ct);
@@ -106,7 +106,7 @@ public class CreateViewTests
     public async Task ActorDeleted_DeletesRelatedNoteViews()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "gone", DisplayName = "Gone" }, ct);
         await db.SaveAsync(new Note { NoteId = "orphan1", AuthorId = "gone", Content = "A", Published = DateTimeOffset.UtcNow }, ct);
         await db.SaveAsync(new Note { NoteId = "orphan2", AuthorId = "gone", Content = "B", Published = DateTimeOffset.UtcNow }, ct);
@@ -124,7 +124,7 @@ public class CreateViewTests
     public async Task NoMatchingActor_NoViewCreated()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Note { NoteId = "n-orphan", AuthorId = "nobody", Content = "Orphan", Published = DateTimeOffset.UtcNow }, ct);
         Assert.Null(await db.GetAsync<NoteView>("nv-n-orphan", ct));
     }
@@ -133,7 +133,7 @@ public class CreateViewTests
     public async Task MultipleNotes_SameActor_AllViews()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "prolific", DisplayName = "Prolific" }, ct);
         await db.SaveAsync(new Note { NoteId = "p1", AuthorId = "prolific", Content = "One", Published = DateTimeOffset.UtcNow }, ct);
         await db.SaveAsync(new Note { NoteId = "p2", AuthorId = "prolific", Content = "Two", Published = DateTimeOffset.UtcNow }, ct);
@@ -147,7 +147,7 @@ public class CreateViewTests
     public async Task SaveResult_ContainsDerivedChanges()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateViewDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "result", DisplayName = "R" }, ct);
         var result = await db.SaveAsync(new Note { NoteId = "result-n", AuthorId = "result", Content = "Check", Published = DateTimeOffset.UtcNow }, ct);
 

@@ -1,13 +1,14 @@
 namespace Lotta.Tests;
 
-public class ObserveTests
+public class ObserveTests : LottaTestBase
 {
+
     [Fact]
     public async Task On_ReceivesSavedNotification()
     {
         var ct = TestContext.Current.CancellationToken;
         Actor? received = null;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (actor, kind, db, _) => { received = actor; });
         }, cancellationToken: ct);
@@ -22,7 +23,7 @@ public class ObserveTests
     {
         var ct = TestContext.Current.CancellationToken;
         TriggerKind? receivedKind = null;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (actor, kind, db, _) => { receivedKind = kind; });
         }, cancellationToken: ct);
@@ -37,7 +38,7 @@ public class ObserveTests
     public async Task On_RuntimeRegistration_Works()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         Actor? received = null;
 
         using var handle = db.On<Actor>(async (actor, kind, db, _) => { received = actor; });
@@ -50,7 +51,7 @@ public class ObserveTests
     public async Task On_Dispose_StopsNotifications()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         int count = 0;
 
         var handle = db.On<Actor>(async (actor, kind, db, _) => { Interlocked.Increment(ref count); });
@@ -67,7 +68,7 @@ public class ObserveTests
     {
         var ct = TestContext.Current.CancellationToken;
         int count = 0;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (a, k, d, _) => { Interlocked.Increment(ref count); });
             opts.On<Actor>(async (a, k, d, _) => { Interlocked.Increment(ref count); });

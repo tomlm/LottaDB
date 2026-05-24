@@ -15,8 +15,8 @@ namespace Lotta.Tests
 
         public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            // UseMemoryClient(catalog);
-            UseFileSystemClient(catalog);
+            UseMemoryClient(catalog);
+            // UseFileSystemClient(catalog);
             // UseAzuriteClient(catalog);
             return catalog;
         }
@@ -55,12 +55,7 @@ namespace Lotta.Tests
             catalog.TableServiceClientFactory = () => tableClient;
             catalog.BlobServiceClientFactory = () => blobClient;
             // Memory: FSDirectory for Lucene to avoid RAMDirectory concurrency issues
-            catalog.LuceneDirectoryFactory = path =>
-            {
-                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
-                System.IO.Directory.CreateDirectory(dir);
-                return FSDirectory.Open(dir);
-            };
+            catalog.LuceneDirectoryFactory = path => new RAMDirectory();
         }
 
         public static void UseFileSystemClient(LottaCatalog catalog)

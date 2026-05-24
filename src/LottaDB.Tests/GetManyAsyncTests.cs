@@ -2,13 +2,14 @@ using Lotta.Internal;
 
 namespace Lotta.Tests;
 
-public class GetManyAsyncTests
+public class GetManyAsyncTests : LottaTestBase
 {
+
     [Fact]
     public async Task GetManyAsync_NoKeys_ReturnsAllEntities()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "bob" }, ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, ct);
@@ -24,7 +25,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_NoKeys_EmptyTable_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var (adapter, tableName) = db.GetTableForTesting();
         var all = await adapter.GetManyAsync(tableName, cancellationToken: ct)
@@ -37,7 +38,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_NoKeys_DeserializesPolymorphically()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Employee { Id = "emp1", Name = "Alice", Email = "alice@test.com", Department = "Eng" }, ct);
         await db.SaveAsync(new Person { Id = "person1", Name = "Bob", Email = "bob@test.com" }, ct);
 
@@ -54,7 +55,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_NoKeys_WithMaxPerPage_ReturnsAll()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 5; i++)
             await db.SaveAsync(new Actor { Domain = "bulk.test", Username = $"user-{i}" }, ct);
 
@@ -70,7 +71,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_ReturnsOnlyMatchingEntities()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "bob" }, ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "carol" }, ct);
@@ -90,7 +91,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_NonExistentKeys_ReturnsOnlyExisting()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice" }, ct);
 
         var (adapter, tableName) = db.GetTableForTesting();
@@ -106,7 +107,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_EmptyKeyList_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice" }, ct);
 
         var (adapter, tableName) = db.GetTableForTesting();
@@ -121,7 +122,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_DeserializesPolymorphically()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Employee { Id = "emp1", Name = "Alice", Email = "alice@test.com", Department = "Eng" }, ct);
         await db.SaveAsync(new Person { Id = "person1", Name = "Bob", Email = "bob@test.com" }, ct);
         await db.SaveAsync(new BaseEntity { Id = "base1", Name = "Carol" }, ct);
@@ -140,7 +141,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_SingleKey_ReturnsSingleResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "bob", DisplayName = "Bob" }, ct);
 
@@ -157,7 +158,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_MixedTypes_ReturnsAllRequested()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "bulk.test", Username = "alice" }, ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -175,7 +176,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_NoKeys_ReturnsBlobFileEntities()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
+        var db = await CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
         await db.SaveAsync(new BlobPhoto { Path = "photos/cat.jpg", Name = "cat.jpg", MediaType = "image/jpeg", Width = 1920, Height = 1080 }, ct);
         await db.SaveAsync(new BlobMusic { Path = "music/song.mp3", Name = "song.mp3", MediaType = "audio/mpeg", Artist = "TestArtist", Album = "TestAlbum" }, ct);
         await db.SaveAsync(new BlobDocument { Path = "docs/report.pdf", Name = "report.pdf", MediaType = "application/pdf", PageCount = 42 }, ct);
@@ -194,7 +195,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_ReturnsBlobFileEntities()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
+        var db = await CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
         await db.SaveAsync(new BlobPhoto { Path = "photos/cat.jpg", Name = "cat.jpg", MediaType = "image/jpeg", Width = 1920, Height = 1080 }, ct);
         await db.SaveAsync(new BlobMusic { Path = "music/song.mp3", Name = "song.mp3", MediaType = "audio/mpeg", Artist = "TestArtist" }, ct);
         await db.SaveAsync(new BlobVideo { Path = "videos/clip.mp4", Name = "clip.mp4", MediaType = "video/mp4", Width = 3840, FrameRate = 60.0 }, ct);
@@ -213,7 +214,7 @@ public class GetManyAsyncTests
     public async Task GetManyAsync_WithKeys_BlobPropertiesPreserved()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
+        var db = await CreateDbAsync(config => config.OnUpload(), cancellationToken: ct);
         await db.SaveAsync(new BlobPhoto
         {
             Path = "photos/vacation.jpg",

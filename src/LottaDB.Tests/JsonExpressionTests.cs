@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Lotta.Tests;
 
-public class JsonExpressionTests : IClassFixture<LottaDBFixture>
+public class JsonExpressionTests : LottaTestBase
 {
     // === JsonExpression Search tests ===
 
@@ -10,7 +10,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task Search_ByStringField()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Alice","city":"Portland"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Bob","city":"Seattle"}"""), ct);
@@ -25,7 +25,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task Search_ByNumericComparison()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Young","age":20}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Old","age":60}"""), ct);
@@ -40,7 +40,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task Search_WithAndOperator()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Alice","city":"Portland"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Bob","city":"Portland"}"""), ct);
@@ -57,7 +57,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task Match_AutoClassifiesDocuments()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Define schema with match expression
         await db.SaveAsync(new JsonSchema
@@ -77,7 +77,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task Search_BySchema()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
         await db.SaveAsync(new JsonSchema { Name = "Product", Match = "$.type == 'product'" }, ct);
@@ -98,7 +98,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task SetSchema_ExplicitOverridesMatch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
         await db.SaveAsync(new JsonSchema { Name = "VIP" }, ct);
@@ -122,7 +122,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_WithJsonExpression()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
 
@@ -143,7 +143,7 @@ public class JsonExpressionTests : IClassFixture<LottaDBFixture>
     public async Task SchemalessWorkflow_EndToEnd()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Just save — no schema definition needed
         await db.SaveAsync(JsonDocument.Parse("""{"id":"abc","name":"Alice","age":30}"""), ct);

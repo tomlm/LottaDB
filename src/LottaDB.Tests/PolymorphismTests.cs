@@ -1,12 +1,13 @@
 namespace Lotta.Tests;
 
-public class PolymorphismTests
+public class PolymorphismTests : LottaTestBase
 {
+
     [Fact]
     public async Task Query_BaseClass_ReturnsAllDerivedTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "base1", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "person1", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -21,7 +22,7 @@ public class PolymorphismTests
     public async Task Query_MiddleClass_ReturnsMiddleAndDerived()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "base2", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "person2", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -36,7 +37,7 @@ public class PolymorphismTests
     public async Task Query_LeafClass_ReturnsOnlyExactType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "base3", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "person3", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -52,7 +53,7 @@ public class PolymorphismTests
     public async Task Query_BaseClass_DeserializesToConcreteType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "emp4", Name = "Carol", Email = "carol@test.com", Department = "Sales" }, ct);
 
@@ -73,7 +74,7 @@ public class PolymorphismTests
     public async Task Query_MiddleClass_PreservesDerivedProperties()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "emp5", Name = "Dave", Email = "dave@test.com", Department = "HR" }, ct);
 
@@ -88,7 +89,7 @@ public class PolymorphismTests
     public async Task GetAsync_ReturnsConcreteType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "emp6", Name = "Eve", Email = "eve@test.com", Department = "Legal" }, ct);
 
@@ -104,7 +105,7 @@ public class PolymorphismTests
     public async Task Search_ExactType_ReturnsOnlyThatType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "base7", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "person7", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -121,7 +122,7 @@ public class PolymorphismTests
     public async Task Search_BaseClass_ReturnsAllDerivedTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "sbase1", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "sperson1", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -135,7 +136,7 @@ public class PolymorphismTests
     public async Task Search_MiddleClass_ReturnsMiddleAndDerived()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new BaseEntity { Id = "sbase2", Name = "Base" }, ct);
         await db.SaveAsync(new Person { Id = "sperson2", Name = "Alice", Email = "alice@test.com" }, ct);
@@ -149,7 +150,7 @@ public class PolymorphismTests
     public async Task Search_BaseClass_DeserializesToConcreteType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "semp3", Name = "Carol", Email = "carol@test.com", Department = "Sales" }, ct);
 

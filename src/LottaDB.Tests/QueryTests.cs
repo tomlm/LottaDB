@@ -1,12 +1,13 @@
 namespace Lotta.Tests;
 
-public class QueryTests
+public class QueryTests : LottaTestBase
 {
+
     [Fact]
     public async Task QueryAsync_ReturnsAllOfType()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob" }, ct);
 
@@ -18,7 +19,7 @@ public class QueryTests
     public async Task QueryAsync_FilterByTag_ServerSide()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, ct);
         await db.SaveAsync(new Note { Domain = "query.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -33,7 +34,7 @@ public class QueryTests
     public async Task QueryAsync_Take_LimitsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 10; i++)
             await db.SaveAsync(new Actor { Domain = "query.test", Username = $"user-{i}" }, ct);
 
@@ -45,7 +46,7 @@ public class QueryTests
     public async Task QueryAsync_EmptyTable_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var all = await db.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
         Assert.Empty(all);
     }
@@ -54,7 +55,7 @@ public class QueryTests
     public async Task QueryAsync_WhereOnNonTag_EvaluatesClientSide()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "" }, ct);
 
@@ -70,7 +71,7 @@ public class QueryTests
     public async Task QueryAsync_CombinedTagAndNonTag_FiltersCorrectly()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice", AvatarUrl = "https://example.com/alice.png" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alex", DisplayName = "Alice", AvatarUrl = "" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob", AvatarUrl = "https://example.com/bob.png" }, ct);
@@ -87,7 +88,7 @@ public class QueryTests
     public async Task QueryAsync_OrAcrossTags_FiltersCorrectly()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", DisplayName = "Carol" }, ct);
@@ -105,7 +106,7 @@ public class QueryTests
     public async Task QueryAsync_FindsByNumericComparisons()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", Counter = 5 }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", Counter = 10 }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "carol", Counter = 15 }, ct);
@@ -130,7 +131,7 @@ public class QueryTests
     public async Task QueryAsync_FindsByDateTimeComparisons()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var created1 = new DateTime(2024, 1, 1, 8, 0, 0, DateTimeKind.Utc);
         var created2 = new DateTime(2024, 1, 2, 8, 0, 0, DateTimeKind.Utc);
         var created3 = new DateTime(2024, 1, 3, 8, 0, 0, DateTimeKind.Utc);
@@ -159,7 +160,7 @@ public class QueryTests
     public async Task QueryAsync_FindsByDateTimeOffsetComparisons()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var seen1 = new DateTimeOffset(2024, 2, 1, 8, 0, 0, TimeSpan.Zero);
         var seen2 = new DateTimeOffset(2024, 2, 2, 8, 0, 0, TimeSpan.Zero);
         var seen3 = new DateTimeOffset(2024, 2, 3, 8, 0, 0, TimeSpan.Zero);

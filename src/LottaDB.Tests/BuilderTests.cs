@@ -5,13 +5,14 @@ namespace Lotta.Tests;
 /// error handling, and accessing the DB from within handlers.
 /// All derived object IDs are prefixed to ensure global uniqueness (e.g. "nv-" for NoteView).
 /// </summary>
-public class BuilderTests
+public class BuilderTests : LottaTestBase
 {
+
     [Fact]
     public async Task OnHandler_OnSave_CreatesDerivedObject()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -42,7 +43,7 @@ public class BuilderTests
     public async Task OnHandler_OnSave_DerivedObjectInTableStorage()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -61,7 +62,7 @@ public class BuilderTests
     public async Task OnHandler_OnSave_DerivedObjectInLuceneIndex()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -80,7 +81,7 @@ public class BuilderTests
     public async Task OnHandler_OnDelete_DeletesDerivedObject()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -106,7 +107,7 @@ public class BuilderTests
     {
         var ct = TestContext.Current.CancellationToken;
         TriggerKind? received = null;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) => { received = kind; });
         }, cancellationToken: ct);
@@ -120,7 +121,7 @@ public class BuilderTests
     {
         var ct = TestContext.Current.CancellationToken;
         TriggerKind? received = null;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) => { received = kind; });
         }, cancellationToken: ct);
@@ -135,7 +136,7 @@ public class BuilderTests
     public async Task OnHandler_HasAccessToDb()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -162,7 +163,7 @@ public class BuilderTests
     public async Task OnHandler_Error_DoesNotBlockSourceSave()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -180,7 +181,7 @@ public class BuilderTests
     public async Task OnHandler_Error_CapturedInObjectResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -199,7 +200,7 @@ public class BuilderTests
     {
         var ct = TestContext.Current.CancellationToken;
         int count = 0;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
             opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
@@ -213,7 +214,7 @@ public class BuilderTests
     public async Task OnHandler_SaveResult_ContainsDerivedChanges()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {

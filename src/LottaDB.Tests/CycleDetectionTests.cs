@@ -2,11 +2,11 @@ using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
 
-public class CycleDetectionTests
+public class CycleDetectionTests : LottaTestBase
 {
-    private async Task<LottaDB> CreateDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
+    private async Task<LottaDB> CreateCycleDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
-        return await LottaDBFixture.CreateDbAsync(opts =>
+        return await CreateDbAsync(opts =>
         {
             opts.On<CycleA>(async (a, kind, db, _) =>
             {
@@ -26,7 +26,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_DirectCycle_Stops()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCycleDbAsync(ct);
         var result = await db.SaveAsync(new CycleA { Id = "c1", Value = "start" }, ct);
         Assert.NotNull(result);
     }
@@ -35,7 +35,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_ProducesFirstLevel()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCycleDbAsync(ct);
         await db.SaveAsync(new CycleA { Id = "c2", Value = "start" }, ct);
 
         var b = await db.GetAsync<CycleB>("cb-c2", ct);
@@ -46,7 +46,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_NoExceptionThrown()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCycleDbAsync(ct);
         var exception = await Record.ExceptionAsync(() =>
             db.SaveAsync(new CycleA { Id = "c3", Value = "safe" }, ct));
         Assert.Null(exception);
@@ -56,7 +56,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_ResultContainsAllChanges()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCycleDbAsync(ct);
         var result = await db.SaveAsync(new CycleA { Id = "c4", Value = "chain" }, ct);
 
         Assert.Contains(result.Changes, c => c.Type == typeof(CycleA));
@@ -67,7 +67,7 @@ public class CycleDetectionTests
     public async Task CycleDetection_DifferentKeys_NotACycle()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<CycleA>(async (a, kind, db, _) =>
             {

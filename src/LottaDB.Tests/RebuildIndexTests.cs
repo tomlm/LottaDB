@@ -1,12 +1,13 @@
 namespace Lotta.Tests;
 
-public class RebuildIndexTests
+public class RebuildIndexTests : LottaTestBase
 {
+
     [Fact]
     public async Task RebuildIndex_RestoresSearchResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "bob", DisplayName = "Bob" }, ct);
@@ -31,7 +32,7 @@ public class RebuildIndexTests
     public async Task RebuildIndex_EmptyTable_CreatesEmptyIndex()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Rebuild with no data — should not throw
         await db.RebuildSearchIndex(ct);
@@ -45,7 +46,7 @@ public class RebuildIndexTests
     {
         var ct = TestContext.Current.CancellationToken;
         // Rebuild only re-indexes from table storage, does not re-run On<T> handlers
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -74,7 +75,7 @@ public class RebuildIndexTests
     public async Task ResetAsync_ClearsTableAndIndex()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "reset1", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Note { NoteId = "rn1", AuthorId = "reset1", Content = "Hello", Published = DateTimeOffset.UtcNow }, ct);
@@ -98,7 +99,7 @@ public class RebuildIndexTests
     public async Task ResetAsync_CanSaveAfterReset()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "before", DisplayName = "Before" }, ct);
         await db.ResetDatabaseAsync(ct);

@@ -41,6 +41,13 @@ public class LottaDB : IDisposable
     private IndexWriter _indexWriter;
     private volatile bool _indexDirty;
     private bool _disposed;
+    private readonly CancellationTokenSource _disposeCts = new();
+
+    // Striped per-key locks: ensures table write + Lucene handler execute atomically for a given key.
+    // Prevents out-of-order Lucene writes when multiple tasks write to the same key concurrently.
+    private const int LockStripeCount = 1024;
+    private readonly SemaphoreSlim[] _keyLocks = Enumerable.Range(0, LockStripeCount)
+        .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
@@ -351,81 +358,94 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
     public async Task<ObjectResult> SaveAsync(object entity, CancellationToken cancellationToken = default)
     {
+        // Compute key before acquiring lock
         string key;
-        string newETag;
-
-        if (entity is JsonDocument jsonDoc)
+        if (entity is JsonDocument jsonDoc0)
         {
-            var schemaName = ResolveSchemaName(jsonDoc);
-            var schema = GetSchema(schemaName);
-            key = schema.GetKey(jsonDoc);
-
-            var existingETag = jsonDoc.GetETag();
-            if (existingETag != null)
-            {
-                try
-                {
-                    newETag = await _tableAdapter.ReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schemaName, jsonDoc, schema, existingETag, cancellationToken);
-                }
-                catch (Azure.RequestFailedException ex) when (ex.Status == 412)
-                {
-                    throw new ConcurrencyException(key, typeof(JsonDocument));
-                }
-            }
-            else
-            {
-                newETag = await _tableAdapter.UpsertJsonDocumentAsync(_lottaCatalog.Name, key, schemaName, jsonDoc, schema, cancellationToken);
-            }
-            Internal.EntityMapper.AnnotateAfterWrite(jsonDoc, key, newETag, schemaName);
+            var schema0 = GetSchema(ResolveSchemaName(jsonDoc0));
+            key = schema0.GetKey(jsonDoc0);
         }
         else
         {
-            var meta = GetMeta(entity.GetType());
-            key = meta.GetKey(entity);
+            var meta0 = GetMeta(entity.GetType());
+            key = meta0.GetKey(entity);
+            if (meta0.KeyMode == KeyMode.Auto && meta0.SetKey != null)
+                meta0.SetKey(entity, key);
+        }
 
-            if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
-                meta.SetKey(entity, key);
+        // Per-key lock: table write + Lucene handler are atomic for this key
+        using var keyLock = await AcquireLockAsync(key, cancellationToken);
+        {
+            string newETag;
 
-            var existingETag = entity.GetETag();
-            if (existingETag != null)
+            if (entity is JsonDocument jsonDoc)
             {
-                try
+                var schemaName = ResolveSchemaName(jsonDoc);
+                var schema = GetSchema(schemaName);
+
+                var existingETag = jsonDoc.GetETag();
+                if (existingETag != null)
                 {
-                    newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, entity, meta, existingETag, cancellationToken);
+                    try
+                    {
+                        newETag = await _tableAdapter.ReplaceJsonDocumentAsync(_lottaCatalog.Name, key, schemaName, jsonDoc, schema, existingETag, cancellationToken);
+                    }
+                    catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+                    {
+                        throw new ConcurrencyException(key, typeof(JsonDocument));
+                    }
                 }
-                catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+                else
                 {
-                    throw new ConcurrencyException(key, entity.GetType());
+                    newETag = await _tableAdapter.UpsertJsonDocumentAsync(_lottaCatalog.Name, key, schemaName, jsonDoc, schema, cancellationToken);
                 }
+                Internal.EntityMapper.AnnotateAfterWrite(jsonDoc, key, newETag, schemaName);
             }
             else
             {
-                newETag = await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta, cancellationToken);
+                var meta = GetMeta(entity.GetType());
+
+                var existingETag = entity.GetETag();
+                if (existingETag != null)
+                {
+                    try
+                    {
+                        newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, entity, meta, existingETag, cancellationToken);
+                    }
+                    catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+                    {
+                        throw new ConcurrencyException(key, entity.GetType());
+                    }
+                }
+                else
+                {
+                    newETag = await _tableAdapter.UpsertAsync(_lottaCatalog.Name, key, entity, meta, cancellationToken);
+                }
+                Internal.EntityMapper.AnnotateAfterWrite(entity, key, newETag);
             }
-            Internal.EntityMapper.AnnotateAfterWrite(entity, key, newETag);
+
+            if (entity is BlobFile bf) bf.Database = this;
+
+            var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
+
+            if (isRoot)
+            {
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
+            }
+
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
         }
-
-        if (entity is BlobFile bf) bf.Database = this;
-
-        var change = new ObjectChange { Type = entity.GetType(), Key = key, Kind = ChangeKind.Saved, Object = entity };
-
-        // If we're inside a handler chain, add to the chain's collection
-        var isRoot = _chainChanges.Value == null;
-        var changes = _chainChanges.Value ??= new List<ObjectChange>();
-        var errors = _chainErrors.Value ??= new List<Exception>();
-        changes.Add(change);
-
-        await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
-
-        if (isRoot)
-        {
-            var result = new ObjectResult { Changes = changes, Errors = errors };
-            _chainChanges.Value = null;
-            _chainErrors.Value = null;
-            return result;
-        }
-
-        return new ObjectResult { Changes = new[] { change }, Errors = errors };
+        // keyLock released by using/Dispose
     }
 
     /// <summary>
@@ -454,26 +474,30 @@ public class LottaDB : IDisposable
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
-        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
-
-        var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
-
-        var isRoot = _chainChanges.Value == null;
-        var changes = _chainChanges.Value ??= new List<ObjectChange>();
-        var errors = _chainErrors.Value ??= new List<Exception>();
-        changes.Add(change);
-
-        await RunHandlersAsync(entity, TriggerKind.Deleted, errors, cancellationToken);
-
-        if (isRoot)
+        using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
-            var result = new ObjectResult { Changes = changes, Errors = errors };
-            _chainChanges.Value = null;
-            _chainErrors.Value = null;
-            return result;
-        }
+            await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
 
-        return new ObjectResult { Changes = new[] { change }, Errors = errors };
+            var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            await RunHandlersAsync(entity, TriggerKind.Deleted, errors, cancellationToken);
+
+            if (isRoot)
+            {
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
+            }
+
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
+        }
+        // keyLock released by using/Dispose
     }
 
     /// <summary>
@@ -485,39 +509,43 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
-        // Fetch to discover type and run handlers
-        var (existing, _) = await _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
-
-        await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
-
-        lock (_lock)
+        using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
-            _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+            // Fetch to discover type and run handlers
+            var (existing, _) = await _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken);
+
+            await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
+
+            lock (_lock)
+            {
+                _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+            }
+            ScheduleRefresh();
+
+            var entityType = existing?.GetType() ?? typeof(object);
+            var change = new ObjectChange { Type = entityType, Key = key, Kind = ChangeKind.Deleted, Object = existing };
+
+            var isRoot = _chainChanges.Value == null;
+            var changes = _chainChanges.Value ??= new List<ObjectChange>();
+            var errors = _chainErrors.Value ??= new List<Exception>();
+            changes.Add(change);
+
+            if (existing != null)
+            {
+                await RunHandlersAsync(existing, entityType, TriggerKind.Deleted, errors, cancellationToken);
+            }
+
+            if (isRoot)
+            {
+                var result = new ObjectResult { Changes = changes, Errors = errors };
+                _chainChanges.Value = null;
+                _chainErrors.Value = null;
+                return result;
+            }
+
+            return new ObjectResult { Changes = new[] { change }, Errors = errors };
         }
-        ScheduleRefresh();
-
-        var entityType = existing?.GetType() ?? typeof(object);
-        var change = new ObjectChange { Type = entityType, Key = key, Kind = ChangeKind.Deleted, Object = existing };
-
-        var isRoot = _chainChanges.Value == null;
-        var changes = _chainChanges.Value ??= new List<ObjectChange>();
-        var errors = _chainErrors.Value ??= new List<Exception>();
-        changes.Add(change);
-
-        if (existing != null)
-        {
-            await RunHandlersAsync(existing, entityType, TriggerKind.Deleted, errors, cancellationToken);
-        }
-
-        if (isRoot)
-        {
-            var result = new ObjectResult { Changes = changes, Errors = errors };
-            _chainChanges.Value = null;
-            _chainErrors.Value = null;
-            return result;
-        }
-
-        return new ObjectResult { Changes = new[] { change }, Errors = errors };
+        // keyLock released by using/Dispose
     }
 
     /// <summary>
@@ -566,37 +594,41 @@ public class LottaDB : IDisposable
 
             var mutated = mutate(current);
 
-            string newETag;
-            try
+            // Per-key lock: table write + Lucene handler are atomic for this key
+            using var keyLock = await AcquireLockAsync(key, cancellationToken);
             {
-                newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+                string newETag;
+                try
+                {
+                    newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
+                }
+                catch (Azure.RequestFailedException ex) when (ex.Status == 412)
+                {
+                    continue; // someone else wrote between our read and write — re-read and retry
+                }
+
+                // Annotate the mutated entity so the Lucene handler picks up the ETag
+                Internal.EntityMapper.AnnotateAfterWrite(mutated!, key, newETag);
+
+                var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
+
+                var isRoot = _chainChanges.Value == null;
+                var changes = _chainChanges.Value ??= new List<ObjectChange>();
+                var errors = _chainErrors.Value ??= new List<Exception>();
+                changes.Add(change);
+
+                await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
+
+                if (isRoot)
+                {
+                    var result = new ObjectResult { Changes = changes, Errors = errors };
+                    _chainChanges.Value = null;
+                    _chainErrors.Value = null;
+                    return result;
+                }
+
+                return new ObjectResult { Changes = new[] { change }, Errors = errors };
             }
-            catch (Azure.RequestFailedException ex) when (ex.Status == 412)
-            {
-                continue; // someone else wrote between our read and write — re-read and retry
-            }
-
-            // Annotate the mutated entity so the Lucene handler picks up the ETag
-            Internal.EntityMapper.AnnotateAfterWrite(mutated!, key, newETag);
-
-            var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
-
-            var isRoot = _chainChanges.Value == null;
-            var changes = _chainChanges.Value ??= new List<ObjectChange>();
-            var errors = _chainErrors.Value ??= new List<Exception>();
-            changes.Add(change);
-
-            await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
-
-            if (isRoot)
-            {
-                var result = new ObjectResult { Changes = changes, Errors = errors };
-                _chainChanges.Value = null;
-                _chainErrors.Value = null;
-                return result;
-            }
-
-            return new ObjectResult { Changes = new[] { change }, Errors = errors };
         }
 
         throw new InvalidOperationException(
@@ -970,7 +1002,8 @@ public class LottaDB : IDisposable
 
         while (!_disposed)
         {
-            await Task.Delay(delayMs).ConfigureAwait(false);
+            try { await Task.Delay(delayMs, _disposeCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
 
             lock (_lock)
             {
@@ -1440,8 +1473,8 @@ public class LottaDB : IDisposable
 
             async Task FlushTypedAsync()
             {
+                using var locks = await AcquireLocksAsync(pendingKeys, cancellationToken);
                 var etags = await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
-                // Annotate each entity with its ETag from the batch response
                 for (int i = 0; i < pendingEntities.Count; i++)
                 {
                     if (etags[i] != null)
@@ -1528,30 +1561,27 @@ public class LottaDB : IDisposable
 
                 // Auto-flush on duplicate key
                 if (pendingKeys.Contains(key))
-                {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
-                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
-                    pendingActions.Clear();
-                    pendingKeys.Clear();
-                }
+                    await FlushDeleteAsync();
 
                 pendingActions.Add(_tableAdapter.CreateDeleteAction(key));
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, type, key));
 
                 if (pendingActions.Count >= 100)
-                {
-                    await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
-                    await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
-                    pendingActions.Clear();
-                    pendingKeys.Clear();
-                }
+                    await FlushDeleteAsync();
             }
 
             if (pendingActions.Count > 0)
+                await FlushDeleteAsync();
+
+            async Task FlushDeleteAsync()
             {
+                using var locks = await AcquireLocksAsync(pendingKeys, cancellationToken);
                 await _tableAdapter.SubmitTransactionAsync(_lottaCatalog.Name, pendingActions, cancellationToken);
                 await RunPendingDeleteHandlersAsync(pendingEntities, allChanges, allErrors, cancellationToken);
+                pendingActions.Clear();
+                pendingKeys.Clear();
+                pendingEntities.Clear();
             }
         }
         finally
@@ -1691,6 +1721,7 @@ public class LottaDB : IDisposable
         if (!_disposed)
         {
             _disposed = true;
+            _disposeCts.Cancel();
             if (disposing)
             {
                 lock (_lock)
@@ -1700,6 +1731,7 @@ public class LottaDB : IDisposable
                     _lucene?.Dispose();
                     _directory?.Dispose();
                 }
+                _disposeCts.Dispose();
             }
         }
     }
@@ -1710,6 +1742,85 @@ public class LottaDB : IDisposable
     //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
     //     Dispose(disposing: false);
     // }
+
+    // Tracks which stripe indices the current async call chain already holds,
+    // so reentrant calls (e.g., handler chains) skip re-acquisition and avoid deadlock.
+    private readonly AsyncLocal<HashSet<int>> _heldLocks = new();
+
+    private async Task<KeyLock> AcquireLockAsync(string key, CancellationToken ct)
+    {
+        var index = (key.GetHashCode() & 0x7FFFFFFF) % LockStripeCount;
+        var held = _heldLocks.Value ??= new HashSet<int>();
+        if (held.Contains(index))
+            return new KeyLock(null, -1, _heldLocks); // already held — no-op
+
+        await _keyLocks[index].WaitAsync(ct);
+        held.Add(index);
+        return new KeyLock(_keyLocks[index], index, _heldLocks);
+    }
+
+    private async Task<KeyLocks> AcquireLocksAsync(IEnumerable<string> keys, CancellationToken ct)
+    {
+        var held = _heldLocks.Value ??= new HashSet<int>();
+        var indices = keys
+            .Select(k => (k.GetHashCode() & 0x7FFFFFFF) % LockStripeCount)
+            .Distinct()
+            .Where(i => !held.Contains(i)) // skip already-held stripes
+            .OrderBy(i => i)
+            .ToArray();
+
+        foreach (var i in indices)
+        {
+            await _keyLocks[i].WaitAsync(ct);
+            held.Add(i);
+        }
+        return new KeyLocks(_keyLocks, indices, _heldLocks);
+    }
+
+    internal readonly struct KeyLock : IDisposable
+    {
+        private readonly SemaphoreSlim? _semaphore;
+        private readonly int _index;
+        private readonly AsyncLocal<HashSet<int>> _held;
+
+        internal KeyLock(SemaphoreSlim? semaphore, int index, AsyncLocal<HashSet<int>> held)
+        {
+            _semaphore = semaphore;
+            _index = index;
+            _held = held;
+        }
+
+        public void Dispose()
+        {
+            if (_semaphore == null) return; // was reentrant — nothing to release
+            _semaphore.Release();
+            _held.Value?.Remove(_index);
+        }
+    }
+
+    internal readonly struct KeyLocks : IDisposable
+    {
+        private readonly SemaphoreSlim[] _allLocks;
+        private readonly int[] _acquiredIndices;
+        private readonly AsyncLocal<HashSet<int>> _held;
+
+        internal KeyLocks(SemaphoreSlim[] allLocks, int[] acquiredIndices, AsyncLocal<HashSet<int>> held)
+        {
+            _allLocks = allLocks;
+            _acquiredIndices = acquiredIndices;
+            _held = held;
+        }
+
+        public void Dispose()
+        {
+            for (int i = _acquiredIndices.Length - 1; i >= 0; i--)
+            {
+                _allLocks[_acquiredIndices[i]].Release();
+                _held.Value?.Remove(_acquiredIndices[i]);
+            }
+        }
+    }
+
 
     /// <inheritdoc/>
     public void Dispose()

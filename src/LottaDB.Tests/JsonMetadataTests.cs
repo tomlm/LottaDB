@@ -3,7 +3,7 @@ using Lotta;
 
 namespace Lotta.Tests;
 
-public class JsonMetadataTests : IClassFixture<LottaDBFixture>
+public class JsonMetadataTests : LottaTestBase
 {
     private static readonly List<QueryableProperty> PersonProperties = new()
     {
@@ -11,9 +11,9 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
         new() { Name = "Age", Type = "integer" },
     };
 
-    private static async Task<LottaDB> CreateDbWithSchema(CancellationToken ct = default)
+    private async Task<LottaDB> CreateDbWithSchema(CancellationToken ct = default)
     {
-        var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new JsonSchema
         {
             Name = "Person",
@@ -28,7 +28,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveJsonSchema_EnablesDynamicCRUD()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         // Dynamic CRUD should work immediately after saving the schema
         var doc = JsonDocument.Parse("""{ "Name": "Test", "Age": 25 }""");
@@ -44,7 +44,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task UpdateJsonSchema_NewFieldBecomesSearchable()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Create schema with AutoQueryable=false so only explicit properties are indexed
         await db.SaveAsync(new JsonSchema
@@ -92,7 +92,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteJsonSchema_RemovesMapper()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         // Save a document
         var doc = JsonDocument.Parse("""{ "Name": "Test", "Age": 25 }""");
@@ -112,7 +112,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_JsonSchema_ListsAllSchemas()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Properties = PersonProperties }, ct);
         await db.SaveAsync(new JsonSchema
@@ -203,7 +203,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAndGet_RoundTripsFullJson()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""
         {
             "Name": "Alice",
@@ -230,7 +230,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_AutoKey_AvailableViaGetKey()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Name": "Bob", "Age": 25 }""");
         json.SetSchema("Person");
 
@@ -248,7 +248,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_ExplicitKey_Uses()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "explicit-123", "Name": "Charlie", "Age": 40 }""");
         json.SetSchema("Person");
 
@@ -265,7 +265,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_RemovesDocument()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Name": "ToDelete", "Age": 99 }""");
         json.SetSchema("Person");
 
@@ -284,7 +284,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_FindsByQueryableField()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "Alice Smith", "Age": 30 }""");
         doc1.SetSchema("Person");
@@ -304,7 +304,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_NumericRangeQuery()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "Young", "Age": 20 }""");
         doc1.SetSchema("Person");
@@ -324,7 +324,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_FreeTextOnContent()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "Alice Wonder", "Age": 30 }""");
         doc1.SetSchema("Person");
@@ -344,7 +344,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_NoQuery_ReturnsAll()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "A", "Age": 1 }""");
         doc1.SetSchema("Person");
@@ -365,7 +365,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_ReturnsAll()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "X", "Age": 1 }""");
         doc1.SetSchema("Person");
@@ -383,7 +383,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_WithODataFilter()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "Young", "Age": 20 }""");
         doc1.SetSchema("Person");
@@ -404,7 +404,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task RebuildSearchIndex_ReindexesDynamicDocuments()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Name": "Alice Rebuild", "Age": 30 }""");
         doc1.SetSchema("Person");
@@ -431,7 +431,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task RebuildSearchIndex_DynamicAndTypedCoexist()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Name": "Dynamic Doc", "Age": 40 }""");
         doc.SetSchema("Person");
@@ -461,7 +461,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetAsync_Dynamic_ReturnsETag()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "etag-dyn", "Name": "Test", "Age": 25 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -476,7 +476,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_Dynamic_WithETag_ConditionalWrite_Succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "etag-dyn-save", "Name": "V1", "Age": 20 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -496,7 +496,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_Dynamic_WithStaleETag_ThrowsConcurrencyException()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "etag-dyn-conflict", "Name": "V1", "Age": 20 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -519,7 +519,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_ReturnsETags()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var doc = JsonDocument.Parse("""{ "Name": "ETagSearch", "Age": 30 }""");
         doc.SetSchema("Person");
         await db.SaveAsync(doc, ct);
@@ -536,7 +536,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_Dynamic_BatchSavesAndIndexes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var docs = Enumerable.Range(1, 5).Select(i =>
         {
@@ -563,7 +563,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_Dynamic_SetsETagOnDocument()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "etag-on-save", "Name": "ETagOnSave", "Age": 25 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -576,7 +576,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_AnnotatesETags()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var doc = JsonDocument.Parse("""{ "Name": "SearchETag", "Age": 30 }""");
         doc.SetSchema("Person");
         await db.SaveAsync(doc, ct);
@@ -592,7 +592,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_AnnotatesETags()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var doc = JsonDocument.Parse("""{ "Name": "GetManyETag", "Age": 30 }""");
         doc.SetSchema("Person");
         await db.SaveAsync(doc, ct);
@@ -610,7 +610,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task UnregisteredSchema_FallsBackToDefault()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var json = JsonDocument.Parse("""{ "Name": "test" }""");
 
         // SetSchema with an unregistered name falls back to the default schema
@@ -629,7 +629,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_ExistingDocument_Overwrites()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "overwrite", "Name": "V1", "Age": 10 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -647,7 +647,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveAsync_ReturnsObjectResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Name": "Result", "Age": 25 }""");
         json.SetSchema("Person");
 
@@ -664,7 +664,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task GetAsync_NonExistent_ReturnsNull()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var loaded = (JsonDocument?)await db.GetAsync("nonexistent-key", ct);
         Assert.Null(loaded);
     }
@@ -675,7 +675,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_ReturnsObjectResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "del-result", "Name": "ToDelete", "Age": 99 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -690,7 +690,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteAsync_NonExistent_NoError()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var result = await db.DeleteAsync("does-not-exist", ct);
         // Should not throw
         Assert.NotNull(result);
@@ -702,7 +702,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_EmptyIndex_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         db.ReloadSearcher();
         var results = db.Search(j => j.GetSchema() == "Person").ToList();
         Assert.Empty(results);
@@ -712,7 +712,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_ReflectsSave()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Name": "Visible", "Age": 30 }""");
         doc.SetSchema("Person");
@@ -727,7 +727,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_ReflectsUpdate()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Id": "update-vis", "Name": "Before", "Age": 10 }""");
         doc.SetSchema("Person");
@@ -748,7 +748,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_ReflectsDelete()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Id": "del-vis", "Name": "Gone", "Age": 10 }""");
         doc.SetSchema("Person");
@@ -767,7 +767,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task ETag_UpdatedInPlaceAfterSave()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var json = JsonDocument.Parse("""{ "Id": "etag-inplace", "Name": "V1", "Age": 10 }""");
         json.SetSchema("Person");
         await db.SaveAsync(json, ct);
@@ -784,7 +784,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task Search_ThenConditionalSave_Works()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Id": "search-save", "Name": "Original", "Age": 30 }""");
         doc.SetSchema("Person");
@@ -808,7 +808,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_DuplicateKey_AutoFlushes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc1 = JsonDocument.Parse("""{ "Id": "dup", "Name": "First", "Age": 10 }""");
         doc1.SetSchema("Person");
@@ -828,7 +828,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_Empty_ReturnsEmptyResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var result = await db.SaveManyAsync(Array.Empty<object>(), ct);
         Assert.Empty(result.Changes);
@@ -838,7 +838,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_Over100_AutoFlushes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var docs = Enumerable.Range(1, 150).Select(i =>
         {
@@ -861,7 +861,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_NoPredicate_DeletesAll()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var docA = JsonDocument.Parse("""{ "Name": "A", "Age": 1 }""");
         docA.SetSchema("Person");
@@ -885,7 +885,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_WithFilter_DeletesMatching()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var docYoung = JsonDocument.Parse("""{ "Name": "Young", "Age": 20 }""");
         docYoung.SetSchema("Person");
@@ -905,7 +905,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_RemovesFromSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
 
         var doc = JsonDocument.Parse("""{ "Name": "SearchDel", "Age": 10 }""");
         doc.SetSchema("Person");
@@ -922,7 +922,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_Empty_ReturnsEmptyResult()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbWithSchema(ct);
+        var db = await CreateDbWithSchema(ct);
         var result = await db.DeleteManyAsync(j => j.GetSchema() == "Person", cancellationToken: ct);
         Assert.Empty(result.Changes);
     }
@@ -995,7 +995,7 @@ public class JsonMetadataTests : IClassFixture<LottaDBFixture>
     public async Task JsonPath_EndToEnd_IndexAndSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema
         {

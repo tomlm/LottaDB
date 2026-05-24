@@ -6,7 +6,7 @@ namespace Lotta.Tests;
 /// Tests covering gaps in the test suite: untyped search, mixed POCO/POJO operations,
 /// JsonExpression operators, metadata consistency, and configurable key conventions.
 /// </summary>
-public class CoverageTests : IClassFixture<LottaDBFixture>
+public class CoverageTests : LottaTestBase
 {
     // === Search<object> returning mixed POCOs + POJOs ===
 
@@ -14,7 +14,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task SearchObject_ReturnsMixedTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice Actor" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"bob","name":"Bob Json"}"""), ct);
@@ -36,7 +36,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetAsyncUntyped_ReturnsPOCO()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
 
@@ -50,7 +50,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetAsyncUntyped_ReturnsJsonDocument()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"doc1","value":42}"""), ct);
 
@@ -65,7 +65,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_JsonExpression_FieldFilter()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Alice","age":30}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Bob","age":20}"""), ct);
@@ -85,7 +85,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task AutoKeyProperties_CustomConfiguration()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.AutoKeyProperties = ["recordId", "entityId"];
         }, cancellationToken: ct);
@@ -105,7 +105,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetSchema_OnPOCO_ReturnsTypeName()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         await db.SaveAsync(actor, ct);
@@ -117,7 +117,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetSchema_OnJsonDocument_ReturnsSchemaName()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
 
@@ -131,7 +131,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetSchema_OnSchemalessJsonDocument_IsNull()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var doc = JsonDocument.Parse("""{"id":"1","name":"NoSchema"}""");
         await db.SaveAsync(doc, ct);
@@ -146,7 +146,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Schema_RoundTrips_ForPOCO()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
 
@@ -159,7 +159,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Schema_RoundTrips_ForPOJO()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Item", Match = "$.kind == 'item'" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","kind":"item","value":42}"""), ct);
@@ -176,7 +176,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_MixedPocoAndPojo()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var actor = new Actor { Username = "alice", DisplayName = "Alice" };
         var note = new Note { NoteId = "n1", Content = "Hello", AuthorId = "alice" };
@@ -203,7 +203,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Search_NotEqual()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","status":"active"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","status":"inactive"}"""), ct);
@@ -218,7 +218,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Search_GreaterThanOrEqual()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","score":10}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","score":20}"""), ct);
@@ -233,7 +233,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Search_LessThanOrEqual()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","score":10}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","score":20}"""), ct);
@@ -250,7 +250,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Match_NotEqual_Discriminator()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "NonPerson", Match = "$.type != 'person'" }, ct);
 
@@ -269,7 +269,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task SearchObject_StringQuery_FindsBothTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "portland-actor", DisplayName = "Portland Actor" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"portland-doc","city":"Portland"}"""), ct);
@@ -287,7 +287,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_JsonExpression()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","status":"draft","title":"A"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","status":"published","title":"B"}"""), ct);
@@ -312,7 +312,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task DeleteManyAsync_JsonExpression_BySchema()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "TempData", Match = "$.kind == 'temp'" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","kind":"temp","value":1}"""), ct);
@@ -329,7 +329,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Search_WithOrOperator()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","city":"Portland"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","city":"Seattle"}"""), ct);
@@ -344,7 +344,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task Search_WithOrAndCombined()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","city":"Portland","active":true}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","city":"Seattle","active":true}"""), ct);
@@ -364,7 +364,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_Untyped_ReturnsAllTypes()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Note { NoteId = "n1", Content = "Hello", AuthorId = "alice" }, ct);
@@ -385,7 +385,7 @@ public class CoverageTests : IClassFixture<LottaDBFixture>
     public async Task GetManyAsync_Untyped_SetsSchemaOnAll()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"doc1","title":"My Doc"}"""), ct);

@@ -6,7 +6,7 @@ using Microsoft.Extensions.AI;
 
 namespace Lotta.Tests;
 
-public class VectorSearchTests
+public class VectorSearchTests : LottaTestBase
 {
     // Shared embedding generator — loaded once across all similarity tests
     private static readonly Lazy<IEmbeddingGenerator<string, Embedding<float>>> _generator =
@@ -16,12 +16,11 @@ public class VectorSearchTests
             PreferQuantized = true
         }));
 
-    private static Task<LottaDB> CreateVectorDbAsync(CancellationToken cancellationToken = default, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
+    public VectorSearchTests() { Catalog.EmbeddingGenerator = _generator.Value; }
+
+    private async Task<LottaDB> CreateVectorDbAsync(CancellationToken cancellationToken = default, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {
-        return LottaDBFixture.CreateDbAsync(
-            configureCatalog: catalog => catalog.EmbeddingGenerator = _generator.Value,
-            cancellationToken: cancellationToken,
-            testName: testName);
+        return await CreateDbAsync(cancellationToken: cancellationToken, testName: testName);
     }
 
     // =====================================================================
@@ -92,7 +91,7 @@ public class VectorSearchTests
     public async Task VectorField_WithoutEmbeddingGenerator_StillIndexesAndSearches()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateVectorDbAsync(cancellationToken: ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "hello world", Category = "tech" }, ct);
 
         var results = db.Search<VectorNote>("hello").ToList();
@@ -108,7 +107,7 @@ public class VectorSearchTests
     public async Task Search_Similar_OnProperty_ReturnsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
@@ -121,7 +120,7 @@ public class VectorSearchTests
     public async Task Search_Similar_RanksSemanticallySimilarHigher()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
@@ -138,7 +137,7 @@ public class VectorSearchTests
     public async Task Search_Similar_ScienceQueryRanksScienceHigher()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox jumps over the lazy dog", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
@@ -153,7 +152,7 @@ public class VectorSearchTests
     public async Task Search_Similar_WithFilter_OnlyMatchingResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics research", Category = "science" }, ct);
@@ -167,7 +166,7 @@ public class VectorSearchTests
     public async Task Search_Similar_WithTake_LimitsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "first document about cats", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "second document about dogs", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "third document about birds", Category = "animals" }, ct);
@@ -184,7 +183,7 @@ public class VectorSearchTests
     public async Task Search_Similar_OnObject_ReturnsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping on a warm blanket" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory research paper" }, ct);
@@ -197,7 +196,7 @@ public class VectorSearchTests
     public async Task Search_Similar_OnObject_RanksSemanticallySimilarHigher()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "the quick brown fox", Category = "animals", Body = "jumps over the lazy dog in the park" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping peacefully on a warm soft blanket" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory and particle research" }, ct);
@@ -213,7 +212,7 @@ public class VectorSearchTests
     public async Task Search_Similar_OnObject_WithTake()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateVectorDbAsync(ct);
+        var db = await CreateVectorDbAsync(ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "first", Body = "about cats" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "second", Body = "about dogs" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "third", Body = "about birds" }, ct);
@@ -230,7 +229,7 @@ public class VectorSearchTests
     public async Task Search_FreeText_StillWorksWithVectorFields()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateVectorDbAsync(cancellationToken: ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "Lucene indexes documents", Category = "tech" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "Azure tables store rows", Category = "tech" }, ct);
 
@@ -243,7 +242,7 @@ public class VectorSearchTests
     public async Task Search_Predicate_StillWorksWithVectorFields()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateVectorDbAsync(cancellationToken: ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "hello world", Category = "greetings" }, ct);
         await db.SaveAsync(new VectorNote { Id = "2", Title = "goodbye world", Category = "farewells" }, ct);
 
@@ -256,7 +255,7 @@ public class VectorSearchTests
     public async Task SaveAndGet_WithVectorFields_PreservesData()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateVectorDbAsync(cancellationToken: ct);
         await db.SaveAsync(new VectorNote { Id = "1", Title = "test title", Category = "test", Body = "test body" }, ct);
 
         var result = await db.GetAsync<VectorNote>("1", ct);

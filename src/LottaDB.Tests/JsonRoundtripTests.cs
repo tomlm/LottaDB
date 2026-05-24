@@ -5,13 +5,14 @@ namespace Lotta.Tests;
 /// and non-primitive properties round-trip correctly through Query (table storage)
 /// and Search (Lucene), both deserializing from _json.
 /// </summary>
-public class JsonRoundtripTests
+public class JsonRoundtripTests : LottaTestBase
 {
+
     [Fact]
     public async Task Query_ComplexObject_PreservesNestedCollections()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var order = new OrderWithLines
         {
@@ -52,7 +53,7 @@ public class JsonRoundtripTests
     public async Task Query_MultipleComplexObjects_AllPreserved()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -89,7 +90,7 @@ public class JsonRoundtripTests
     public async Task Search_ComplexObject_PreservesAllProperties()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var order = new OrderWithLines
         {
@@ -129,7 +130,7 @@ public class JsonRoundtripTests
     public async Task Query_And_Search_DeserializeIdentically()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var order = new OrderWithLines
         {
@@ -157,7 +158,7 @@ public class JsonRoundtripTests
     public async Task Search_ComplexObject_PreservesNestedCollections()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -186,7 +187,7 @@ public class JsonRoundtripTests
     public async Task Search_Note_PreservesIndexedFields()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Note
         {
@@ -209,7 +210,7 @@ public class JsonRoundtripTests
     public async Task Query_EmptyCollections_PreservedAsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -229,7 +230,7 @@ public class JsonRoundtripTests
     public async Task Query_NoteWithTags_PreservesListProperty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Note
         {
@@ -252,7 +253,7 @@ public class JsonRoundtripTests
     public async Task Search_NoteWithTags_PreservesListProperty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Note
         {
@@ -274,7 +275,7 @@ public class JsonRoundtripTests
     public async Task RebuildIndex_PreservesComplexObjectFidelity()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new OrderWithLines
         {
@@ -300,7 +301,7 @@ public class JsonRoundtripTests
     public async Task Builder_DerivedObject_SearchPreservesJsonFidelity()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {

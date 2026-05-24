@@ -1,12 +1,12 @@
 namespace Lotta.Tests;
 
-public class AdHocJoinTests
+public class AdHocJoinTests : LottaTestBase
 {
     [Fact]
     public async Task AdHocJoin_MaterializeThenJoinInMemory()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "bob", DisplayName = "Bob" }, ct);
@@ -31,7 +31,7 @@ public class AdHocJoinTests
     public async Task AdHocJoin_WithWhereClause()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Domain = "join.test", Username = "carol", DisplayName = "Carol" }, ct);
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n3", AuthorId = "carol", Content = "Important note", Published = DateTimeOffset.UtcNow }, ct);
@@ -52,7 +52,7 @@ public class AdHocJoinTests
     public async Task SearchAsync_WithQueryString_FiltersResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, ct);
@@ -71,7 +71,7 @@ public class AdHocJoinTests
     public async Task SearchAsync_WithOpenQueryString_FiltersResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "query.test", Username = "bob", DisplayName = "Bob" }, ct);

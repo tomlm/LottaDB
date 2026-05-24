@@ -1,15 +1,16 @@
 
 namespace Lotta.Tests;
 
-public class ToAsyncEnumerableTests
+public class ToAsyncEnumerableTests : LottaTestBase
 {
+
     // ===== QueryAsync<T>().ToAsyncEnumerable() =====
 
     [Fact]
     public async Task QueryAsync_ToAsyncEnumerable_ReturnsAllItems()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Domain = "async.test", Username = "alice" }, ct);
         await db.SaveAsync(new Actor { Domain = "async.test", Username = "bob" }, ct);
 
@@ -24,7 +25,7 @@ public class ToAsyncEnumerableTests
     public async Task QueryAsync_ToAsyncEnumerable_PagesAcrossMultiplePages()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 10; i++)
             await db.SaveAsync(new Actor { Domain = "async.test", Username = $"user-{i}" }, ct);
 
@@ -39,7 +40,7 @@ public class ToAsyncEnumerableTests
     public async Task QueryAsync_ToAsyncEnumerable_EmptySource_YieldsNothing()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var results = new List<Actor>();
         await foreach (var item in db.GetManyAsync<Actor>(cancellationToken: ct))
@@ -52,7 +53,7 @@ public class ToAsyncEnumerableTests
     public async Task QueryAsync_ToAsyncEnumerable_WithFilter_ReturnsFiltered()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new Note { Domain = "async.test", NoteId = "n1", AuthorId = "alice", Content = "Hello", Published = DateTimeOffset.UtcNow }, ct);
         await db.SaveAsync(new Note { Domain = "async.test", NoteId = "n2", AuthorId = "bob", Content = "World", Published = DateTimeOffset.UtcNow }, ct);
@@ -69,7 +70,7 @@ public class ToAsyncEnumerableTests
     public async Task QueryAsync_ToAsyncEnumerable_ExactlyOnePage_YieldsAllItems()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 5; i++)
             await db.SaveAsync(new Actor { Domain = "async.test", Username = $"user-{i}" }, ct);
 

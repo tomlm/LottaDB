@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Lotta.Tests;
 
-public class AutoQueryableTests : IClassFixture<LottaDBFixture>
+public class AutoQueryableTests : LottaTestBase
 {
     // === POCO AutoQueryable tests ===
 
@@ -29,7 +29,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_TypedEntity_AllSimplePropertiesIndexed()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<AutoPerson>();
         }, cancellationToken: ct);
@@ -47,7 +47,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_StringArray_SearchableByElement()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<AutoPerson>();
         }, cancellationToken: ct);
@@ -64,7 +64,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_EnabledByDefault_ForPOCO()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<NonAutoPerson>();
         }, cancellationToken: ct);
@@ -81,7 +81,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_StillOnWithExplicitKeyAttribute()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<NonAutoPerson>();
         }, cancellationToken: ct);
@@ -98,7 +98,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_ExplicitlyDisabled()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<NonAutoPerson>(s => s.AutoQueryable(false));
         }, cancellationToken: ct);
@@ -115,7 +115,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_KeyPropertySkipped()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(config =>
+        var db = await CreateDbAsync(config =>
         {
             config.Store<AutoPerson>();
         }, cancellationToken: ct);
@@ -134,7 +134,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_JsonSchema_AutoDiscovery()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Define a schema with AutoQueryable=true (default) and no explicit properties
         var schema = new JsonSchema { Name = "people", KeyMode = KeyMode.Auto };
@@ -155,7 +155,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_EnabledByDefault_ForPOJO()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Schema with all defaults (AutoQueryable=true, no properties)
         var schema = new JsonSchema { Name = "items" };
@@ -174,7 +174,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_POJO_ExplicitProperties_OverrideButAutoStillOn()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Schema with explicit property for "sku" (NotAnalyzed) — AutoQueryable still applies to other fields
         var schema = new JsonSchema
@@ -203,7 +203,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_POJO_ExplicitlyDisabled()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var schema = new JsonSchema
         {
@@ -227,7 +227,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task AutoQueryable_JsonSchema_StringArray()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var schema = new JsonSchema { Name = "articles", KeyMode = KeyMode.Auto };
         await db.SaveAsync(schema, ct);
@@ -248,7 +248,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_SaveAndGet_ById()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var doc = JsonDocument.Parse("""{"id":"abc","name":"Alice","age":30}""");
         await db.SaveAsync(doc, ct);
@@ -263,7 +263,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_AutoSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Frank","city":"Portland"}"""), ct);
         await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Grace","city":"Seattle"}"""), ct);
@@ -279,7 +279,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_KeyConvention_id()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"id":"my-key","data":"test"}"""), ct);
 
@@ -291,7 +291,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_KeyConvention_underscore_id()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"_id":"mongo-style","name":"Test"}"""), ct);
 
@@ -303,7 +303,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_KeyConvention_CaseInsensitive()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(JsonDocument.Parse("""{"ID":"upper-case","value":42}"""), ct);
 
@@ -315,7 +315,7 @@ public class AutoQueryableTests : IClassFixture<LottaDBFixture>
     public async Task Schemaless_NoKey_AutoGeneratesULID()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         var doc = JsonDocument.Parse("""{"name":"NoKeyDoc","value":99}""");
         await db.SaveAsync(doc, ct);

@@ -2,11 +2,11 @@ using System.Runtime.CompilerServices;
 
 namespace Lotta.Tests;
 
-public class CascadingViewTests
+public class CascadingViewTests : LottaTestBase
 {
-    private async Task<LottaDB> CreateDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
+    private async Task<LottaDB> CreateCascadingDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
-        return await LottaDBFixture.CreateDbAsync(opts =>
+        return await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, _) =>
             {
@@ -80,7 +80,7 @@ public class CascadingViewTests
     public async Task CascadingView_NoteCreates_NoteViewAndFeedEntry()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCascadingDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Note { NoteId = "c1", AuthorId = "alice", Content = "Hello world", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -92,7 +92,7 @@ public class CascadingViewTests
     public async Task CascadingView_ActorChange_UpdatesBothViews()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCascadingDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "updater", DisplayName = "Before" }, ct);
         await db.SaveAsync(new Note { NoteId = "c2", AuthorId = "updater", Content = "Test", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -106,7 +106,7 @@ public class CascadingViewTests
     public async Task CascadingView_NoteDeleted_DeletesBothViews()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCascadingDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "deleter", DisplayName = "D" }, ct);
         var note = new Note { NoteId = "c3", AuthorId = "deleter", Content = "Gone", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note, ct);
@@ -124,7 +124,7 @@ public class CascadingViewTests
     public async Task CascadingView_ActorDeleted_DeletesAllViews()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCascadingDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "gone-actor", DisplayName = "Gone" }, ct);
         await db.SaveAsync(new Note { NoteId = "c4", AuthorId = "gone-actor", Content = "A", Published = DateTimeOffset.UtcNow }, ct);
 
@@ -141,7 +141,7 @@ public class CascadingViewTests
     public async Task CascadingView_ResultContainsAllChanges()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await CreateDbAsync(ct);
+        var db = await CreateCascadingDbAsync(ct);
         await db.SaveAsync(new Actor { Username = "result-actor", DisplayName = "R" }, ct);
         var result = await db.SaveAsync(new Note { NoteId = "c5", AuthorId = "result-actor", Content = "Chain", Published = DateTimeOffset.UtcNow }, ct);
 

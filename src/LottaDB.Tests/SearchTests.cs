@@ -4,8 +4,9 @@ using Lucene.Net.Search;
 
 namespace Lotta.Tests;
 
-public class SearchTests
+public class SearchTests : LottaTestBase
 {
+
     // =====================================================================
     // Basic index behavior
     // =====================================================================
@@ -14,7 +15,7 @@ public class SearchTests
     public async Task Search_EmptyIndex_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         Assert.Empty(db.Search<Actor>().ToList());
     }
 
@@ -22,7 +23,7 @@ public class SearchTests
     public async Task Search_ReflectsSave()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
 
         var results = db.Search<Actor>().ToList();
@@ -34,7 +35,7 @@ public class SearchTests
     public async Task Search_ReflectsUpdate()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "u1", DisplayName = "Before" }, ct);
         await db.SaveAsync(new Actor { Username = "u1", DisplayName = "After" }, ct);
 
@@ -46,7 +47,7 @@ public class SearchTests
     public async Task Search_ReflectsDelete()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var actor = new Actor { Username = "gone", DisplayName = "Gone" };
         await db.SaveAsync(actor, ct);
         Assert.Single(db.Search<Actor>().ToList());
@@ -59,7 +60,7 @@ public class SearchTests
     public async Task Search_ReflectsChangeAsync()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "u1", DisplayName = "Before", Counter = 1 }, ct);
         await db.ChangeAsync<Actor>("u1", a => { a.DisplayName = "After"; a.Counter = 99; return a; }, ct);
 
@@ -76,7 +77,7 @@ public class SearchTests
     public async Task SearchString_SingleTerm_HitsAnalyzedContent()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene indexes documents" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure tables store rows" }, ct);
 
@@ -89,7 +90,7 @@ public class SearchTests
     public async Task SearchString_MultipleTerms_OrSemantics()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene search" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure storage" }, ct);
         await db.SaveAsync(new Note { NoteId = "n3", AuthorId = "carol", Content = "Redis caching" }, ct);
@@ -104,7 +105,7 @@ public class SearchTests
     public async Task SearchString_Wildcard_MatchesPrefix()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure" }, ct);
 
@@ -117,7 +118,7 @@ public class SearchTests
     public async Task SearchString_FieldQualified_TargetsNamedField()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "bob wrote something" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "alice wrote something" }, ct);
 
@@ -131,7 +132,7 @@ public class SearchTests
     public async Task SearchString_StemmedFormsMatch_WhenEnglishAnalyzer()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "running shoes are popular" }, ct);
 
         // EnglishAnalyzer stems "running" → "run" on both index and query sides of _content_.
@@ -143,7 +144,7 @@ public class SearchTests
     public async Task SearchString_AllFieldsReachable_WithAutoQueryable()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello", NotQueryable = "xyzzy secret" }, ct);
 
         // With AutoQueryable (default), all string properties are searchable
@@ -154,7 +155,7 @@ public class SearchTests
     public async Task SearchString_NoMatch_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello world" }, ct);
 
         Assert.Empty(db.Search<Note>("banana").ToList());
@@ -168,7 +169,7 @@ public class SearchTests
     public async Task SearchPredicate_Equality_AnalyzedString()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct);
 
@@ -181,7 +182,7 @@ public class SearchTests
     public async Task SearchPredicate_Equality_KeyField()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "B" }, ct);
 
@@ -193,7 +194,7 @@ public class SearchTests
     public async Task SearchPredicate_Contains_AnalyzedString()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "Lucene indexes text" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "Azure hosts tables" }, ct);
 
@@ -206,7 +207,7 @@ public class SearchTests
     public async Task SearchPredicate_Contains_NotAnalyzedString()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new NoteView { Id = "v1", NoteId = "n1", AuthorUsername = "alice-jones", AuthorDisplay = "x", Content = "x" }, ct);
         await db.SaveAsync(new NoteView { Id = "v2", NoteId = "n2", AuthorUsername = "bob-smith", AuthorDisplay = "y", Content = "y" }, ct);
 
@@ -220,7 +221,7 @@ public class SearchTests
     public async Task SearchPredicate_StartsWith()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice Anderson" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob Baker" }, ct);
 
@@ -234,7 +235,7 @@ public class SearchTests
     public async Task SearchPredicate_EndsWith()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice Admin" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob User" }, ct);
 
@@ -247,7 +248,7 @@ public class SearchTests
     public async Task SearchPredicate_And()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", Counter = 30, DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", Counter = 30, DisplayName = "B" }, ct);
         await db.SaveAsync(new Actor { Username = "carol", Counter = 5, DisplayName = "C" }, ct);
@@ -261,7 +262,7 @@ public class SearchTests
     public async Task SearchPredicate_Or()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1, DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", Counter = 50, DisplayName = "B" }, ct);
         await db.SaveAsync(new Actor { Username = "carol", Counter = 25, DisplayName = "C" }, ct);
@@ -276,7 +277,7 @@ public class SearchTests
     public async Task SearchPredicate_NumericComparisons()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", Counter = 5, DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", Counter = 30, DisplayName = "B" }, ct);
         await db.SaveAsync(new Actor { Username = "carol", Counter = 30, DisplayName = "C" }, ct);
@@ -290,7 +291,7 @@ public class SearchTests
     public async Task SearchPredicate_DateTimeRange()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var d1 = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var d2 = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc);
         var d3 = new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -307,7 +308,7 @@ public class SearchTests
     public async Task SearchPredicate_DateTimeOffsetEquality()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         var t = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
         await db.SaveAsync(new Actor { Username = "a", DisplayName = "a", LastSeenAt = t }, ct);
         await db.SaveAsync(new Actor { Username = "b", DisplayName = "b", LastSeenAt = t.AddHours(1) }, ct);
@@ -321,7 +322,7 @@ public class SearchTests
     public async Task SearchPredicate_EquivalentToWhereLambda()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct);
 
@@ -339,7 +340,7 @@ public class SearchTests
     public async Task SearchAnyField_MatchesAcrossFields()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "lorem ipsum" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "alice wrote this" }, ct);
         await db.SaveAsync(new Note { NoteId = "n3", AuthorId = "carol", Content = "unrelated text" }, ct);
@@ -356,7 +357,7 @@ public class SearchTests
     public async Task SearchAnyField_NoMatch_ReturnsEmpty()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello" }, ct);
 
         Assert.Empty(db.Search<Note>().Where(n => n.AnyField() == "nonexistent").ToList());
@@ -370,7 +371,7 @@ public class SearchTests
     public async Task SearchWhereQuery_AppliesRawTermQuery()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "B" }, ct);
 
@@ -384,7 +385,7 @@ public class SearchTests
     public async Task SearchWhereQuery_AppliesCanonicalKeyQuery()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", DisplayName = "B" }, ct);
 
@@ -398,7 +399,7 @@ public class SearchTests
     public async Task SearchWhereQuery_ComposesWithLinq()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", Counter = 10, DisplayName = "A" }, ct);
         await db.SaveAsync(new Actor { Username = "alice2", Counter = 99, DisplayName = "A2" }, ct);
         await db.SaveAsync(new Actor { Username = "bob", Counter = 10, DisplayName = "B" }, ct);
@@ -417,7 +418,7 @@ public class SearchTests
     public async Task SearchHybrid_StringThenLinq_NarrowsResults()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "lucene indexes" }, ct);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "lucene searches" }, ct);
         await db.SaveAsync(new Note { NoteId = "n3", AuthorId = "alice", Content = "azure tables" }, ct);
@@ -436,7 +437,7 @@ public class SearchTests
     public async Task Search_OrderByNumeric_Ascending()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "c", Counter = 30, DisplayName = "c" }, ct);
         await db.SaveAsync(new Actor { Username = "a", Counter = 10, DisplayName = "a" }, ct);
         await db.SaveAsync(new Actor { Username = "b", Counter = 20, DisplayName = "b" }, ct);
@@ -449,7 +450,7 @@ public class SearchTests
     public async Task Search_OrderByNumeric_Descending()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "c", Counter = 30, DisplayName = "c" }, ct);
         await db.SaveAsync(new Actor { Username = "a", Counter = 10, DisplayName = "a" }, ct);
         await db.SaveAsync(new Actor { Username = "b", Counter = 20, DisplayName = "b" }, ct);
@@ -462,7 +463,7 @@ public class SearchTests
     public async Task Search_Skip_And_Take_Paginates()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 10; i++)
             await db.SaveAsync(new Actor { Username = $"u{i:D2}", Counter = i, DisplayName = $"u{i:D2}" }, ct);
 
@@ -475,7 +476,7 @@ public class SearchTests
     public async Task Search_Take_Limits()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
         for (int i = 0; i < 10; i++)
             await db.SaveAsync(new Actor { Username = $"u{i:D2}", DisplayName = $"u{i:D2}" }, ct);
 
@@ -509,7 +510,7 @@ public class SearchTests
     public async Task TodoApp_FreeTextSearch_MatchesTitleToken()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
+        var db = await CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
         await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" }, ct);
         await db.SaveAsync(new TodoLike { Title = "Write report", Notes = "quarterly numbers" }, ct);
 
@@ -526,7 +527,7 @@ public class SearchTests
     public async Task TodoApp_FreeTextSearch_MatchesNotesToken()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
+        var db = await CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
         await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk and bread" }, ct);
         await db.SaveAsync(new TodoLike { Title = "Write report", Notes = "quarterly numbers" }, ct);
 
@@ -544,7 +545,7 @@ public class SearchTests
     public async Task TodoApp_FreeTextSearch_WithBoolFilter()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
+        var db = await CreateDbAsync(opts => opts.Store<TodoLike>(), cancellationToken: ct);
         await db.SaveAsync(new TodoLike { Title = "Buy groceries", Notes = "milk", IsDone = false }, ct);
         await db.SaveAsync(new TodoLike { Title = "Buy flowers", Notes = "for mom", IsDone = true }, ct);
 

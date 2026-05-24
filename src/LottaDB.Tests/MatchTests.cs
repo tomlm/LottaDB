@@ -5,13 +5,13 @@ namespace Lotta.Tests;
 /// <summary>
 /// Tests for JsonSchema.Match discriminator — auto-classification of documents on save.
 /// </summary>
-public class MatchTests : IClassFixture<LottaDBFixture>
+public class MatchTests : LottaTestBase
 {
     [Fact]
     public async Task Match_FirstMatchWins()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Both schemas could match a "person" doc, but Person is registered first
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
@@ -28,7 +28,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_NoMatchFallsToDefault()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'person'" }, ct);
 
@@ -44,7 +44,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_NestedJsonPath()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "USAddress", Match = "$.address.country == 'US'" }, ct);
 
@@ -61,7 +61,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_CaseInsensitiveComparison()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Person", Match = "$.type == 'Person'" }, ct);
 
@@ -75,7 +75,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_NumericValue()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "V2Doc", Match = "$.version == '2'" }, ct);
 
@@ -88,7 +88,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_BooleanValue()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "PublishedDoc", Match = "$.published == 'true'" }, ct);
 
@@ -105,7 +105,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_PersistsAfterRoundTrip()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Order", Match = "$.type == 'order'" }, ct);
 
@@ -124,7 +124,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_PersistsInLuceneSearch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Order", Match = "$.type == 'order'" }, ct);
 
@@ -142,7 +142,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_WithExplicitProperties()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         // Schema with both Match and explicit Properties
         await db.SaveAsync(new JsonSchema
@@ -176,7 +176,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_NotEqual_DoesNotMatchTarget()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "NonAdmin", Match = "$.role != 'admin'" }, ct);
 
@@ -193,7 +193,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_MissingProperty_DoesNotMatch()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Tagged", Match = "$.type == 'tagged'" }, ct);
 
@@ -207,7 +207,7 @@ public class MatchTests : IClassFixture<LottaDBFixture>
     public async Task Match_MissingProperty_NotEqual_Matches()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: ct);
+        var db = await CreateDbAsync(cancellationToken: ct);
 
         await db.SaveAsync(new JsonSchema { Name = "Untyped", Match = "$.type != 'special'" }, ct);
 

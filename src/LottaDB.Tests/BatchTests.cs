@@ -3,12 +3,12 @@ namespace Lotta.Tests;
 /// <summary>
 /// Tests for bulk SaveAsync(IEnumerable) and DeleteAsync(IEnumerable) operations.
 /// </summary>
-public class BatchTests : IClassFixture<LottaDBFixture>
+public class BatchTests : LottaTestBase
 {
     [Fact]
     public async Task SaveManyAsync_AllEntitiesPersist()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         var actors = Enumerable.Range(1, 5).Select(i => new Actor
         {
             Username = $"bulk-{i}",
@@ -32,7 +32,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_LuceneSearchReflectsAll()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var results = db.Search<Actor>().ToList();
         Assert.Empty(results);
@@ -53,7 +53,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_DuplicateKey_AutoFlushes()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         // Save same key twice — first should be flushed, second overwrites
         var entities = new[]
         {
@@ -72,7 +72,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_Over100_AutoFlushes()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         var actors = Enumerable.Range(1, 150).Select(i => new Actor
         {
             Username = $"batch100-{i}",
@@ -94,7 +94,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_OnHandlers_RunInline()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, cancellationToken) =>
             {
@@ -133,7 +133,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     public async Task SaveManyAsync_OnHandlers_ShareLuceneSession()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Note>(async (note, kind, db, cancellationToken) =>
             {
@@ -165,7 +165,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task SaveManyAsync_Empty_ReturnsEmptyResult()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         var result = await db.SaveManyAsync(Array.Empty<Actor>(), TestContext.Current.CancellationToken);
         Assert.Empty(result.Changes);
         Assert.Empty(result.Errors);
@@ -174,7 +174,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_RemovesAll()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // Seed data
         var actors = Enumerable.Range(1, 5).Select(i => new Actor { Username = $"del-bulk-{i}", DisplayName = $"Actor {i}" }).ToList();
@@ -193,7 +193,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_RemovesFromLucene()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var actors = Enumerable.Range(1, 3).Select(i => new Actor { Username = $"del-search-{i}", DisplayName = $"Actor {i}" }).ToList();
         await db.SaveManyAsync(actors, TestContext.Current.CancellationToken);
@@ -210,7 +210,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     {
         var ct = TestContext.Current.CancellationToken;
         int deleteCount = 0;
-        using var db = await LottaDBFixture.CreateDbAsync(opts =>
+        var db = await CreateDbAsync(opts =>
         {
             opts.On<Actor>(async (actor, kind, db, cancellationToken) =>
             {
@@ -230,7 +230,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_Empty_ReturnsEmptyResult()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         var result = await db.DeleteManyAsync(Array.Empty<string>(), TestContext.Current.CancellationToken);
         Assert.Empty(result.Changes);
         Assert.Empty(result.Errors);
@@ -239,7 +239,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_NonExistent_SkipsSilently()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         var result = await db.DeleteManyAsync(new[] { "no-exist-1", "no-exist-2" }, TestContext.Current.CancellationToken);
         Assert.Empty(result.Changes);
         Assert.Empty(result.Errors);
@@ -248,7 +248,7 @@ public class BatchTests : IClassFixture<LottaDBFixture>
     [Fact]
     public async Task DeleteManyAsync_NoPredicate_DeletesAllOfType()
     {
-        using var db = await LottaDBFixture.CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var db = await CreateDbAsync(cancellationToken: TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "A" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "n2", AuthorId = "bob", Content = "B" }, TestContext.Current.CancellationToken);
         await db.SaveAsync(new Note { NoteId = "n3", AuthorId = "carol", Content = "C" }, TestContext.Current.CancellationToken);
