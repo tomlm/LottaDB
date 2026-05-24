@@ -16,9 +16,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <!-- Using ProjectReferences for local development; switch to PackageReferences for release -->
-    <!-- <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.1" /> -->
-    <!-- <PackageReference Include="Iciclecreek.Azure.Storage.Memory" Version="2.0.0" /> -->
-    <!-- <PackageReference Include="Iciclecreek.Azure.Storage.SQLite" Version="2.0.0" /> -->
+    <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.3" /> 
+    <PackageReference Include="Iciclecreek.Azure.Storage.Memory" Version="2.0.3" /> 
+    <PackageReference Include="Iciclecreek.Azure.Storage.SQLite" Version="2.0.3" /> 
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
@@ -33,9 +33,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
-    <ProjectReference Include="..\..\..\Azure.Storage\src\Libraries\Iciclecreek.Azure.Storage.Memory\Iciclecreek.Azure.Storage.Memory.csproj" />
-    <ProjectReference Include="..\..\..\Azure.Storage\src\Libraries\Iciclecreek.Azure.Storage.FileSystem\Iciclecreek.Azure.Storage.FileSystem.csproj" />
-    <ProjectReference Include="..\..\..\Azure.Storage\src\Libraries\Iciclecreek.Azure.Storage.SQLite\Iciclecreek.Azure.Storage.SQLite.csproj" />
   </ItemGroup>
 
 

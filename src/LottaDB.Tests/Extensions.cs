@@ -15,7 +15,8 @@ namespace Lotta.Tests
 
         public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            UseMemoryClient(catalog);
+            //UseMemoryClient(catalog);
+            UseSQLite(catalog);
             // UseFileSystemClient(catalog);
             // UseAzuriteClient(catalog);
             return catalog;

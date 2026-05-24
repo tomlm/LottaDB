@@ -5,8 +5,9 @@
 
 # LottaDB
 
-**LottaDB** is a .NET library that makes it easy to store any **POCO** in **Azure Table Storage** with full **Lucene** search, all with the goodness of **LINQ**.
+**LottaDB** is a .NET library that makes it easy to store any **POCO** in **Azure Table Storage** with full **Lucene** search, all with the goodness of **LINQ**. No schema required -- just define a class and go.
 
+- **A lotta power, a little work.** Store any C# class with zero attributes. All properties are automatically queryable and searchable.
 - **A lotta bang for a little buck.** Table Storage is the cheapest durable storage in Azure. LottaDB adds Lucene so you get rich queries without the rich pricing.
 - **A lotta LINQ.** `GetManyAsync<T>()` and `Search<T>()`, .Where(), .OrderBy() etc.
 - **A lotta fidelity.** Full JSON roundtrip. Lists, dictionaries, nested objects -- everything survives.
@@ -14,6 +15,7 @@
 - **A lotta tenants.** One catalog per tenant with multiple databases. Natural isolation, simple cleanup.
 - **A lotta nothing to operate.** Table Storage is serverless. Lucene runs in-process.
 - **A lotta schema safety.** Schema changes are detected automatically -- Lucene index is rebuilt on startup.
+- **A lotta concurrency.** `ChangeAsync<T>()` provides atomic read-modify-write with optimistic concurrency and automatic retry.
 
 ### Sweet spot
 
@@ -25,46 +27,94 @@ LottaDB is ideal for **per-user or per-tenant workloads** -- think user profiles
 dotnet add package LottaDB
 ```
 
-## Quick Example
+## Quick Start -- Just Store a lotta objects
+
+Just define a class. No attributes, no base classes, no interfaces:
 
 ```csharp
-// Define your model
 public class Actor
 {
-    [Key]
     public string Username { get; set; } = "";
-
-    [Queryable]
     public string DisplayName { get; set; } = "";
-
     public string AvatarUrl { get; set; } = "";
 }
+```
 
-// Create a catalog and get a database
+Create a catalog, register the type, and start storing:
+
+```csharp
 var catalog = new LottaCatalog("myapp", "<your Azure Storage connection string>");
-var db = await catalog.GetDatabaseAsync("default", config =>
-{
-    config.Store<Actor>();
-});
+var db = await catalog.GetDatabaseAsync("default");
 
-// Save
-await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" });
+// Save -- a unique key (ULID) is auto-generated
+var actor = new Actor { Username = "alice", DisplayName = "Alice" };
+await db.SaveAsync(actor);
+var key = actor.GetKey();  // e.g. "01JKX3Q7..."
 
-// Point read
-var actor = await db.GetAsync<Actor>("alice");
+// Point read by key
+var loaded = await db.GetAsync<Actor>(key);
 
-// Search (Lucene -- full-text search on [Queryable] properties)
+// Search -- all properties are automatically queryable
 var found = db.Search<Actor>()
     .Where(a => a.DisplayName == "Alice")
     .ToList();
 ```
+
+That's it. No key attribute needed -- a ULID is assigned automatically. Every property on your class is automatically:
+- **Stored** as full-fidelity JSON in table storage
+- **Indexed** in Lucene for fast search
+- **Queryable** via LINQ expressions and full-text search
+
+## Fine-Tuning with Attributes
+
+When you need more control, attributes let you specify keys, indexing behavior, and exclusions:
+
+```csharp
+public class Note
+{
+    [Key]                                    // explicit key property
+    public string NoteId { get; set; } = "";
+
+    [Queryable(QueryableMode.NotAnalyzed)]   // exact match only
+    public string AuthorId { get; set; } = "";
+
+    [Queryable]                              // full-text search
+    public string Content { get; set; } = "";
+
+    [NotQueryable]                           // exclude from indexing (e.g., large payloads)
+    public string RawHtml { get; set; } = "";
+
+    public DateTimeOffset Published { get; set; }
+    public List<string> Tags { get; set; } = new();
+}
+```
+
+| Attribute | Effect |
+|-----------|--------|
+| `[Key]` | Designates the unique key property. Without it, a ULID is auto-generated. |
+| `[Queryable]` | Controls how a property is indexed. Strings get full-text search by default. |
+| `[NotQueryable]` | Excludes a property from automatic indexing (useful for large strings). |
+| `[DefaultSearch]` | (class-level) Sets the default property for free-text queries. |
+
+## Concurrency
+
+`ChangeAsync<T>()` provides safe read-modify-write with automatic retry on conflict:
+
+```csharp
+await db.ChangeAsync<Actor>("alice", actor =>
+{
+    actor.DisplayName = "Alice Updated";
+});
+```
+
+Multiple concurrent writers on the same key are handled correctly -- ETag-based optimistic concurrency ensures no updates are lost.
 
 ## Documentation
 
 Full documentation is available in the [wiki](https://github.com/tomlm/LottaDB/wiki):
 
 - [Architecture](https://github.com/tomlm/LottaDB/wiki/Architecture) -- catalogs, databases, multi-tenancy
-- [Storing Typed Objects](https://github.com/tomlm/LottaDB/wiki/Storing-Typed-Objects) -- C# classes, attributes, fluent config, polymorphism
+- [Storing Typed Objects](https://github.com/tomlm/LottaDB/wiki/Storing-Typed-Objects) -- zero-attribute POCOs, attributes, fluent config, polymorphism
 - [Storing Dynamic Objects](https://github.com/tomlm/LottaDB/wiki/Storing-Dynamic-Objects) -- JsonDocumentType, QueryableProperty, JsonPath
 - [CRUD Operations](https://github.com/tomlm/LottaDB/wiki/CRUD-Operations) -- Save, Get, Delete, Change, bulk ops
 - [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ) -- full-text search, LINQ queries, joins
