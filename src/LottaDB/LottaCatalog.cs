@@ -40,13 +40,13 @@ public class LottaCatalog : IDisposable
     /// Factory for creating a <see cref="TableServiceClient"/>.
     /// Set via the constructor's <c>configure</c> callback.
     /// </summary>
-    internal Func<TableServiceClient> TableServiceClientFactory { get; set; }
+    public Func<TableServiceClient> TableServiceClientFactory { get; set; }
 
     /// <summary>
     /// Factory for creating a <see cref="BlobServiceClient"/>.
     /// Set via the constructor's <c>configure</c> callback.
     /// </summary>
-    internal Func<BlobServiceClient> BlobServiceClientFactory { get; set; }
+    public Func<BlobServiceClient> BlobServiceClientFactory { get; set; }
 
     /// <summary>
     /// Factory for creating the Lucene Directory. Receives a composite path
@@ -56,7 +56,7 @@ public class LottaCatalog : IDisposable
     /// When null (default), AzureDirectory is used to persist the index to blob storage
     /// with an FSDirectory cache in temp.
     /// </summary>
-    internal Func<string, LuceneDirectory>? LuceneDirectoryFactory { get; set; }
+    public Func<string, LuceneDirectory>? LuceneDirectoryFactory { get; set; }
 
 
     /// <summary>

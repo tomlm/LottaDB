@@ -1,26 +1,8 @@
-using Azure.Data.Tables;
-using Iciclecreek.Azure.Storage.FileSystem.Blobs;
-using Iciclecreek.Azure.Storage.FileSystem.Tables;
-using Iciclecreek.Azure.Storage.Memory.Blobs;
-using Iciclecreek.Azure.Storage.Memory.Tables;
-using Iciclecreek.Azure.Storage.SQLite.Blobs;
-using Iciclecreek.Azure.Storage.SQLite.Tables;
-using Lucene.Net.Store;
-
 namespace Lotta.Tests
 {
     public static class Extensions
     {
         private static readonly string _runRoot;
-
-        public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
-        {
-            //UseMemoryClient(catalog);
-            UseSQLite(catalog);
-            // UseFileSystemClient(catalog);
-            // UseAzuriteClient(catalog);
-            return catalog;
-        }
 
         static Extensions()
         {
@@ -40,51 +22,22 @@ namespace Lotta.Tests
             }
         }
 
-        public static void UseAzuriteClient(LottaCatalog catalog)
+        public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
         {
-            var tableClient = new TableServiceClient("UseDevelopmentStorage=true");
-            var blobClient = new MemoryBlobServiceClient();
-            catalog.TableServiceClientFactory = () => tableClient;
-            catalog.BlobServiceClientFactory = () => blobClient;
-            // Azurite: AzureDirectory persists to blob storage with default FSDirectory cache
+            catalog.UseMemory();
+            return catalog;
         }
 
-        public static void UseMemoryClient(LottaCatalog catalog)
+        /// <summary>Configure provider by name (for parameterized tests).</summary>
+        public static void ConfigureProvider(LottaCatalog catalog, string provider)
         {
-            var tableClient = new MemoryTableServiceClient();
-            var blobClient = new MemoryBlobServiceClient();
-            catalog.TableServiceClientFactory = () => tableClient;
-            catalog.BlobServiceClientFactory = () => blobClient;
-            // Memory: FSDirectory for Lucene to avoid RAMDirectory concurrency issues
-            catalog.LuceneDirectoryFactory = path => new RAMDirectory();
-        }
-
-        public static void UseFileSystemClient(LottaCatalog catalog)
-        {
-            catalog.TableServiceClientFactory = () => new FileTableServiceClient(_runRoot);
-            catalog.BlobServiceClientFactory = () => new FileBlobServiceClient(_runRoot);
-            // FileSystem: FSDirectory alongside the data
-            catalog.LuceneDirectoryFactory = path =>
+            switch (provider)
             {
-                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
-                System.IO.Directory.CreateDirectory(dir);
-                return FSDirectory.Open(dir);
-            };
+                case "Memory": catalog.UseMemory(); break;
+                case "FileSystem": catalog.UseFileSystem(_runRoot); break;
+                case "SQLite": catalog.UseSQLite(_runRoot); break;
+                case "Azurite": catalog.UseAzure("UseDevelopmentStorage=true"); break;
+            }
         }
-
-        public static void UseSQLite(LottaCatalog catalog)
-        {
-            var dbPath = Path.Combine(_runRoot, $"{catalog.Name}.db");
-            catalog.TableServiceClientFactory = () => new SqliteTableServiceClient(dbPath);
-            catalog.BlobServiceClientFactory = () => new SqliteBlobServiceClient(dbPath);
-            // SQLite: FSDirectory alongside the .db file
-            catalog.LuceneDirectoryFactory = path =>
-            {
-                var dir = Path.Combine(_runRoot, path.Replace('/', Path.DirectorySeparatorChar));
-                System.IO.Directory.CreateDirectory(dir);
-                return FSDirectory.Open(dir);
-            };
-        }
-
     }
 }

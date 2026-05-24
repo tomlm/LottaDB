@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>Lotta</RootNamespace>
+    <Description>Filesystem storage provider for LottaDB. Adds UseFileSystem() extension method for local development with inspectable files on disk.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>lottadb;azure;table-storage;lucene;filesystem;local</PackageTags>
+    <Version>4.0.0</Version>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.3" />
+  </ItemGroup>
+
+</Project>

@@ -322,15 +322,7 @@ public class ChangeAsyncTests : LottaTestBase
     }
 
     private static void ConfigureProvider(LottaCatalog catalog, string provider)
-    {
-        switch (provider)
-        {
-            case "Memory": Extensions.UseMemoryClient(catalog); break;
-            case "FileSystem": Extensions.UseFileSystemClient(catalog); break;
-            case "SQLite": Extensions.UseSQLite(catalog); break;
-            case "Azurite": Extensions.UseAzuriteClient(catalog); break;
-        }
-    }
+        => Extensions.ConfigureProvider(catalog, provider);
 
     /// <summary>
     /// After a retry, Lucene must reflect the final committed value — not the discarded

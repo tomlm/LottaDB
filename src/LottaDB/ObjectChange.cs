@@ -14,7 +14,7 @@ public record ObjectChange
     /// <summary>Whether the object was saved or deleted.</summary>
     public required ChangeKind Kind { get; init; }
 
-    /// <summary>The full typed object, or null if deleted.</summary>
+    /// <summary>The full object, or null if deleted.</summary>
     public object? Object { get; init; }
 }
 
@@ -27,7 +27,7 @@ public record ObjectChange<T>
     /// <summary>The entity key of the changed object.</summary>
     public required string Key { get; init; }
 
-    /// <summary>The full typed object, or default if deleted.</summary>
+    /// <summary>The full object, or default if deleted.</summary>
     public T? Object { get; init; }
 
     /// <summary>Whether the object was saved or deleted.</summary>
