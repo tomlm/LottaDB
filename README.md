@@ -109,6 +109,25 @@ await db.ChangeAsync<Actor>("alice", actor =>
 
 Multiple concurrent writers on the same key are handled correctly -- ETag-based optimistic concurrency ensures no updates are lost.
 
+## Storage Providers
+
+LottaDB works with Azure Table Storage out of the box. For local development and testing, install a provider package:
+
+| Package | Install | Usage |
+|---------|---------|-------|
+| **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` |
+| **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` |
+| **LottaDB.FileSystem** | `dotnet add package LottaDB.FileSystem` | `catalog.UseFileSystem(path)` |
+| **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` |
+
+```csharp
+// Local development with SQLite
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data"));
+
+// Unit tests with in-memory storage
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
+```
+
 ## Documentation
 
 Full documentation is available in the [wiki](https://github.com/tomlm/LottaDB/wiki):

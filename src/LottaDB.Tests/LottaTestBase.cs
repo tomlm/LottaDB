@@ -3,18 +3,30 @@ using System.Runtime.CompilerServices;
 namespace Lotta.Tests;
 
 /// <summary>
+/// Storage provider constants for parameterized tests.
+/// </summary>
+public static class Provider
+{
+    public const string Memory = "Memory";
+    public const string FileSystem = "FileSystem";
+    public const string SQLite = "SQLite";
+    public const string Azurite = "Azurite";
+}
+
+/// <summary>
 /// Base class for all LottaDB tests. Creates a catalog per test instance
 /// and disposes it (including all databases) when the test completes.
+/// Derive per-provider subclasses to run all tests against every storage provider.
 /// </summary>
 public abstract class LottaTestBase : IDisposable
 {
     private readonly LottaCatalog _catalog;
 
-    protected LottaTestBase()
+    protected LottaTestBase(string provider = Provider.Memory)
     {
         var sanitized = string.Join("", GetType().Name.Where(char.IsLetterOrDigit).Take(60));
         _catalog = new LottaCatalog(sanitized);
-        _catalog.ConfigureTestStorage();
+        _catalog.ConfigureTestStorage(provider);
     }
 
     /// <summary>The catalog for this test instance.</summary>
@@ -90,5 +102,4 @@ public abstract class LottaTestBase : IDisposable
     {
         _catalog.Dispose();
     }
-
 }

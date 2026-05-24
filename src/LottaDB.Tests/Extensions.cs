@@ -22,22 +22,23 @@ namespace Lotta.Tests
             }
         }
 
-        public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog)
-        {
-            catalog.UseMemory();
-            return catalog;
-        }
-
-        /// <summary>Configure provider by name (for parameterized tests).</summary>
-        public static void ConfigureProvider(LottaCatalog catalog, string provider)
+        public static LottaCatalog ConfigureTestStorage(this LottaCatalog catalog, string provider = "Memory")
         {
             switch (provider)
             {
-                case "Memory": catalog.UseMemory(); break;
-                case "FileSystem": catalog.UseFileSystem(_runRoot); break;
-                case "SQLite": catalog.UseSQLite(_runRoot); break;
-                case "Azurite": catalog.UseAzure("UseDevelopmentStorage=true"); break;
+                case "FileSystem": catalog.UseFileSystem(_runRoot); 
+                    break;
+                case "SQLite": catalog.UseSQLite(_runRoot); 
+                    break;
+                case "Azurite": catalog.UseAzure("UseDevelopmentStorage=true"); 
+                    break;
+                case "Memory":
+                default:
+                    catalog.UseMemory(); 
+                    break;
             }
+            return catalog;
         }
+
     }
 }

@@ -8,8 +8,12 @@
   <Folder Name="/Samples/">
     <Project Path="Samples/TodoApp/TodoApp.csproj" />
   </Folder>
+  <Project Path="LottaDB.Azure.Tests/LottaDB.Azure.Tests.csproj" />
+  <Project Path="LottaDB.FileSystem.Tests/LottaDB.FileSystem.Tests.csproj" />
   <Project Path="LottaDB.FileSystem/LottaDB.FileSystem.csproj" />
+  <Project Path="LottaDB.Memory.Tests/LottaDB.Memory.Tests.csproj" />
   <Project Path="LottaDB.Memory/LottaDB.Memory.csproj" />
+  <Project Path="LottaDB.SQLite.Tests/LottaDB.SQLite.Tests.csproj" />
   <Project Path="LottaDB.SQLite/LottaDB.SQLite.csproj" />
   <Project Path="LottaDB.Tests/LottaDB.Tests.csproj" Id="8068fd34-450f-41f2-9c0e-f39330c38af3" />
   <Project Path="LottaDB.Tiki.Tests/LottaDB.Tiki.Tests.csproj" Id="c3d4e5f6-a7b8-49c0-d1e2-f3a4b5c6d7e8" />

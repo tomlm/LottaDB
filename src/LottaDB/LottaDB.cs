@@ -1724,6 +1724,9 @@ public class LottaDB : IDisposable
             _disposeCts.Cancel();
             if (disposing)
             {
+                // Wait for the background refresh task to exit
+                try { _refreshTask?.GetAwaiter().GetResult(); } catch { }
+
                 lock (_lock)
                 {
                     _indexWriter?.Commit();
