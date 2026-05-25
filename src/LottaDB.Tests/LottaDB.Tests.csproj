@@ -10,7 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta020" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
     <PackageReference Include="ElBruno.LocalEmbeddings" Version="1.4.6" />
     <PackageReference Include="xunit.v3.extensibility.core" Version="3.2.2" />

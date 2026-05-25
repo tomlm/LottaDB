@@ -30,8 +30,10 @@ internal static class EntityMapper
         foreach (var tag in meta.Tags)
         {
             var value = tag.GetValue(obj);
-            if (value != null)
-                entity[tag.Name] = TableStorageAdapter.ConvertToTableValue(value);
+            if (value == null) continue;
+            if (value is DateTime dt && dt == DateTime.MinValue) continue;
+            if (value is DateTimeOffset dto && dto == DateTimeOffset.MinValue) continue;
+            entity[tag.Name] = TableStorageAdapter.ConvertToTableValue(value);
         }
         return entity;
     }

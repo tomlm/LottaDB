@@ -4,7 +4,9 @@ namespace Lotta.Azure.Tests;
 
 internal static class Tests
 {
-    internal static void Configure(LottaCatalog catalog) => catalog.UseAzure("UseDevelopmentStorage=true");
+    private const string ConnectionString = "UseDevelopmentStorage=true";
+
+    internal static void Configure(LottaCatalog catalog) => catalog.UseAzure(ConnectionString);
 }
 
 public class Azure_AdHocJoinTests : AdHocJoinTestBase { public Azure_AdHocJoinTests() : base(Tests.Configure) { } }
