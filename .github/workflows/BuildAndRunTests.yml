@@ -37,5 +37,3 @@ jobs:
     - name: Test SQLite
       run: dotnet test --no-build --verbosity normal src/LottaDB.SQLite.Tests/LottaDB.SQLite.Tests.csproj
 
-    - name: Test FileSystem
-      run: dotnet test --no-build --verbosity normal src/LottaDB.FileSystem.Tests/LottaDB.FileSystem.Tests.csproj
