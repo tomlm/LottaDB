@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class GetManyAsyncTestBase : LottaTestBase
 {
-    protected GetManyAsyncTestBase(string provider) : base(provider) { }
+    protected GetManyAsyncTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task GetManyAsync_NoKeys_ReturnsAllEntities()

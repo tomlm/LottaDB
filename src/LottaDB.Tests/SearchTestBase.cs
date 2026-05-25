@@ -6,7 +6,7 @@ namespace Lotta.Tests;
 
 public abstract class SearchTestBase : LottaTestBase
 {
-    protected SearchTestBase(string provider) : base(provider) { }
+    protected SearchTestBase(Action<LottaCatalog> config) : base(config) { }
 
     // =====================================================================
     // Basic index behavior

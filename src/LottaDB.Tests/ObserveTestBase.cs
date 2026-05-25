@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class ObserveTestBase : LottaTestBase
 {
-    protected ObserveTestBase(string provider) : base(provider) { }
+    protected ObserveTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task On_ReceivesSavedNotification()

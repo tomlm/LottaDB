@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class LargeObjectTestBase : LottaTestBase
 {
-    protected LargeObjectTestBase(string provider) : base(provider) { }
+    protected LargeObjectTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task LargeObject_SplitsAcrossProperties_RoundTrips()
     {

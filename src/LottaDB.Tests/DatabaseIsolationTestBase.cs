@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class DatabaseIsolationTestBase : LottaTestBase
 {
-    protected DatabaseIsolationTestBase(string provider) : base(provider) { }
+    protected DatabaseIsolationTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task DatabasesInSameCatalog_AreIsolated()
     {

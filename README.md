@@ -113,12 +113,11 @@ Multiple concurrent writers on the same key are handled correctly -- ETag-based 
 
 LottaDB works with Azure Table Storage out of the box. For local development and testing, install a provider package:
 
-| Package | Install | Usage |
-|---------|---------|-------|
-| **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` |
-| **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` |
-| **LottaDB.FileSystem** | `dotnet add package LottaDB.FileSystem` | `catalog.UseFileSystem(path)` |
-| **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` |
+| Package | Install | Usage | Description |
+|---------|---------|-------| |---------|
+| **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` | The default provider. Uses Azure Table Storage API for durability. |
+| **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` | In-memory provider for unit testing. No durability, but lightning fast and supports all features. |
+| **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` | Local storage with SQLite. Durable and supports all features, but no serverless scaling. |
 
 ```csharp
 // Local development with SQLite

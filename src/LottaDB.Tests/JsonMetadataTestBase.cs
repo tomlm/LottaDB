@@ -5,7 +5,7 @@ namespace Lotta.Tests;
 
 public abstract class JsonMetadataTestBase : LottaTestBase
 {
-    protected JsonMetadataTestBase(string provider) : base(provider) { }
+    protected JsonMetadataTestBase(Action<LottaCatalog> config) : base(config) { }
     private static readonly List<QueryableProperty> PersonProperties = new()
     {
         new() { Name = "Name", Type = "string" },

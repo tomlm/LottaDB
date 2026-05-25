@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class CascadingViewTestBase : LottaTestBase
 {
-    protected CascadingViewTestBase(string provider) : base(provider) { }
+    protected CascadingViewTestBase(Action<LottaCatalog> config) : base(config) { }
     private async Task<LottaDB> CreateCascadingDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
         return await CreateDbAsync(opts =>

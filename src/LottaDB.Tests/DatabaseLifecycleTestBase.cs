@@ -6,7 +6,7 @@ namespace Lotta.Tests;
 
 public abstract class DatabaseLifecycleTestBase : LottaTestBase
 {
-    protected DatabaseLifecycleTestBase(string provider) : base(provider) { }
+    protected DatabaseLifecycleTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task DeleteDatabase_OnlyClearsOwnPartition()
     {

@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class CycleDetectionTestBase : LottaTestBase
 {
-    protected CycleDetectionTestBase(string provider) : base(provider) { }
+    protected CycleDetectionTestBase(Action<LottaCatalog> config) : base(config) { }
     private async Task<LottaDB> CreateCycleDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
         return await CreateDbAsync(opts =>

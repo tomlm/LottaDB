@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class BlobOnUploadTestBase : LottaTestBase
 {
-    protected BlobOnUploadTestBase(string provider) : base(provider) { }
+    protected BlobOnUploadTestBase(Action<LottaCatalog> config) : base(config) { }
     // === OnUpload handler integration tests ===
 
     [Fact]

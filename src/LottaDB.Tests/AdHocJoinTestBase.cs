@@ -2,7 +2,8 @@ namespace Lotta.Tests;
 
 public abstract class AdHocJoinTestBase : LottaTestBase
 {
-    protected AdHocJoinTestBase(string provider) : base(provider) { }
+    protected AdHocJoinTestBase(Action<LottaCatalog> config) : base(config) { }
+
     [Fact]
     public async Task AdHocJoin_MaterializeThenJoinInMemory()
     {

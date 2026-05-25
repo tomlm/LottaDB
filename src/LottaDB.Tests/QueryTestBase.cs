@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class QueryTestBase : LottaTestBase
 {
-    protected QueryTestBase(string provider) : base(provider) { }
+    protected QueryTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task QueryAsync_ReturnsAllOfType()

@@ -7,7 +7,7 @@ namespace Lotta.Tests;
 /// </summary>
 public abstract class JsonRoundtripTestBase : LottaTestBase
 {
-    protected JsonRoundtripTestBase(string provider) : base(provider) { }
+    protected JsonRoundtripTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task Query_ComplexObject_PreservesNestedCollections()

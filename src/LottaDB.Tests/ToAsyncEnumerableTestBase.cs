@@ -3,7 +3,7 @@ namespace Lotta.Tests;
 
 public abstract class ToAsyncEnumerableTestBase : LottaTestBase
 {
-    protected ToAsyncEnumerableTestBase(string provider) : base(provider) { }
+    protected ToAsyncEnumerableTestBase(Action<LottaCatalog> config) : base(config) { }
 
     // ===== QueryAsync<T>().ToAsyncEnumerable() =====
 

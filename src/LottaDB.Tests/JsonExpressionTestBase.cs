@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class JsonExpressionTestBase : LottaTestBase
 {
-    protected JsonExpressionTestBase(string provider) : base(provider) { }
+    protected JsonExpressionTestBase(Action<LottaCatalog> config) : base(config) { }
     // === JsonExpression Search tests ===
 
     [Fact]

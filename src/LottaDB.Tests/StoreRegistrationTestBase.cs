@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class StoreRegistrationTestBase : LottaTestBase
 {
-    protected StoreRegistrationTestBase(string provider) : base(provider) { }
+    protected StoreRegistrationTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task Store_WithAttributes_ExtractsKey()

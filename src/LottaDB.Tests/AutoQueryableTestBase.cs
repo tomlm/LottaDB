@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class AutoQueryableTestBase : LottaTestBase
 {
-    protected AutoQueryableTestBase(string provider) : base(provider) { }
+    protected AutoQueryableTestBase(Action<LottaCatalog> config) : base(config) { }
     // === POCO AutoQueryable tests ===
 
     [Queryable]

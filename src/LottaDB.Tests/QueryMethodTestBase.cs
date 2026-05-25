@@ -19,7 +19,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
             PreferQuantized = true
         }));
 
-    protected QueryMethodTestBase(string provider) : base(provider) { Catalog.EmbeddingGenerator = _generator.Value; }
+    protected QueryMethodTestBase(Action<LottaCatalog> config) : base(config) { Catalog.EmbeddingGenerator = _generator.Value; }
 
     private async Task<LottaDB> CreateVectorDbAsync(CancellationToken cancellationToken = default, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {

@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class ETagTestBase : LottaTestBase
 {
-    protected ETagTestBase(string provider) : base(provider) { }
+    protected ETagTestBase(Action<LottaCatalog> config) : base(config) { }
     // === GetAsync with ETag ===
 
     [Fact]

@@ -7,7 +7,7 @@ namespace Lotta.Tests;
 /// </summary>
 public abstract class MatchTestBase : LottaTestBase
 {
-    protected MatchTestBase(string provider) : base(provider) { }
+    protected MatchTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task Match_FirstMatchWins()
     {

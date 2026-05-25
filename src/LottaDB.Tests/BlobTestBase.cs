@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class BlobTestBase : LottaTestBase
 {
-    protected BlobTestBase(string provider) : base(provider) { }
+    protected BlobTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task Blob_UploadAndDownload_Stream()
     {

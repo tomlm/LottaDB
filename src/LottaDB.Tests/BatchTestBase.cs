@@ -5,7 +5,7 @@ namespace Lotta.Tests;
 /// </summary>
 public abstract class BatchTestBase : LottaTestBase
 {
-    protected BatchTestBase(string provider) : base(provider) { }
+    protected BatchTestBase(Action<LottaCatalog> config) : base(config) { }
     [Fact]
     public async Task SaveManyAsync_AllEntitiesPersist()
     {

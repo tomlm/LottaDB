@@ -8,7 +8,7 @@ namespace Lotta.Tests;
 /// </summary>
 public abstract class CoverageTestBase : LottaTestBase
 {
-    protected CoverageTestBase(string provider) : base(provider) { }
+    protected CoverageTestBase(Action<LottaCatalog> config) : base(config) { }
     // === Search<object> returning mixed POCOs + POJOs ===
 
     [Fact]

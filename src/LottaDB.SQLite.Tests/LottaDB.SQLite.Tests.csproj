@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\LottaDB.SQLite\LottaDB.SQLite.csproj" />
     <ProjectReference Include="..\LottaDB.Tests\LottaDB.Tests.csproj" />
     <PackageReference Include="coverlet.collector" Version="10.0.0">
       <PrivateAssets>all</PrivateAssets>

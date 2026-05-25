@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class CreateViewTestBase : LottaTestBase
 {
-    protected CreateViewTestBase(string provider) : base(provider) { }
+    protected CreateViewTestBase(Action<LottaCatalog> config) : base(config) { }
     private async Task<LottaDB> CreateViewDbAsync(CancellationToken cancellationToken = default, [CallerMemberName] string? testName = null)
     {
         return await CreateDbAsync(opts =>

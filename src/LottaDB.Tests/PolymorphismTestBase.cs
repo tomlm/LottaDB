@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class PolymorphismTestBase : LottaTestBase
 {
-    protected PolymorphismTestBase(string provider) : base(provider) { }
+    protected PolymorphismTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task Query_BaseClass_ReturnsAllDerivedTypes()

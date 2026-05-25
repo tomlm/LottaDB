@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class CrudTestBase : LottaTestBase
 {
-    protected CrudTestBase(string provider) : base(provider) { }
+    protected CrudTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task SaveAsync_NewObject_CanGetBack()

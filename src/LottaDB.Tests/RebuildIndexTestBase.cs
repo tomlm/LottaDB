@@ -2,7 +2,7 @@ namespace Lotta.Tests;
 
 public abstract class RebuildIndexTestBase : LottaTestBase
 {
-    protected RebuildIndexTestBase(string provider) : base(provider) { }
+    protected RebuildIndexTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task RebuildIndex_RestoresSearchResults()

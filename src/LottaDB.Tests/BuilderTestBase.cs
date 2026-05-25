@@ -7,7 +7,7 @@ namespace Lotta.Tests;
 /// </summary>
 public abstract class BuilderTestBase : LottaTestBase
 {
-    protected BuilderTestBase(string provider) : base(provider) { }
+    protected BuilderTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task OnHandler_OnSave_CreatesDerivedObject()

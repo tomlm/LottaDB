@@ -4,7 +4,7 @@ namespace Lotta.Tests;
 
 public abstract class ChangeAsyncTestBase : LottaTestBase
 {
-    protected ChangeAsyncTestBase(string provider) : base(provider) { }
+    protected ChangeAsyncTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
     public async Task ChangeAsync_MutatesAndSaves()
