@@ -10,6 +10,7 @@ using Lucene.Net.Linq.Analysis;
 using Lucene.Net.Linq.Mapping;
 using Lucene.Net.Util;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Linq.Expressions;
@@ -51,9 +52,13 @@ public class LottaDB : IDisposable
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
-    private readonly ConcurrentDictionary<Type, List<object>> _handlers = new();
+    private readonly ConcurrentDictionary<Type, ImmutableArray<object>> _handlers = new();
     internal readonly ConcurrentDictionary<string, JsonMetadata> _schemas = new();
     private readonly ConcurrentDictionary<string, JsonDocumentMapper> _dynamicMappers = new();
+    // Cached MethodInfo for the generic RunHandlersAsync<T> overload — resolved once to avoid per-call reflection
+    private static readonly System.Reflection.MethodInfo _runHandlersAsyncMethod =
+        typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
     // Cycle detection: tracks object keys being processed in the current call chain
     private static readonly AsyncLocal<HashSet<string>> _processing = new();
     // Collects changes across the entire call chain (root save + handler saves)
@@ -149,13 +154,13 @@ public class LottaDB : IDisposable
     {
         foreach (var reg in _config.OnRegistrations)
         {
-            var list = _handlers.GetOrAdd(reg.ObjectType, _ => new List<object>());
-            list.Add(reg.Handler);
+            _handlers.AddOrUpdate(reg.ObjectType,
+                _ => ImmutableArray.Create(reg.Handler),
+                (_, existing) => existing.Add(reg.Handler));
         }
 
         // Built-in handler: index JsonDocument in Lucene via the schema-aware mapper
-        var jsonDocList = _handlers.GetOrAdd(typeof(JsonDocument), _ => new List<object>());
-        jsonDocList.Add((EntityHandler<JsonDocument>)((doc, kind, db, cancellationToken) =>
+        var jsonDocHandler = (EntityHandler<JsonDocument>)((doc, kind, db, cancellationToken) =>
         {
             var schemaName = doc.GetSchema() ?? Internal.StorageFields.DefaultSchema;
             var key = doc.GetKey()!;
@@ -174,11 +179,13 @@ public class LottaDB : IDisposable
             }
             ScheduleRefresh();
             return Task.CompletedTask;
-        }));
+        });
+        _handlers.AddOrUpdate(typeof(JsonDocument),
+            _ => ImmutableArray.Create<object>(jsonDocHandler),
+            (_, existing) => existing.Add(jsonDocHandler));
 
         // Built-in handler: when a JsonSchema is saved/deleted, update the dynamic mappers
-        var jsonSchemaList = _handlers.GetOrAdd(typeof(JsonSchema), _ => new List<object>());
-        jsonSchemaList.Add((EntityHandler<JsonSchema>)(async (schema, kind, db, cancellationToken) =>
+        var jsonSchemaHandler = (EntityHandler<JsonSchema>)(async (schema, kind, db, cancellationToken) =>
         {
             if (kind == TriggerKind.Saved)
             {
@@ -209,7 +216,10 @@ public class LottaDB : IDisposable
                 }
                 ScheduleRefresh();
             }
-        }));
+        });
+        _handlers.AddOrUpdate(typeof(JsonSchema),
+            _ => ImmutableArray.Create<object>(jsonSchemaHandler),
+            (_, existing) => existing.Add(jsonSchemaHandler));
     }
 
     // ===== LUCENE HANDLER ===
@@ -223,8 +233,7 @@ public class LottaDB : IDisposable
 
     private void RegisterLuceneHandler<T>() where T : class, new()
     {
-        var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
-        list.Add((EntityHandler<T>)((entity, kind, db, cancellationToken) =>
+        var luceneHandler = (EntityHandler<T>)((entity, kind, db, cancellationToken) =>
         {
             var meta = GetMeta<T>();
             var key = meta.GetKey(entity);
@@ -246,7 +255,10 @@ public class LottaDB : IDisposable
             }
             ScheduleRefresh();
             return Task.CompletedTask;
-        }));
+        });
+        _handlers.AddOrUpdate(typeof(T),
+            _ => ImmutableArray.Create<object>(luceneHandler),
+            (_, existing) => existing.Add(luceneHandler));
     }
 
     /// <summary>
@@ -353,7 +365,7 @@ public class LottaDB : IDisposable
     /// <param name="entity">The object to save.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
-    public async Task<ObjectResult> SaveAsync(object entity, CancellationToken cancellationToken = default)
+    public async Task<ObjectResult> SaveAsync<T>(T entity, CancellationToken cancellationToken = default) where T : class
     {
         // Compute key before acquiring lock
         string key;
@@ -1041,9 +1053,10 @@ public class LottaDB : IDisposable
     /// <returns>A disposable handle. Dispose to stop receiving notifications.</returns>
     public IDisposable On<T>(EntityHandler<T> handler) where T : class, new()
     {
-        var list = _handlers.GetOrAdd(typeof(T), _ => new List<object>());
-        lock (list) { list.Add(handler); }
-        return new HandlerHandle(list, handler);
+        _handlers.AddOrUpdate(typeof(T),
+            _ => ImmutableArray.Create<object>(handler),
+            (_, existing) => existing.Add(handler));
+        return new HandlerHandle(_handlers, typeof(T), handler);
     }
 
     // === Blobs ===
@@ -1405,14 +1418,18 @@ public class LottaDB : IDisposable
     // === Bulk operations ===
 
     /// <summary>
-    /// Save (upsert) multiple objects in bulk. Table storage writes are batched transactionally
-    /// (auto-flushed at 100 ops or on duplicate key). On&lt;T&gt; handlers (including Lucene indexing)
-    /// run after each batch commit succeeds.
+    /// Saves a collection of entities asynchronously, performing upsert operations for each entity in the batch.
     /// </summary>
-    /// <param name="entities">The objects to save.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>An <see cref="ObjectResult"/> containing all changes and any handler errors.</returns>
-    public async Task<ObjectResult> SaveManyAsync(IEnumerable<object> entities, CancellationToken cancellationToken = default)
+    /// <remarks>Entities are processed in batches, with automatic flushing when a batch reaches 100
+    /// operations or when duplicate keys are detected. The method collects all changes and errors encountered during
+    /// the operation and returns them in the result. The operation is atomic per batch, but not across the entire
+    /// collection.</remarks>
+    /// <typeparam name="T">The type of the entities to be saved.</typeparam>
+    /// <param name="entities">The collection of entities to save. Each entity will be upserted into the underlying data store. Cannot be null.</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the save operation.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result contains an ObjectResult with details about
+    /// the changes made and any errors encountered during the save process.</returns>
+    public async Task<ObjectResult> SaveManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
     {
         var allChanges = new List<ObjectChange>();
         var allErrors = new List<Exception>();
@@ -1514,7 +1531,7 @@ public class LottaDB : IDisposable
     /// <param name="entities">The objects to delete.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
-    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class, new()
+    public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
     {
         return await DeleteManyAsyncCore(entities.Select(e => GetDeleteTruple(e))
             .ToAsyncEnumerable(), cancellationToken);
@@ -1651,12 +1668,9 @@ public class LottaDB : IDisposable
 
         try
         {
-            if (!_handlers.TryGetValue(typeof(T), out var list)) return;
+            if (!_handlers.TryGetValue(typeof(T), out var handlers)) return;
 
-            List<object> snapshot;
-            lock (list) { snapshot = list.ToList(); }
-
-            foreach (var handler in snapshot)
+            foreach (var handler in handlers)
             {
                 if (handler is EntityHandler<T> typed)
                 {
@@ -1685,20 +1699,15 @@ public class LottaDB : IDisposable
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
         List<Exception> errors, CancellationToken cancellationToken)
     {
-        var method = typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
-
         // Walk up the type hierarchy: BlobPhoto → BlobFile → object
         for (var type = entityType; type != null && type != typeof(object); type = type.BaseType)
         {
-            if (!_handlers.TryGetValue(type, out var list)) continue;
+            if (!_handlers.TryGetValue(type, out var handlers)) continue;
 
             // For types without new() constraint (e.g. JsonDocument), invoke handlers directly
             if (type.GetConstructor(Type.EmptyTypes) == null)
             {
-                List<object> snapshot;
-                lock (list) { snapshot = list.ToList(); }
-                foreach (var handler in snapshot)
+                foreach (var handler in handlers)
                 {
                     // Use dynamic dispatch to invoke the correctly-typed delegate
                     try { await ((dynamic)handler)((dynamic)entity, kind, this, cancellationToken); }
@@ -1707,7 +1716,7 @@ public class LottaDB : IDisposable
                 continue;
             }
 
-            await (Task)method.MakeGenericMethod(type).Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+            await (Task)_runHandlersAsyncMethod.MakeGenericMethod(type).Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
         }
     }
 
@@ -1830,8 +1839,15 @@ public class LottaDB : IDisposable
 
 internal class HandlerHandle : IDisposable
 {
-    private readonly List<object> _list;
+    private readonly ConcurrentDictionary<Type, ImmutableArray<object>> _handlers;
+    private readonly Type _type;
     private readonly object _handler;
-    public HandlerHandle(List<object> list, object handler) { _list = list; _handler = handler; }
-    public void Dispose() { lock (_list) { _list.Remove(_handler); } }
+    public HandlerHandle(ConcurrentDictionary<Type, ImmutableArray<object>> handlers, Type type, object handler)
+    { _handlers = handlers; _type = type; _handler = handler; }
+    public void Dispose()
+    {
+        _handlers.AddOrUpdate(_type,
+            _ => ImmutableArray<object>.Empty,
+            (_, existing) => existing.Remove(_handler));
+    }
 }
