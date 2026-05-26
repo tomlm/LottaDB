@@ -117,7 +117,7 @@ public abstract class CrudTestBase : LottaTestBase
     public async Task DeleteDatabaseAsync_RemovesTableAndIndex()
     {
         var ct = TestContext.Current.CancellationToken;
-        using (var db = await CreateDbAsync(reset: true, cancellationToken: ct))
+        using (var db = await CreateDbAsync(cancellationToken: ct))
         {
             await db.SaveAsync(new Actor
             {

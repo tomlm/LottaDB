@@ -72,7 +72,7 @@ public class LottaDB : IDisposable
         _databaseId = databaseId;
         _config = config;
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
-        _directory = catalog.CreateLuceneDirectory($"{catalog.Name}/{databaseId}/Search");
+        _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
         if (!_config.StorageConfigurations.ContainsKey(typeof(JsonSchema)))
@@ -113,12 +113,6 @@ public class LottaDB : IDisposable
             return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
     }
-
-    private static string GetSearchBlobPath(LottaCatalog catalog, string databaseId)
-    {
-        return $"Search";
-    }
-
 
     // Opens and immediately disposes a session per registered type so each mapper's
     // PerFieldAnalyzer (e.g. _content_ → EnglishAnalyzer) is merged into the shared

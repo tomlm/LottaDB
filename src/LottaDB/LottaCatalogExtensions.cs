@@ -1,5 +1,7 @@
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
+using Lucene.Net.Store;
+using Lucene.Net.Store.Azure;
 
 namespace Lotta;
 
@@ -18,8 +20,24 @@ public static class LottaCatalogExtensions
     {
         catalog.TableServiceClientFactory = () => new TableServiceClient(connectionString);
         catalog.BlobServiceClientFactory = () => new BlobServiceClient(connectionString);
-        // LuceneDirectoryFactory = null → AzureDirectory with FSDirectory cache (default)
-        catalog.LuceneDirectoryFactory = null;
+        catalog.LuceneDirectoryFactory = (path) =>
+        {
+            // Default: AzureDirectory persists index to blob storage with FSDirectory cache in temp.
+            // Each catalog+database gets its own cache folder to avoid corruption under parallel use.
+            var cachePath = Path.Combine(Path.GetTempPath(), "LottaCatalogCache",  path);
+            System.IO.Directory.CreateDirectory(cachePath);
+            var cacheDirectory = FSDirectory.Open(cachePath);
+
+            var blobServiceClient = catalog.GetBlobServiceClient();
+            var azureDirectory = new AzureDirectory(blobServiceClient, path, cacheDirectory); // Use RAMDirectory to avoid file locks from FSDirectory.
+
+            // delete stale cache files that are not in blob storage to avoid corruption from previous runs. This can happen if a previous run was interrupted before it could clear the cache.
+            var files = azureDirectory.ListAll().ToHashSet();
+            foreach(var staleFile in cacheDirectory.ListAll().Where(f => !files.Contains(f)))
+                cacheDirectory.DeleteFile(staleFile); 
+
+            return azureDirectory;
+        };
         return catalog;
     }
 }
