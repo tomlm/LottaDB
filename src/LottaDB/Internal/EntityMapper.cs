@@ -2,7 +2,6 @@ using Azure.Data.Tables;
 using Lucene.Net.Documents;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json;
 
 namespace Lotta.Internal;
 

@@ -68,7 +68,20 @@ internal class TableStorageAdapter
     {
         if (key.IndexOfAny(['/', '\\', '#', '?']) < 0)
             return key;
-        return key.Replace("/", "%2F").Replace("\\", "%5C").Replace("#", "%23").Replace("?", "%3F");
+
+        var sb = new StringBuilder(key.Length + 8);
+        foreach (var ch in key)
+        {
+            switch (ch) 
+            {
+                case '/':  sb.Append("%2F"); break;
+                case '\\': sb.Append("%5C"); break;
+                case '#':  sb.Append("%23"); break;
+                case '?':  sb.Append("%3F"); break;
+                default:   sb.Append(ch);    break;
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>
