@@ -1,7 +1,7 @@
 using Azure.Data.Tables;
 using Lucene.Net.Documents;
-using Lucene.Net.Analysis;
-using Lucene.Net.Index;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json;
 
 namespace Lotta.Internal;
@@ -25,6 +25,7 @@ internal static class EntityMapper
         entity[StorageFields.Schema] = obj.GetType().Name;
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
+        obj.SetJson(Encoding.UTF8.GetString(bytes));
         entity.SetObjectBytes(bytes);
 
         foreach (var tag in meta.Tags)

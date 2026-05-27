@@ -143,14 +143,9 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         return EntityMapper.FromLuceneDocument<T>(source, _db);
     }
 
-    public override bool IsModified(T item, Document document)
-    {
-        var json1 = document.Get(StorageFields.ObjectPrefix);
-        if (String.IsNullOrEmpty(json1))
-            return true;
-        var json2 = JsonSerializer.Serialize(item, item.GetType());
-        return json1 != json2;
-    }
+    // For simplicity, we always treat documents as modified. Lucene.Net.Linq's upsert logic will compare the new document
+    // to the existing one and skip reindexing if they're identical, so this won't cause unnecessary updates.
+    public override bool IsModified(T item, Document document) => true;
 
     static bool IsNumericType(Type type)
     {

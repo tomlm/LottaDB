@@ -59,6 +59,10 @@ public class LottaDB : IDisposable
     private static readonly System.Reflection.MethodInfo _runHandlersAsyncMethod =
         typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
             .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
+    // Compiled delegate cache: one strongly-typed trampoline per concrete entity type, built once via expression trees.
+    // Eliminates both the per-call MakeGenericMethod allocation and the object[] boxing from MethodInfo.Invoke.
+    private static readonly ConcurrentDictionary<Type, Func<LottaDB, object, TriggerKind, List<Exception>, CancellationToken, Task>>
+        _runHandlersAsyncDelegateCache = new();
     // Cycle detection: tracks object keys being processed in the current call chain
     private static readonly AsyncLocal<HashSet<string>> _processing = new();
     // Collects changes across the entire call chain (root save + handler saves)
@@ -1716,7 +1720,24 @@ public class LottaDB : IDisposable
                 continue;
             }
 
-            await (Task)_runHandlersAsyncMethod.MakeGenericMethod(type).Invoke(this, new[] { entity, kind, errors, cancellationToken })!;
+            var trampoline = _runHandlersAsyncDelegateCache.GetOrAdd(type, static (t, m) =>
+            {
+                // Build: (LottaDB db, object entity, TriggerKind kind, List<Exception> errors, CancellationToken ct)
+                //            => db.RunHandlersAsync<T>((T)entity, kind, errors, ct)
+                var dbParam     = Expression.Parameter(typeof(LottaDB),              "db");
+                var entityParam = Expression.Parameter(typeof(object),               "entity");
+                var kindParam   = Expression.Parameter(typeof(TriggerKind),          "kind");
+                var errorsParam = Expression.Parameter(typeof(List<Exception>),      "errors");
+                var ctParam     = Expression.Parameter(typeof(CancellationToken),    "ct");
+                var body = Expression.Call(
+                    dbParam,
+                    m.MakeGenericMethod(t),
+                    Expression.Convert(entityParam, t),
+                    kindParam, errorsParam, ctParam);
+                return Expression.Lambda<Func<LottaDB, object, TriggerKind, List<Exception>, CancellationToken, Task>>(
+                    body, dbParam, entityParam, kindParam, errorsParam, ctParam).Compile();
+            }, _runHandlersAsyncMethod);
+            await trampoline(this, entity, kind, errors, cancellationToken);
         }
     }
 
