@@ -8,7 +8,7 @@ namespace Lotta;
 /// value types are not analyzed (exact match). Override with <see cref="QueryableMode"/>.
 /// </para>
 /// </summary>
-[AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Class, AllowMultiple = false)]
 public class QueryableAttribute : Attribute
 {
     /// <summary>How the property is indexed in Lucene.</summary>

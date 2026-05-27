@@ -65,8 +65,7 @@ public class AdvancedConfigTests
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        var catalog = new LottaCatalog(testName!);
-        catalog.ConfigureTestStorage();
+        var catalog = new LottaCatalog(testName!, catalog => catalog.UseMemory());
         return await catalog.GetDatabaseAsync("default", config =>
         {
             configAction?.Invoke(config);

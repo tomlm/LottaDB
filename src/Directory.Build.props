@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
-  <PropertyGroup>
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -16,11 +16,11 @@
     <PackageIcon>icon.png</PackageIcon>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <GeneratePackageOnBuild Condition="'$(IsPackable)' != 'false'">true</GeneratePackageOnBuild>
+    <GeneratePackageOnBuild >true</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
-    <None Include="../../icon.png" Pack="true" PackagePath="" />
+    <None Include="../../icon.png" Pack="true" PackagePath="" Condition="Exists('../../icon.png')" />
   </ItemGroup>
 
 </Project>

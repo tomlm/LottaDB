@@ -1,13 +1,11 @@
-using System.Collections.Concurrent;
 using Azure;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
 using Lotta.Internal;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.En;
-using Lucene.Net.Store;
-using Lucene.Net.Store.Azure;
 using Microsoft.Extensions.AI;
+using System.Collections.Concurrent;
 using LuceneDirectory = Lucene.Net.Store.Directory;
 
 namespace Lotta;
@@ -33,31 +31,45 @@ public class LottaCatalog : IDisposable
     public string Name { get; }
 
     /// <summary>
-    /// Factory for creating a <see cref="TableServiceClient"/>. Receives the catalog name.
+    /// Factory for creating a <see cref="TableServiceClient"/>.
+    /// Set via the constructor's <c>configure</c> callback.
     /// </summary>
-    public Func<string, TableServiceClient> TableServiceClientFactory { get; set; }
+    /// <summary>
+    /// Factory for creating a <see cref="TableServiceClient"/>.
+    /// Set via the constructor's <c>configure</c> callback.
+    /// </summary>
+    public Func<TableServiceClient> TableServiceClientFactory { get; set; }
+        = () => throw new InvalidOperationException("LottaCatalog.TableServiceClientFactory is not configured.");
 
     /// <summary>
-    /// Factory for creating a Lucene Directory. Receives a composite path
+    /// Factory for creating a <see cref="BlobServiceClient"/>.
+    /// Set via the constructor's <c>configure</c> callback.
+    /// </summary>
+    public Func<BlobServiceClient> BlobServiceClientFactory { get; set; }
+        = () => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
+
+    /// <summary>
+    /// Factory for creating the Lucene Directory. Receives a composite path
     /// (<c>{catalog}/{databaseId}/Search</c>) to create per-database indexes.
+    /// For local providers (Memory, FileSystem, SQLite) set this to return
+    /// RAMDirectory or FSDirectory directly.
+    /// When null (default), AzureDirectory is used to persist the index to blob storage
+    /// with an FSDirectory cache in temp.
     /// </summary>
     public Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
-
-    /// <summary>
-    /// Factory for creating a <see cref="BlobServiceClient"/>. Receives the catalog name.
-    /// Used for the Blob storage API on each database.
-    /// </summary>
-    public Func<string, BlobServiceClient> BlobServiceClientFactory { get; set; }
+        = (_) => throw new InvalidOperationException($"LottaCatalog.LuceneDirectoryFactory is not configured");
 
     /// <summary>
     /// Embedding generator for vector similarity search, shared across all databases in this catalog.
+    /// Set via the constructor's <c>configure</c> callback.
     /// </summary>
-    public IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
+    internal IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
 
     /// <summary>
     /// Default Analyzer to use for indexing/querying, shared across all databases in this catalog.
+    /// Set via the constructor's <c>configure</c> callback.
     /// </summary>
-    public Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
+    internal Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
 
     /// <summary>
     /// Create a catalog with an Azure Storage connection string.
@@ -69,15 +81,13 @@ public class LottaCatalog : IDisposable
     {
         Name = SanitizeName(catalogName);
         connectionString ??= "UseDevelopmentStorage=true";
-        TableServiceClientFactory = name => new TableServiceClient(connectionString);
-        LuceneDirectoryFactory = name => new AzureDirectory(connectionString, name, new RAMDirectory());
-        BlobServiceClientFactory = name => new BlobServiceClient(connectionString);
+        this.UseAzure(connectionString);
         configure?.Invoke(this);
     }
 
     /// <summary>
     /// Create a catalog without a connection string. Requires setting
-    /// <see cref="TableServiceClientFactory"/>, <see cref="LuceneDirectoryFactory"/>,
+    /// <see cref="TableServiceClientFactory"/>, <see cref="AzureDirectoryCacheFactory"/>,
     /// and <see cref="BlobServiceClientFactory"/> manually.
     /// </summary>
     /// <param name="catalogName">Catalog name. Used as the Azure table name and blob container.</param>
@@ -85,9 +95,7 @@ public class LottaCatalog : IDisposable
     public LottaCatalog(string catalogName, Action<LottaCatalog>? configure = null)
     {
         Name = SanitizeName(catalogName);
-        TableServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.TableServiceClientFactory is not configured.");
-        LuceneDirectoryFactory = _ => throw new InvalidOperationException("LottaCatalog.LuceneDirectoryFactory is not configured.");
-        BlobServiceClientFactory = _ => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
+
         configure?.Invoke(this);
     }
 
@@ -129,7 +137,7 @@ public class LottaCatalog : IDisposable
         }
 
         // Load dynamic schemas from Table Storage before computing the schema hash
-        await db.InitializeJsonDocumentTypesAsync(cancellationToken);
+        await db.InitializeJsonSchemasAsync(cancellationToken);
 
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);
@@ -209,17 +217,21 @@ public class LottaCatalog : IDisposable
     /// </summary>
     public async Task DeleteAsync(CancellationToken cancellationToken = default)
     {
+        // Dispose databases first to release Lucene locks before deleting storage
+        foreach (var db in _databases.Values)
+            db.Dispose();
+        _databases.Clear();
+
         var table = GetTableClient();
         await table.DeleteAsync(cancellationToken);
+
+        var blob = GetBlobServiceClient().GetBlobContainerClient(this.Name);
+        await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
 
         // Clear cached clients so subsequent operations recreate them
         _tableClient = null;
         _tableServiceClient = null;
         _blobServiceClient = null;
-
-        foreach (var db in _databases.Values)
-            db.Dispose();
-        _databases.Clear();
     }
 
     /// <summary>
@@ -249,13 +261,13 @@ public class LottaCatalog : IDisposable
 
     internal TableServiceClient GetTableServiceClient()
     {
-        _tableServiceClient ??= TableServiceClientFactory(Name);
+        _tableServiceClient ??= TableServiceClientFactory();
         return _tableServiceClient;
     }
 
     internal BlobServiceClient GetBlobServiceClient()
     {
-        _blobServiceClient ??= BlobServiceClientFactory(Name);
+        _blobServiceClient ??= BlobServiceClientFactory();
         return _blobServiceClient;
     }
 
@@ -263,7 +275,7 @@ public class LottaCatalog : IDisposable
     {
         if (_tableClient == null)
         {
-            _tableClient = GetTableServiceClient().GetTableClient(Name);
+            _tableClient = GetTableServiceClient().GetTableClient(this.Name);
             _tableClient.CreateIfNotExists();
         }
         return _tableClient;

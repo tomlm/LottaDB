@@ -11,6 +11,7 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
     internal List<FieldPropertyConfig> FieldProperties { get; } = new();
     internal List<LambdaExpression> IgnoredProperties { get; } = new();
     internal LambdaExpression? DefaultSearchExpression { get; private set; }
+    internal bool IsAutoQueryableDisabled { get; private set; }
 
     public IStorageConfiguration<T> SetKey(Expression<Func<T, string>> resolver)
     {
@@ -53,6 +54,12 @@ public class StorageConfiguration<T> : IStorageConfiguration<T> where T : class,
     public IStorageConfiguration<T> DefaultSearch<TProp>(Expression<Func<T, TProp>> property)
     {
         DefaultSearchExpression = property;
+        return this;
+    }
+
+    public IStorageConfiguration<T> AutoQueryable(bool enabled = true)
+    {
+        IsAutoQueryableDisabled = !enabled;
         return this;
     }
 }

@@ -33,6 +33,14 @@ public interface ILottaConfiguration
     /// </summary>
     public int AutoCommitDelay { get; set; }
 
+    /// <summary>
+    /// Convention-based key property names for auto-detecting document keys.
+    /// Used by both POCOs (property name matching) and POJOs (JSON property name matching).
+    /// First match wins (case-insensitive). Set to override the defaults.
+    /// Default: id, _id, key, _key, pk, primaryKey, uuid, guid.
+    /// </summary>
+    public string[] AutoKeyProperties { get; set; }
+
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, queryable properties, etc.</param>
@@ -89,6 +97,14 @@ public interface IStorageConfiguration<T> where T : class, new()
     /// Set the default search property for free-text queries.
     /// </summary>
     IStorageConfiguration<T> DefaultSearch<TProp>(Expression<Func<T, TProp>> property);
+
+    /// <summary>
+    /// Control AutoQueryable behavior. When enabled (default), all top-level simple-type
+    /// properties are auto-promoted as queryable (Table Storage columns + Lucene fields)
+    /// and a _content_ field is built for full-text search.
+    /// Pass false to disable and only index explicitly configured properties.
+    /// </summary>
+    IStorageConfiguration<T> AutoQueryable(bool enabled = true);
 }
 
 /// <summary>

@@ -27,7 +27,7 @@ internal sealed class LottaDocumentKeyFieldMapper<T> : IFieldMapper<T>, IDocumen
         _inner.CopyToDocument(source, target);
 
         var value = ConvertToQueryExpression(GetPropertyValue(source));
-        target.Add(new StringField(LottaDB.KEY_FIELD, value, Field.Store.YES));
+        target.Add(new StringField(StorageFields.Key, value, Field.Store.YES));
     }
 
     public object GetPropertyValue(T source) => _inner.GetPropertyValue(source);
@@ -46,7 +46,7 @@ internal sealed class LottaDocumentKeyFieldMapper<T> : IFieldMapper<T>, IDocumen
     {
         var queryParser = new Lucene.Net.QueryParsers.Classic.QueryParser(
             Lucene.Net.Util.LuceneVersion.LUCENE_48,
-            LottaDB.KEY_FIELD,
+            StorageFields.Key,
             new Lucene.Net.Analysis.Core.KeywordAnalyzer())
         {
             AllowLeadingWildcard = true,

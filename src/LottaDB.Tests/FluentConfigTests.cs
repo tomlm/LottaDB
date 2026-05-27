@@ -15,8 +15,7 @@ public class FluentConfigTests
     {
         testName = String.Join(String.Empty, testName!.Where(char.IsLetterOrDigit).Take(60));
 
-        var catalog = new LottaCatalog(testName!);
-        catalog.ConfigureTestStorage();
+        var catalog = new LottaCatalog(testName!, (catalog) => catalog.UseMemory());
         return await catalog.GetDatabaseAsync("default", config =>
         {
             config.Store<BareActor>(s =>
@@ -456,8 +455,7 @@ public class FluentConfigTests
     {
         var ct = TestContext.Current.CancellationToken;
 
-        var catalog = new LottaCatalog("FluentCompositeKey");
-        catalog.ConfigureTestStorage();
+        var catalog = new LottaCatalog("FluentCompositeKey", (catalog) => catalog.UseMemory());
         using var db = await catalog.GetDatabaseAsync("default", options =>
         {
             options.Store<BareActor>(s =>

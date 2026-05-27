@@ -17,6 +17,8 @@ internal class TableStorageAdapter
     private readonly Dictionary<string, TableClient> _tables = new();
     private readonly string _partitionKey;
 
+    internal string PartitionKey => _partitionKey;
+
     public TableStorageAdapter(TableServiceClient serviceClient, string partitionKey)
     {
         _serviceClient = serviceClient;
@@ -41,9 +43,9 @@ internal class TableStorageAdapter
     public async Task<string> UpsertAsync(string tableName, string key, object obj, TypeMetadata meta, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -53,9 +55,9 @@ internal class TableStorageAdapter
     public async Task<string> ReplaceAsync(string tableName, string key, object obj, TypeMetadata meta, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -66,7 +68,20 @@ internal class TableStorageAdapter
     {
         if (key.IndexOfAny(['/', '\\', '#', '?']) < 0)
             return key;
-        return key.Replace("/", "%2F").Replace("\\", "%5C").Replace("#", "%23").Replace("?", "%3F");
+
+        var sb = new StringBuilder(key.Length + 8);
+        foreach (var ch in key)
+        {
+            switch (ch) 
+            {
+                case '/':  sb.Append("%2F"); break;
+                case '\\': sb.Append("%5C"); break;
+                case '#':  sb.Append("%23"); break;
+                case '?':  sb.Append("%3F"); break;
+                default:   sb.Append(ch);    break;
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -77,25 +92,6 @@ internal class TableStorageAdapter
         if (rowKey.IndexOf('%') < 0)
             return rowKey;
         return rowKey.Replace("%2F", "/").Replace("%5C", "\\").Replace("%23", "#").Replace("%3F", "?");
-    }
-
-    private ITableEntity BuildEntity(string key, object obj, TypeMetadata meta)
-    {
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = obj.GetType().FullName!;
-
-        // Serialize as UTF-8 JSON bytes, split across properties if >64KB
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
-        entity.SetObjectBytes(bytes);
-
-        // Promote tags
-        foreach (var tag in meta.Tags)
-        {
-            var value = tag.GetValue(obj);
-            if (value != null)
-                entity[tag.Name] = ConvertToTableValue(value);
-        }
-        return entity;
     }
 
     public async Task<(T? obj, string? etag)> GetAsync<T>(string tableName, string key, CancellationToken cancellationToken = default) where T : class, new()
@@ -232,20 +228,7 @@ internal class TableStorageAdapter
     /// to resolve the concrete type. Returns null if the type cannot be resolved.
     /// </summary>
     internal static object? DeserializeEntity(TableEntity entity)
-    {
-        var bytes = entity.GetObjectBytes();
-        if (bytes.Length == 0) return null;
-        var typeName = entity.GetString(TableEntityExtensions.TypeProperty);
-        var concreteType = TypeUtils.ResolveType(typeName);
-        if (concreteType != null)
-        {
-            var obj = JsonSerializer.Deserialize(bytes, concreteType);
-            if (obj != null)
-                obj.SetJson(System.Text.Encoding.UTF8.GetString(bytes));
-            return obj;
-        }
-        return null;
-    }
+        => EntityMapper.FromTableEntity(entity);
 
     private static T? DeserializeEntity<T>(TableEntity entity) where T : class
     {
@@ -266,7 +249,7 @@ internal class TableStorageAdapter
         var derivedTypes = TypeUtils.GetDerivedTypes(typeof(T));
         if (derivedTypes.Any())
         {
-            sb.Append($" and ({String.Join(" or ", derivedTypes.Select(t => $"Type eq '{t.FullName}'"))})");
+            sb.Append($" and ({String.Join(" or ", derivedTypes.Select(t => $"{StorageFields.Type} eq '{t.FullName}'"))})");
         }
         if (predicate != null)
         {
@@ -326,20 +309,13 @@ internal class TableStorageAdapter
 
     internal TableTransactionAction CreateUpsertAction(string key, object obj, TypeMetadata meta)
     {
-        var entity = BuildEntity(key, obj, meta);
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, obj, meta);
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
     internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, JsonMetadata schema)
     {
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
@@ -402,18 +378,54 @@ internal class TableStorageAdapter
         JsonDocument json, JsonMetadata schema, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
-
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         var response = await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken: cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
+    }
+
+    /// <summary>
+    /// Promotes all top-level simple-type JSON properties to table entity columns.
+    /// Used when AutoQueryable is enabled.
+    /// </summary>
+    internal static void PromoteAutoQueryableProperties(TableEntity entity, JsonElement root, string keyProperty, HashSet<string>? skip = null)
+    {
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (prop.Name.Equals(keyProperty, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (skip != null && skip.Contains(prop.Name))
+                continue;
+
+            switch (prop.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    entity[prop.Name] = prop.Value.GetString() ?? "";
+                    break;
+                case JsonValueKind.Number:
+                    if (prop.Value.TryGetInt64(out var l))
+                        entity[prop.Name] = l;
+                    else if (prop.Value.TryGetDouble(out var d))
+                        entity[prop.Name] = d;
+                    break;
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    entity[prop.Name] = prop.Value.GetBoolean();
+                    break;
+                case JsonValueKind.Array:
+                    // String arrays → comma-delimited
+                    var elements = new List<string>();
+                    foreach (var element in prop.Value.EnumerateArray())
+                    {
+                        if (element.ValueKind == JsonValueKind.String)
+                            elements.Add(element.GetString() ?? "");
+                        else
+                            break; // Not a pure string array, skip
+                    }
+                    if (elements.Count > 0)
+                        entity[prop.Name] = string.Join(",", elements);
+                    break;
+            }
+        }
     }
 
     /// <summary>
@@ -431,6 +443,8 @@ internal class TableStorageAdapter
             var doc = JsonDocument.Parse(bytes);
             doc.SetKey(DecodeKey(response.Value.RowKey));
             doc.SetETag(response.Value.ETag.ToString());
+            if (response.Value.TryGetValue(StorageFields.Schema, out var schemaVal) && schemaVal is string schemaStr)
+                doc.SetSchema(schemaStr);
             return doc;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -450,7 +464,9 @@ internal class TableStorageAdapter
         var table = GetTable(tableName);
         if (!string.IsNullOrEmpty(filter))
             ValidateODataFilter(filter);
-        var query = $"PartitionKey eq '{_partitionKey}' and Type eq '{schemaName}'";
+        var query = $"PartitionKey eq '{_partitionKey}' and {StorageFields.Type} eq '{typeof(JsonDocument).FullName}'";
+        if (schemaName != StorageFields.DefaultSchema)
+            query += $" and {StorageFields.Schema} eq '{schemaName}'";
         if (!string.IsNullOrEmpty(filter))
             query += $" and ({filter})";
 
@@ -462,6 +478,31 @@ internal class TableStorageAdapter
                 var doc = JsonDocument.Parse(bytes);
                 doc.SetKey(DecodeKey(entity.RowKey));
                 doc.SetETag(entity.ETag.ToString());
+                if (entity.TryGetValue(StorageFields.Schema, out var schemaVal) && schemaVal is string schemaStr)
+                    doc.SetSchema(schemaStr);
+                yield return doc;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Query JSON documents using a raw OData filter (pre-built, includes PartitionKey and Type).
+    /// </summary>
+    internal async IAsyncEnumerable<JsonDocument> QueryJsonDocumentsRawAsync(string tableName, string filter,
+        int? maxPerPage = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        await foreach (var entity in table.QueryAsync<TableEntity>(filter, maxPerPage: maxPerPage, cancellationToken: cancellationToken))
+        {
+            var bytes = entity.GetObjectBytes();
+            if (bytes.Length > 0)
+            {
+                var doc = JsonDocument.Parse(bytes);
+                doc.SetKey(DecodeKey(entity.RowKey));
+                doc.SetETag(entity.ETag.ToString());
+                if (entity.TryGetValue(StorageFields.Schema, out var schema) && schema is string schemaStr)
+                    doc.SetSchema(schemaStr);
                 yield return doc;
             }
         }
@@ -477,16 +518,9 @@ internal class TableStorageAdapter
         JsonDocument json, JsonMetadata schema, string etag, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);
-        var entity = new TableEntity(_partitionKey, EncodeKey(key));
-        entity[TableEntityExtensions.TypeProperty] = schemaName;
-        entity.SetObjectBytes(JsonSerializer.SerializeToUtf8Bytes(json.RootElement));
-        foreach (var prop in schema.Properties)
-        {
-            if (JsonMetadata.GetValue(json.RootElement, prop) is JsonElement val && val.ValueKind != JsonValueKind.Null)
-                entity[prop.Name] = ConvertJsonElementToTableValue(val, prop.ClrType);
-        }
+        var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);
         var response = await table.UpdateEntityAsync(entity, new ETag(etag), TableUpdateMode.Replace, cancellationToken);
-        return response.Headers.ETag.ToString();
+        return response.Headers.ETag.ToString()!;
     }
 
     /// <summary>
@@ -501,15 +535,15 @@ internal class TableStorageAdapter
     {
         if (filter.Contains("PartitionKey", StringComparison.OrdinalIgnoreCase) ||
             filter.Contains("RowKey", StringComparison.OrdinalIgnoreCase) ||
-            System.Text.RegularExpressions.Regex.IsMatch(filter, @"\bType\s+(eq|ne|gt|ge|lt|le)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            System.Text.RegularExpressions.Regex.IsMatch(filter, $@"\b{StorageFields.Type}\s+(eq|ne|gt|ge|lt|le)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         {
             throw new ArgumentException(
-                "OData filter must not reference 'PartitionKey', 'RowKey', or 'Type' columns. " +
+                $"OData filter must not reference 'PartitionKey', 'RowKey', or '{StorageFields.Type}' columns. " +
                 "These are managed internally by LottaDB for isolation.", nameof(filter));
         }
     }
 
-    private static object ConvertJsonElementToTableValue(JsonElement val, Type clrType)
+    internal static object ConvertJsonElementToTableValue(JsonElement val, Type clrType)
     {
         if (clrType == typeof(string)) return val.GetString() ?? "";
         if (clrType == typeof(int)) return val.TryGetInt32(out var i) ? i : 0;
@@ -519,11 +553,13 @@ internal class TableStorageAdapter
         return val.ToString();
     }
 
-    private static object ConvertToTableValue(object value)
+    internal static object ConvertToTableValue(object value)
     {
         return value switch
         {
             string s => s,
+            string[] arr => string.Join(",", arr),
+            IEnumerable<string> strings => string.Join(",", strings),
             int i => i,
             long l => l,
             double d => d,

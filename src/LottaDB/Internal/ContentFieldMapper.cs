@@ -30,7 +30,7 @@ internal class ContentFieldMapper<T> : IFieldMapper<T>
         _properties = properties.ToArray();
     }
 
-    public string FieldName => LottaDB.CONTENT_FIELD;
+    public string FieldName => StorageFields.Content;
 
     public string PropertyName => FieldName;
 

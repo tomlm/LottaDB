@@ -16,7 +16,10 @@ public class LottaConfiguration : ILottaConfiguration
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
     /// </summary>
-    public int AutoCommitDelay { get; set; } = 1000;
+    public int AutoCommitDelay { get; set; } = 50;
+
+    /// <inheritdoc/>
+    public string[] AutoKeyProperties { get; set; } = ["id", "_id", "key", "_key", "pk", "primaryKey", "uuid", "guid"];
 
     /// <summary>
     /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database,

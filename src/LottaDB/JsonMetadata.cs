@@ -8,18 +8,9 @@ namespace Lotta;
 /// </summary>
 public class JsonMetadata
 {
-    /// <summary>Prefix applied to schema names when stored in the Type column and Lucene _type_ field.
-    /// Clearly separates dynamic documents from CLR-typed entities.</summary>
-    internal const string StoragePrefix = "_dynamic_";
-
-    /// <summary>Returns the prefixed type name used in storage and Lucene (e.g. "_dynamic_Person").</summary>
-    internal string StorageTypeName => StoragePrefix + TypeName;
-
-    /// <summary>Returns true if the given stored type name is a dynamic schema type.</summary>
-    internal static bool IsDynamicTypeName(string? typeName) => typeName != null && typeName.StartsWith(StoragePrefix);
-
-    /// <summary>Strips the storage prefix to recover the original schema name.</summary>
-    internal static string UnprefixTypeName(string typeName) => typeName.Substring(StoragePrefix.Length);
+    /// <summary>Returns true if the given stored type name is a JSON document type.</summary>
+    internal static bool IsJsonTypeName(string? typeName) =>
+        typeName == typeof(System.Text.Json.JsonDocument).FullName;
 
     /// <summary>A unique name for this document type (e.g. "Person"). Used as the type discriminator in storage and search.</summary>
     public string TypeName { get; set; } = null!;
@@ -36,14 +27,25 @@ public class JsonMetadata
     /// <summary>The queryable properties defined by this schema. These are indexed in Lucene and promoted to Table Storage columns.</summary>
     public List<IndexedJsonProperty> Properties { get; set; } = new();
 
-    /// <summary>Parse from a <see cref="JsonDocumentType"/> entity.</summary>
-    public static JsonMetadata Parse(JsonDocumentType docType)
+    /// <summary>When true, auto-discover and index all top-level simple-type properties from documents.</summary>
+    public bool AutoQueryable { get; set; }
+
+    /// <summary>Convention-based key property names for auto-detecting document keys. Set from database config.</summary>
+    public string[]? AutoKeyProperties { get; set; }
+
+    /// <summary>Optional discriminator expression for auto-classifying documents (e.g. "$.type == 'Person'").</summary>
+    public string? Match { get; set; }
+
+    /// <summary>Parse from a <see cref="JsonSchema"/> entity.</summary>
+    public static JsonMetadata Parse(JsonSchema docType)
     {
         var result = new JsonMetadata
         {
             TypeName = docType.Name,
             KeyProperty = docType.Key ?? "Id",
             KeyMode = docType.KeyMode,
+            AutoQueryable = docType.AutoQueryable,
+            Match = docType.Match,
         };
 
         foreach (var prop in docType.Properties)
@@ -101,8 +103,13 @@ public class JsonMetadata
         return result;
     }
 
+    /// <summary>Default convention-based key property names.</summary>
+    internal static readonly string[] DefaultAutoKeyProperties =
+        ["id", "_id", "key", "_key", "pk", "primarykey", "uuid", "guid"];
+
     /// <summary>
     /// Extract the key value from a JSON document, or generate a ULID for Auto mode.
+    /// When KeyProperty is the default ("Id"), also tries convention-based detection.
     /// </summary>
     public string GetKey(JsonElement json)
     {
@@ -118,11 +125,46 @@ public class JsonMetadata
                 return key;
         }
 
+        // Convention-based key detection when using the default "Id" key property
+        if (KeyProperty == "Id")
+        {
+            var conventionKey = DetectKeyFromDocument(json, AutoKeyProperties);
+            if (conventionKey != null)
+                return conventionKey;
+        }
+
         if (KeyMode == KeyMode.Auto)
             return Ulid.NewUlid().ToString();
 
         throw new InvalidOperationException(
             $"Key property '{KeyProperty}' is missing or empty in JSON document for schema '{TypeName}' with Manual key mode.");
+    }
+
+    /// <summary>
+    /// Detect a key value from a JSON document using common convention names.
+    /// Returns null if no convention match is found.
+    /// </summary>
+    internal static string? DetectKeyFromDocument(JsonElement root, string[]? autoKeyProperties = null)
+    {
+        foreach (var convention in autoKeyProperties ?? DefaultAutoKeyProperties)
+        {
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.Name.Equals(convention, StringComparison.OrdinalIgnoreCase))
+                {
+                    var val = prop.Value;
+                    if (val.ValueKind == JsonValueKind.String)
+                    {
+                        var s = val.GetString();
+                        if (!string.IsNullOrEmpty(s)) return s;
+                    }
+                    else if (val.ValueKind == JsonValueKind.Number)
+                        return val.GetRawText();
+                    break;
+                }
+            }
+        }
+        return null;
     }
 
     private static JsonElement? NavigatePath(JsonElement root, string path)
@@ -140,38 +182,6 @@ public class JsonMetadata
 
     /// <summary>Extract the key from a JsonDocument.</summary>
     public string GetKey(JsonDocument json) => GetKey(json.RootElement);
-
-    /// <summary>
-    /// Returns a new JsonDocument with the key property set to the given value.
-    /// </summary>
-    public JsonDocument SetKey(JsonDocument json, string key)
-    {
-        var dict = new Dictionary<string, JsonElement>();
-
-        foreach (var prop in json.RootElement.EnumerateObject())
-            dict[prop.Name] = prop.Value.Clone();
-
-        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
-
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(dict);
-        return JsonDocument.Parse(bytes);
-    }
-
-    /// <summary>
-    /// Returns a new JsonElement with the key property set to the given value.
-    /// </summary>
-    public JsonElement SetKey(JsonElement json, string key)
-    {
-        using var doc = JsonDocument.Parse(json.GetRawText());
-        var dict = new Dictionary<string, JsonElement>();
-
-        foreach (var prop in doc.RootElement.EnumerateObject())
-            dict[prop.Name] = prop.Value.Clone();
-
-        dict[KeyProperty] = JsonSerializer.SerializeToElement(key);
-
-        return JsonSerializer.SerializeToElement(dict);
-    }
 
     /// <summary>
     /// Computes a deterministic hash of a JsonMetadata's property definitions.
@@ -238,6 +248,56 @@ public class JsonMetadata
             current = next;
         }
         return current;
+    }
+
+    /// <summary>
+    /// Evaluate whether a JSON document matches this schema's match expression.
+    /// Returns true if the discriminator matches or if no discriminator is set.
+    /// Supports simple equality expressions like <c>$.type == 'Person'</c>.
+    /// </summary>
+    public bool MatchesDocument(JsonElement root)
+    {
+        if (string.IsNullOrEmpty(Match)) return false;
+
+        // Parse discriminator: "$.path == 'value'" or "$.path != 'value'"
+        var disc = Match.AsSpan().Trim();
+        var eqIndex = disc.IndexOf("==");
+        var neqIndex = disc.IndexOf("!=");
+        bool isNegated = false;
+        int opIndex;
+
+        if (neqIndex >= 0)
+        {
+            opIndex = neqIndex;
+            isNegated = true;
+        }
+        else if (eqIndex >= 0)
+        {
+            opIndex = eqIndex;
+        }
+        else
+        {
+            return false; // unsupported operator
+        }
+
+        var pathPart = disc[..opIndex].Trim().ToString();
+        var valuePart = disc[(opIndex + 2)..].Trim().ToString().Trim('\'', '"');
+
+        // Navigate JSON path
+        var element = NavigatePath(root, pathPart);
+        if (element == null) return isNegated;
+
+        var actual = element.Value.ValueKind switch
+        {
+            JsonValueKind.String => element.Value.GetString(),
+            JsonValueKind.Number => element.Value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
+
+        var matches = string.Equals(actual, valuePart, StringComparison.OrdinalIgnoreCase);
+        return isNegated ? !matches : matches;
     }
 }
 

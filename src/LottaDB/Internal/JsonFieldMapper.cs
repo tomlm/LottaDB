@@ -21,7 +21,7 @@ internal class JsonFieldMapper<T> : IFieldMapper<T>
         _analyzer = analyzer;
     }
 
-    public string FieldName => LottaDB.OBJECT_FIELD;
+    public string FieldName => StorageFields.ObjectPrefix;
 
     public string PropertyName => FieldName;
 
@@ -62,5 +62,17 @@ internal class JsonFieldMapper<T> : IFieldMapper<T>
     public SortField CreateSortField(bool reverse)
         => throw new NotSupportedException();
 
-    private static string Serialize(T source) => JsonSerializer.Serialize(source, source?.GetType() ?? typeof(T));
+    private static string Serialize(T source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        object target = (object)source;
+        var json = target.GetJson();
+        if (json == null)
+        {
+            json = JsonSerializer.Serialize(source, source?.GetType() ?? typeof(T));
+            target.SetJson(json);
+        }
+        return json;
+    }
+
 }
