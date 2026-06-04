@@ -243,21 +243,24 @@ public class LottaDB : IDisposable
             var key = meta.GetKey(entity);
             lock (_lock)
             {
-                _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
-                if (kind == TriggerKind.Saved)
+                if (_indexWriter != null)
                 {
-                    var mapper = GetMapper<T>();
-                    var document = new Document();
-                    mapper.ToDocument(entity, document);
-                    var etag = entity.GetETag()
-                        ?? throw new InvalidOperationException(
-                            $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
-                    Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
-                    _indexWriter.AddDocument(document);
+                    _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+                    if (kind == TriggerKind.Saved)
+                    {
+                        var mapper = GetMapper<T>();
+                        var document = new Document();
+                        mapper.ToDocument(entity, document);
+                        var etag = entity.GetETag()
+                            ?? throw new InvalidOperationException(
+                                $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
+                        Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
+                        _indexWriter.AddDocument(document);
+                    }
+                    _indexDirty = true;
                 }
-                _indexDirty = true;
+                ScheduleRefresh();
             }
-            ScheduleRefresh();
             return Task.CompletedTask;
         });
         _handlers.AddOrUpdate(typeof(T),
@@ -1390,33 +1393,12 @@ public class LottaDB : IDisposable
     public async Task DeleteDatabaseAsync(CancellationToken cancellationToken = default)
     {
         await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
-        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
-
         lock (_lock)
         {
-            _indexWriter.Dispose();
-            _indexWriter = null!;
-            _lucene.Dispose();
-            _lucene = null!;
-
-            // Delete files inside the Lucene directory
-            foreach (var file in _directory.ListAll())
-                _directory.DeleteFile(file);
-
-            // For FSDirectory, also delete the folder itself
-            if (_directory is Lucene.Net.Store.FSDirectory fsDir)
-            {
-                var dirPath = fsDir.Directory.FullName;
-                _directory.Dispose();
-                _directory = null!;
-                try { System.IO.Directory.Delete(dirPath, true); } catch { }
-            }
-            else
-            {
-                _directory.Dispose();
-                _directory = null!;
-            }
+            _indexWriter.DeleteAll();
+            _indexWriter.Flush(true, true);
         }
+        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
     }
 
     // === Bulk operations ===
@@ -1724,11 +1706,11 @@ public class LottaDB : IDisposable
             {
                 // Build: (LottaDB db, object entity, TriggerKind kind, List<Exception> errors, CancellationToken ct)
                 //            => db.RunHandlersAsync<T>((T)entity, kind, errors, ct)
-                var dbParam     = Expression.Parameter(typeof(LottaDB),              "db");
-                var entityParam = Expression.Parameter(typeof(object),               "entity");
-                var kindParam   = Expression.Parameter(typeof(TriggerKind),          "kind");
-                var errorsParam = Expression.Parameter(typeof(List<Exception>),      "errors");
-                var ctParam     = Expression.Parameter(typeof(CancellationToken),    "ct");
+                var dbParam = Expression.Parameter(typeof(LottaDB), "db");
+                var entityParam = Expression.Parameter(typeof(object), "entity");
+                var kindParam = Expression.Parameter(typeof(TriggerKind), "kind");
+                var errorsParam = Expression.Parameter(typeof(List<Exception>), "errors");
+                var ctParam = Expression.Parameter(typeof(CancellationToken), "ct");
                 var body = Expression.Call(
                     dbParam,
                     m.MakeGenericMethod(t),
