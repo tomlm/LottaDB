@@ -3,9 +3,9 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>Lotta</RootNamespace>
-    <Description>In-memory storage provider for LottaDB. Adds UseMemory() extension method for fast unit testing with no disk I/O.</Description>
+    <Description>Filesystem storage provider for LottaDB. Adds UseFileSystem() extension method for local development with inspectable files on disk.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageTags>lottadb;azure;table-storage;lucene;memory;testing</PackageTags>
+    <PackageTags>lottadb;azure;table-storage;lucene;filesystem;local</PackageTags>
     <Version>4.0.1</Version>
     <AssemblyVersion>4.0.1.0</AssemblyVersion>
   </PropertyGroup>
@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
-    <PackageReference Include="Iciclecreek.Azure.Storage.Memory" Version="2.0.3" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.3" />
   </ItemGroup>
 
 </Project>

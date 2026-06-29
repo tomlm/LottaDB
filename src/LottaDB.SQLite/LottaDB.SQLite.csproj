@@ -6,8 +6,8 @@
     <Description>SQLite storage provider for LottaDB. Adds UseSQLite() extension method for local development with a single portable .db file.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>lottadb;azure;table-storage;lucene;sqlite;local</PackageTags>
-    <Version>4.0.0</Version>
-    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+    <Version>4.0.1</Version>
+    <AssemblyVersion>4.0.1.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
-    <PackageReference Include="Iciclecreek.Azure.Storage.SQLite" Version="2.0.3" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.SQLite" Version="2.0.4" />
   </ItemGroup>
 
 </Project>

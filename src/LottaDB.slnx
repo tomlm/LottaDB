@@ -13,6 +13,8 @@
   </Folder>
   <Project Path="LottaDB.Azure.Tests/LottaDB.Azure.Tests.csproj" />
   <Project Path="LottaDB.Benchmarks/LottaDB.Benchmarks.csproj" />
+  <Project Path="LottaDB.FileSystem.Tests/LottaDB.FileSystem.Tests.csproj" />
+  <Project Path="LottaDB.FileSystem/LottaDB.FileSystem.csproj" />
   <Project Path="LottaDB.Memory.Tests/LottaDB.Memory.Tests.csproj" />
   <Project Path="LottaDB.Memory/LottaDB.Memory.csproj" />
   <Project Path="LottaDB.SQLite.Tests/LottaDB.SQLite.Tests.csproj" />
