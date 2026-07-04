@@ -6,8 +6,8 @@
     <Description>LottaDB is a .NET library that stores POCO objects =&gt; Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>lottadb;azure;table-storage;blob-storage;lucene</PackageTags>
-    <Version>4.0.1</Version>
-    <AssemblyVersion>4.0.1.0</AssemblyVersion>
+    <Version>4.0.2</Version>
+    <AssemblyVersion>4.0.2.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>

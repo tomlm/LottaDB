@@ -34,6 +34,7 @@ public class SQLite_PolymorphismTests : PolymorphismTestBase { public SQLite_Pol
 public class SQLite_QueryMethodTests : QueryMethodTestBase { public SQLite_QueryMethodTests() : base(Tests.Configure) { } }
 public class SQLite_QueryTests : QueryTestBase { public SQLite_QueryTests() : base(Tests.Configure) { } }
 public class SQLite_RebuildIndexTests : RebuildIndexTestBase { public SQLite_RebuildIndexTests() : base(Tests.Configure) { } }
+public class SQLite_NearRealTimeSearchTests : NearRealTimeSearchTestBase { public SQLite_NearRealTimeSearchTests() : base(Tests.Configure) { } }
 public class SQLite_SearchTests : SearchTestBase { public SQLite_SearchTests() : base(Tests.Configure) { } }
 public class SQLite_StoreRegistrationTests : StoreRegistrationTestBase { public SQLite_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public SQLite_ToAsyncEnumerableTests() : base(Tests.Configure) { } }

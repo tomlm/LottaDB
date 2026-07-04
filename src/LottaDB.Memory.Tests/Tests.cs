@@ -33,6 +33,7 @@ public class Memory_PolymorphismTests : PolymorphismTestBase { public Memory_Pol
 public class Memory_QueryMethodTests : QueryMethodTestBase { public Memory_QueryMethodTests() : base(Tests.Configure) { } }
 public class Memory_QueryTests : QueryTestBase { public Memory_QueryTests() : base(Tests.Configure) { } }
 public class Memory_RebuildIndexTests : RebuildIndexTestBase { public Memory_RebuildIndexTests() : base(Tests.Configure) { } }
+public class Memory_NearRealTimeSearchTests : NearRealTimeSearchTestBase { public Memory_NearRealTimeSearchTests() : base(Tests.Configure) { } }
 public class Memory_SearchTests : SearchTestBase { public Memory_SearchTests() : base(Tests.Configure) { } }
 public class Memory_StoreRegistrationTests : StoreRegistrationTestBase { public Memory_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class Memory_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Memory_ToAsyncEnumerableTests() : base(Tests.Configure) { } }

@@ -35,6 +35,7 @@ public class Azure_PolymorphismTests : PolymorphismTestBase { public Azure_Polym
 public class Azure_QueryMethodTests : QueryMethodTestBase { public Azure_QueryMethodTests() : base(Tests.Configure) { } }
 public class Azure_QueryTests : QueryTestBase { public Azure_QueryTests() : base(Tests.Configure) { } }
 public class Azure_RebuildIndexTests : RebuildIndexTestBase { public Azure_RebuildIndexTests() : base(Tests.Configure) { } }
+public class Azure_NearRealTimeSearchTests : NearRealTimeSearchTestBase { public Azure_NearRealTimeSearchTests() : base(Tests.Configure) { } }
 public class Azure_SearchTests : SearchTestBase { public Azure_SearchTests() : base(Tests.Configure) { } }
 public class Azure_StoreRegistrationTests : StoreRegistrationTestBase { public Azure_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class Azure_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Azure_ToAsyncEnumerableTests() : base(Tests.Configure) { } }

@@ -1034,6 +1034,8 @@ public class LottaDB : IDisposable
                 if (_indexDirty)
                 {
                     _indexWriter?.Commit();
+                    _lucene.Refresh();
+                    _indexDirty = false;
                 }
 
                 // Re-check: did a write arrive while we were committing?
