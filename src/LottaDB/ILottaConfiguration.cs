@@ -41,6 +41,43 @@ public interface ILottaConfiguration
     /// </summary>
     public string[] AutoKeyProperties { get; set; }
 
+    /// <summary>
+    /// Milliseconds to wait for the cross-process Lucene write lock before throwing
+    /// <see cref="WriteLockUnavailableException"/>. Lucene polls at roughly one-second
+    /// granularity. 0 fails immediately. Default: 10000.
+    /// </summary>
+    public int WriteLockTimeout { get; set; }
+
+    /// <summary>
+    /// Milliseconds of write inactivity after which the Lucene write lock is committed and
+    /// released, so another process can take over the writer role. The lock is re-acquired
+    /// transparently on the next write. -1 holds it until <see cref="LottaDB.Dispose()"/> or
+    /// <see cref="LottaDB.ReleaseWriteLockAsync"/>. Default: 5000.
+    /// </summary>
+    public int WriteLockReleaseDelay { get; set; }
+
+    /// <summary>
+    /// Maximum milliseconds the write lock may be held continuously before it is voluntarily
+    /// released (and re-acquired on the next write) to give other processes a turn. 0 disables.
+    /// Only useful when several processes write continuously. Default: 0.
+    /// </summary>
+    public int WriteLockMaxHoldTime { get; set; }
+
+    /// <summary>
+    /// Maximum milliseconds a <c>Search</c> may serve results without re-checking the Lucene
+    /// directory for commits made by other processes. 0 checks on every search; -1 never polls.
+    /// This process's own writes are always immediately visible regardless of this setting.
+    /// Default: 1000.
+    /// </summary>
+    public int MaxSearchStaleness { get; set; }
+
+    /// <summary>
+    /// Open the database for reads only. Any write throws immediately instead of attempting to
+    /// acquire the cross-process write lock, and no schema manifest or index rebuild is written
+    /// at open. Default: false.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, queryable properties, etc.</param>

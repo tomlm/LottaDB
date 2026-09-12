@@ -18,7 +18,7 @@ public abstract class RebuildIndexTestBase : LottaTestBase
         Assert.Equal(2, before.Count);
 
         // Wipe the Lucene index to prove RebuildSearchIndex actually repopulates it
-        db.DeleteSearchIndex();
+        await db.DeleteSearchIndexAsync(ct);
         Assert.Empty(db.Search<Actor>().ToList());
 
         // Rebuild the index from Table Storage

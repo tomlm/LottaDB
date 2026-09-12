@@ -21,6 +21,21 @@ public class LottaConfiguration : ILottaConfiguration
     /// <inheritdoc/>
     public string[] AutoKeyProperties { get; set; } = ["id", "_id", "key", "_key", "pk", "primaryKey", "uuid", "guid"];
 
+    /// <inheritdoc/>
+    public int WriteLockTimeout { get; set; } = 10000;
+
+    /// <inheritdoc/>
+    public int WriteLockReleaseDelay { get; set; } = 5000;
+
+    /// <inheritdoc/>
+    public int WriteLockMaxHoldTime { get; set; } = 0;
+
+    /// <inheritdoc/>
+    public int MaxSearchStaleness { get; set; } = 1000;
+
+    /// <inheritdoc/>
+    public bool ReadOnly { get; set; } = false;
+
     /// <summary>
     /// Defines a storage configuration for a specific type. This is where you can specify how a type should be stored in the database,
     /// including table name, partition key, row key, etc. If not configured, Lotta will use default conventions to determine these values.

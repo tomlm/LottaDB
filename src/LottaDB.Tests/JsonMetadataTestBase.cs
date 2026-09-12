@@ -417,7 +417,7 @@ public abstract class JsonMetadataTestBase : LottaTestBase
         db.ReloadSearcher();
         Assert.Equal(2, db.Search(j => j.GetSchema() == "Person").Count());
 
-        db.DeleteSearchIndex();
+        await db.DeleteSearchIndexAsync(ct);
         Assert.Empty(db.Search(j => j.GetSchema() == "Person"));
 
         await db.RebuildSearchIndex(ct);
@@ -441,7 +441,7 @@ public abstract class JsonMetadataTestBase : LottaTestBase
         await db.SaveAsync(new Actor { Domain = "rebuild.test", Username = "typed-user", DisplayName = "Typed Doc" },
             ct);
 
-        db.DeleteSearchIndex();
+        await db.DeleteSearchIndexAsync(ct);
         Assert.Empty(db.Search(j => j.GetSchema() == "Person"));
         Assert.Empty(db.Search<Actor>().ToList());
 

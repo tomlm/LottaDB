@@ -23,8 +23,13 @@ public static class LottaCatalogExtensions
         catalog.LuceneDirectoryFactory = (path) =>
         {
             // Default: AzureDirectory persists index to blob storage with FSDirectory cache in temp.
-            // Each catalog+database gets its own cache folder to avoid corruption under parallel use.
-            var cachePath = Path.Combine(Path.GetTempPath(), "LottaCatalogCache",  path);
+            // The cache path is scoped per catalog+database AND per process. Without the process
+            // discriminator, two servers on the same host would share one cache folder — and the
+            // stale-file sweep below would delete segments the other process is actively reading.
+            // Segment files are immutable, so a per-process cache costs only a re-download after
+            // a restart. Process ids are recycled by the OS, which bounds the folder count.
+            var cachePath = Path.Combine(Path.GetTempPath(), "LottaCatalogCache",
+                $"p{Environment.ProcessId}", path);
             System.IO.Directory.CreateDirectory(cachePath);
             var cacheDirectory = FSDirectory.Open(cachePath);
 

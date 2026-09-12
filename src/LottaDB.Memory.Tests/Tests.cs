@@ -38,3 +38,4 @@ public class Memory_SearchTests : SearchTestBase { public Memory_SearchTests() :
 public class Memory_StoreRegistrationTests : StoreRegistrationTestBase { public Memory_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class Memory_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Memory_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Memory_VectorSearchTests : VectorSearchTestBase { public Memory_VectorSearchTests() : base(Tests.Configure) { } }
+public class Memory_WriteLockTests : WriteLockTestBase { public Memory_WriteLockTests() : base(Tests.Configure) { } }

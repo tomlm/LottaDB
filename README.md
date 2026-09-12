@@ -109,6 +109,74 @@ await db.ChangeAsync<Actor>("alice", actor =>
 
 Multiple concurrent writers on the same key are handled correctly -- ETag-based optimistic concurrency ensures no updates are lost.
 
+## Running Multiple Servers Against One Database
+
+Several server processes can open the same database at once. Reads never take a lock, so any
+number of servers can search and query concurrently.
+
+Writing is different: Lucene allows only one writer per index, enforced by a cross-process lock
+(a `write.lock` file on disk, a blob lease on Azure). LottaDB takes that lock **on the first
+write** rather than at open, and releases it after `WriteLockReleaseDelay` of write inactivity:
+
+```csharp
+var db = await catalog.GetDatabaseAsync("mydb", config =>
+{
+    config.Store<Note>();
+    config.WriteLockReleaseDelay = 5000;   // release the writer after 5s idle (default)
+    config.WriteLockTimeout     = 10000;   // wait this long for another server to let go
+    config.MaxSearchStaleness   = 1000;    // how stale a search may be, in ms
+});
+
+await db.SaveAsync(note);        // acquires the write lock here
+Console.WriteLine(db.HoldsWriteLock);   // true
+
+await db.ReleaseWriteLockAsync();       // or hand it off explicitly, e.g. on shutdown
+```
+
+If another server holds the writer, a write waits up to `WriteLockTimeout` and then throws
+`WriteLockUnavailableException`. The failure happens **before** anything is written, so no
+partial state is left behind.
+
+> **What this is and isn't.** This gives you lock-free readers and a writer role that migrates
+> between servers -- good for failover, for bursty writes, and for topologies where one server
+> writes at a time. It does **not** let two servers write continuously at once: a server under
+> sustained write load never goes idle, so it keeps the lock and the others time out. If every
+> server must write continuously, use a single designated writer with a queue instead.
+
+### Read-only replicas
+
+Set `ReadOnly` to make the intent explicit. Writes then throw immediately instead of competing
+for the lock, and the instance creates nothing at open -- no schema manifest, no index rebuild:
+
+```csharp
+var replica = await catalog.GetDatabaseAsync("mydb", config =>
+{
+    config.Store<Note>();
+    config.ReadOnly = true;
+});
+
+replica.Search<Note>("lucene");      // fine
+await replica.SaveAsync(note);        // throws InvalidOperationException
+```
+
+A read-only replica may safely start before the writer has ever created the index; it serves
+empty results and picks the index up as soon as it appears.
+
+### Things to know
+
+- **`GetAsync` and `GetManyAsync` are always fresh** -- they read Table Storage directly.
+  Only `Search` is eventually consistent, bounded by `MaxSearchStaleness`. Your own writes
+  are always visible to your own searches immediately.
+- **`On<T>` handlers run only on the server that performed the write.** Views written through
+  `db.SaveAsync` land in shared storage, so derived data stays correct -- but handlers with
+  side effects outside the database (emails, cache invalidation, broadcasts) fire on the
+  writing server only. Use a message bus for those.
+- **Azure multi-writer is best-effort.** `AzureDirectory` guards the index with a 60-second
+  blob lease renewed every 30 seconds. If renewals fail for long enough (a network blip, a
+  long GC pause, a suspended VM) the lease can expire while this process still believes it
+  holds the writer. Keeping `WriteLockReleaseDelay` short limits the exposure. The same
+  classic caveat applies to `FSDirectory` over NFS/SMB, where file locking is unreliable.
+
 ## Storage Providers
 
 LottaDB works with Azure Table Storage out of the box. For local development and testing, install a provider package:

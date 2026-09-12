@@ -37,3 +37,4 @@ public class FileSystem_SearchTests : SearchTestBase { public FileSystem_SearchT
 public class FileSystem_StoreRegistrationTests : StoreRegistrationTestBase { public FileSystem_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class FileSystem_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public FileSystem_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class FileSystem_VectorSearchTests : VectorSearchTestBase { public FileSystem_VectorSearchTests() : base(Tests.Configure) { } }
+public class FileSystem_WriteLockTests : WriteLockTestBase { public FileSystem_WriteLockTests() : base(Tests.Configure) { } }
