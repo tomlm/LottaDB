@@ -122,9 +122,9 @@ write** rather than at open, and releases it after `WriteLockReleaseDelay` of wr
 var db = await catalog.GetDatabaseAsync("mydb", config =>
 {
     config.Store<Note>();
-    config.WriteLockReleaseDelay = 5000;   // release the writer after 5s idle (default)
-    config.WriteLockTimeout     = 10000;   // wait this long for another server to let go
-    config.MaxSearchStaleness   = 1000;    // how stale a search may be, in ms
+    config.WriteLockReleaseDelay = 30000;  // release the writer after 30s idle (default)
+    config.WriteLockTimeout      = 10000;  // wait this long for another server to let go
+    config.MaxSearchStaleness    = 1000;   // how stale a search may be, in ms
 });
 
 await db.SaveAsync(note);        // acquires the write lock here
@@ -136,6 +136,24 @@ await db.ReleaseWriteLockAsync();       // or hand it off explicitly, e.g. on sh
 If another server holds the writer, a write waits up to `WriteLockTimeout` and then throws
 `WriteLockUnavailableException`. The failure happens **before** anything is written, so no
 partial state is left behind.
+
+### Tuning `WriteLockReleaseDelay`
+
+This is a trade between write latency and handover latency, and it is worth setting
+deliberately. Writes spaced **closer together** than the delay cost nothing extra — the writer
+is simply kept. Writes spaced **further apart** rebuild the `IndexWriter` every single time:
+
+| | Mean | Allocated |
+|---|---|---|
+| Save, writer already held | ~0.4 ms | 54 KB |
+| Save, writer re-acquired | ~8 ms | 486 KB |
+
+That is ~20x slower and 9x the allocations, measured on SQLite (a local `FSDirectory`) via
+`WriteLockChurnBenchmarks`. On Azure it is worse, because the lock is a blob lease and each
+acquire/release is a network round trip.
+
+So set it comfortably above your normal gap between writes. Lower it only when you need another
+server to be able to take over sooner — the default of 30s means a failover waits up to 30s.
 
 > **What this is and isn't.** This gives you lock-free readers and a writer role that migrates
 > between servers -- good for failover, for bursty writes, and for topologies where one server

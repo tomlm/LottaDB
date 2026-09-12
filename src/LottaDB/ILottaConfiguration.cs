@@ -52,7 +52,15 @@ public interface ILottaConfiguration
     /// Milliseconds of write inactivity after which the Lucene write lock is committed and
     /// released, so another process can take over the writer role. The lock is re-acquired
     /// transparently on the next write. -1 holds it until <see cref="LottaDB.Dispose()"/> or
-    /// <see cref="LottaDB.ReleaseWriteLockAsync"/>. Default: 5000.
+    /// <see cref="LottaDB.ReleaseWriteLockAsync"/>. Default: 30000.
+    /// <para>
+    /// This is a trade between write latency and handover latency. Writes spaced closer together
+    /// than this cost nothing, because the writer is simply kept. Writes spaced further apart
+    /// rebuild the <c>IndexWriter</c> every time: measured at roughly 20x the cost of a save that
+    /// already holds the writer (~8ms vs ~0.4ms on a local FSDirectory, and more on Azure where
+    /// the lock is a blob lease). Set it comfortably above your normal gap between writes; lower
+    /// it only if you need another server to be able to take over sooner.
+    /// </para>
     /// </summary>
     public int WriteLockReleaseDelay { get; set; }
 

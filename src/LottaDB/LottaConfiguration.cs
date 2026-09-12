@@ -25,7 +25,7 @@ public class LottaConfiguration : ILottaConfiguration
     public int WriteLockTimeout { get; set; } = 10000;
 
     /// <inheritdoc/>
-    public int WriteLockReleaseDelay { get; set; } = 5000;
+    public int WriteLockReleaseDelay { get; set; } = 30000;
 
     /// <inheritdoc/>
     public int WriteLockMaxHoldTime { get; set; } = 0;
