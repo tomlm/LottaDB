@@ -143,6 +143,18 @@ partial state is left behind.
 > sustained write load never goes idle, so it keeps the lock and the others time out. If every
 > server must write continuously, use a single designated writer with a queue instead.
 
+For that sustained-contention case there is `WriteLockMaxHoldTime`, which forces a writer to
+yield after holding the lock for a given time:
+
+```csharp
+config.WriteLockMaxHoldTime = 30000;   // yield after 30s of continuously holding the writer
+```
+
+Note that yielding costs a pause: after giving up the lock, the instance will not re-acquire it
+for about 1.5 seconds. Lucene's lock acquisition polls once per second, so without that back-off
+this process would simply re-take the lock on its next write and no other server would ever
+observe it free. Treat this as a fairness valve, not a throughput feature.
+
 ### Read-only replicas
 
 Set `ReadOnly` to make the intent explicit. Writes then throw immediately instead of competing

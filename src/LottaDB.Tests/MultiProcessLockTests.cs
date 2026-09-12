@@ -234,6 +234,61 @@ public class MultiProcessLockTests
     }
 
     /// <summary>
+    /// A server writing continuously never goes idle, so the idle-release path never fires and
+    /// it would keep the writer role forever. <c>WriteLockMaxHoldTime</c> exists to force it to
+    /// yield anyway — and the contract that matters is that another process actually gets a
+    /// turn, not that a flag momentarily flips.
+    /// </summary>
+    [Fact]
+    public async Task WriteLockMaxHoldTime_UnderContinuousWrites_LetsAnotherProcessWrite()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (c1, c2) = CreateSharedCatalogs();
+        using var _1 = c1;
+        using var _2 = c2;
+
+        var busy = await OpenAsync(c1, ct, config =>
+        {
+            config.WriteLockReleaseDelay = -1;   // never yield on idle ...
+            config.WriteLockMaxHoldTime = 200;   // ... but do yield after holding this long
+        });
+
+        var other = await OpenAsync(c2, ct, config =>
+        {
+            config.WriteLockReleaseDelay = -1;
+            config.WriteLockTimeout = 20000;     // fails the test if the turn never comes
+        });
+
+        using var stop = new CancellationTokenSource();
+        var keepWriting = Task.Run(async () =>
+        {
+            for (var i = 0; !stop.IsCancellationRequested; i++)
+            {
+                // Once the other process takes over, our writes fail — that is the point.
+                try { await busy.SaveAsync(new Actor { Username = $"busy{i}", DisplayName = "busy" }, stop.Token); }
+                catch (WriteLockUnavailableException) { }
+                catch (OperationCanceledException) { break; }
+
+                try { await Task.Delay(10, stop.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            // Throws WriteLockUnavailableException after WriteLockTimeout if max-hold never fires.
+            await other.SaveAsync(new Actor { Username = "takeover", DisplayName = "Took over" }, ct);
+        }
+        finally
+        {
+            stop.Cancel();
+            await keepWriting;
+        }
+
+        Assert.NotNull(await other.GetAsync<Actor>("takeover", ct));
+    }
+
+    /// <summary>
     /// A read replica that boots before the writer has ever created the index must not crash —
     /// losing the startup race is normal when N readers and a writer start together. It serves
     /// empty results and picks the index up as soon as it appears.

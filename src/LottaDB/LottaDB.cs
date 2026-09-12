@@ -73,6 +73,14 @@ public class LottaDB : IDisposable
     private long _lastRefreshTimestamp;
     private long _writerAcquiredTimestamp;
 
+    // Back-off after a WriteLockMaxHoldTime yield, so a waiting process can win the lock
+    // before this one re-acquires. Measured from _cooldownEpoch. See AcquireWriterAsync.
+    private readonly long _cooldownEpoch = Stopwatch.GetTimestamp();
+    private long _writerCooldownUntilMs;
+
+    // Must exceed Lucene's Lock.Obtain poll interval (1s) or a waiter never gets a look in.
+    private const int WriterYieldCooldownMs = 1500;
+
     private volatile bool _indexDirty;
     private bool _disposed;
     private readonly CancellationTokenSource _disposeCts = new();
@@ -273,6 +281,18 @@ public class LottaDB : IDisposable
         await _writerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // After yielding on WriteLockMaxHoldTime, stay out of the way long enough for a
+            // waiting process to actually win the lock. Lucene's Lock.Obtain polls once per
+            // second, so re-acquiring immediately (the next write can be milliseconds later)
+            // would almost always beat the waiter back to it and the yield would achieve
+            // nothing. Only ever set by a max-hold release, so normal writes never pay this.
+            while (_indexWriter == null)
+            {
+                var cooldown = (int)(_writerCooldownUntilMs - Stopwatch.GetElapsedTime(_cooldownEpoch).TotalMilliseconds);
+                if (cooldown <= 0) break;
+                await Task.Delay(Math.Min(cooldown, 200), cancellationToken).ConfigureAwait(false);
+            }
+
             if (_indexWriter == null)
             {
                 IndexWriter writer;
@@ -1471,9 +1491,23 @@ public class LottaDB : IDisposable
 
                     if (wait <= 0)
                     {
+                        // A max-hold yield must be followed by a back-off, or this process's
+                        // next write re-takes the lock before any waiter's 1s poll sees it free.
+                        var yielding = maxHoldExpired;
                         if (await TryReleaseWriterAsync(TimeSpan.FromSeconds(5), _disposeCts.Token)
                                 .ConfigureAwait(false))
+                        {
+                            if (yielding)
+                            {
+                                lock (_lock)
+                                {
+                                    _writerCooldownUntilMs =
+                                        (long)Stopwatch.GetElapsedTime(_cooldownEpoch).TotalMilliseconds
+                                        + WriterYieldCooldownMs;
+                                }
+                            }
                             return;     // released -- the next write restarts this loop
+                        }
                         wait = 50;      // writes still draining; try again shortly
                     }
 

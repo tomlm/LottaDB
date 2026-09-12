@@ -58,8 +58,16 @@ public interface ILottaConfiguration
 
     /// <summary>
     /// Maximum milliseconds the write lock may be held continuously before it is voluntarily
-    /// released (and re-acquired on the next write) to give other processes a turn. 0 disables.
-    /// Only useful when several processes write continuously. Default: 0.
+    /// released to give other processes a turn. 0 disables. Only useful when several processes
+    /// write continuously — otherwise <see cref="WriteLockReleaseDelay"/> already hands the
+    /// writer role over whenever writes go idle. Default: 0.
+    /// <para>
+    /// After yielding, this process will not re-acquire the writer for about 1.5 seconds. That
+    /// back-off is required rather than incidental: Lucene's lock acquisition polls once per
+    /// second, so re-taking the lock on the next write — potentially milliseconds later — would
+    /// beat any waiting process back to it and the yield would accomplish nothing. Expect writes
+    /// on this instance to stall for that back-off each time the limit is hit.
+    /// </para>
     /// </summary>
     public int WriteLockMaxHoldTime { get; set; }
 
