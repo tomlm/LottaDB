@@ -56,10 +56,11 @@ public interface ILottaConfiguration
     /// <para>
     /// This is a trade between write latency and handover latency. Writes spaced closer together
     /// than this cost nothing, because the writer is simply kept. Writes spaced further apart
-    /// rebuild the <c>IndexWriter</c> every time: measured at roughly 20x the cost of a save that
-    /// already holds the writer (~8ms vs ~0.4ms on a local FSDirectory, and more on Azure where
-    /// the lock is a blob lease). Set it comfortably above your normal gap between writes; lower
-    /// it only if you need another server to be able to take over sooner.
+    /// rebuild the <c>IndexWriter</c> every time, which measures at roughly +9ms per write on a
+    /// local FSDirectory (SQLite) and +30ms on Azure, where the lock is a blob lease and segment
+    /// files re-sync through the local cache — and the Azure figure comes from Azurite, so real
+    /// Azure is higher again. Set it comfortably above your normal gap between writes; lower it
+    /// only if you need another server to be able to take over sooner.
     /// </para>
     /// </summary>
     public int WriteLockReleaseDelay { get; set; }

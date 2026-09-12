@@ -21,18 +21,22 @@ namespace Lotta.Benchmarks;
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
-public class WriteLockChurnBenchmarks
+public abstract class WriteLockChurnBenchmarksBase
 {
     private LottaCatalog _catalog = null!;
     private LottaDB _db = null!;
-    private string _tempPath = "";
     private int _counter;
+
+    /// <summary>Provider-specific catalog configuration.</summary>
+    protected abstract void Configure(LottaCatalog catalog);
+
+    /// <summary>Called after the catalog is disposed, for any provider-specific cleanup.</summary>
+    protected virtual void Cleanup() { }
 
     [GlobalSetup]
     public async Task GlobalSetupAsync()
     {
-        _tempPath = Path.Combine(Path.GetTempPath(), $"LottaChurnBench_{Guid.NewGuid():N}");
-        _catalog = new LottaCatalog("WriteLockChurn", c => c.UseSQLite(_tempPath));
+        _catalog = new LottaCatalog(GetType().Name, Configure);
         _db = await _catalog.GetDatabaseAsync("bench", config =>
         {
             config.Store<BenchmarkDocument>();
@@ -47,7 +51,7 @@ public class WriteLockChurnBenchmarks
     {
         await _db.DeleteDatabaseAsync();
         _catalog.Dispose();
-        try { Directory.Delete(_tempPath, true); } catch { }
+        Cleanup();
     }
 
     private BenchmarkDocument NextDocument() => new()
@@ -88,4 +92,38 @@ public class WriteLockChurnBenchmarks
     {
         await _db.SaveAsync(NextDocument());
     }
+}
+
+/// <summary>
+/// Churn cost on SQLite — the Lucene index is a local <c>FSDirectory</c>, so the write lock is
+/// an OS file lock and re-acquiring it is local file I/O.
+/// </summary>
+public class SQLite_WriteLockChurnBenchmarks : WriteLockChurnBenchmarksBase
+{
+    private readonly string _tempPath =
+        Path.Combine(Path.GetTempPath(), $"LottaChurnBench_{Guid.NewGuid():N}");
+
+    protected override void Configure(LottaCatalog catalog) => catalog.UseSQLite(_tempPath);
+
+    protected override void Cleanup()
+    {
+        try { Directory.Delete(_tempPath, true); } catch { }
+    }
+}
+
+/// <summary>
+/// Churn cost on Azure — the index lives in blob storage via <c>AzureDirectory</c>, so the write
+/// lock is a blob lease and re-acquiring it is a network round trip, on top of syncing segment
+/// files through the local cache.
+///
+/// <para>
+/// Requires Azurite (or real Azure Storage). Note that Azurite is a local emulator, so these
+/// numbers <b>understate</b> real Azure: the lease acquire/release round trips are sub-millisecond
+/// here and tens of milliseconds against the real service.
+/// </para>
+/// </summary>
+public class Azure_WriteLockChurnBenchmarks : WriteLockChurnBenchmarksBase
+{
+    protected override void Configure(LottaCatalog catalog) =>
+        catalog.UseAzure("UseDevelopmentStorage=true");
 }

@@ -143,14 +143,21 @@ This is a trade between write latency and handover latency, and it is worth sett
 deliberately. Writes spaced **closer together** than the delay cost nothing extra — the writer
 is simply kept. Writes spaced **further apart** rebuild the `IndexWriter` every single time:
 
-| | Mean | Allocated |
-|---|---|---|
-| Save, writer already held | ~0.4 ms | 54 KB |
-| Save, writer re-acquired | ~8 ms | 486 KB |
+| Provider | Writer already held | Writer re-acquired | Extra per write |
+|---|---|---|---|
+| SQLite (local `FSDirectory`) | ~0.4 ms / 54 KB | ~9.4 ms / 484 KB | **~9 ms** |
+| Azure (`AzureDirectory`, Azurite) | ~2.2 ms / 185 KB | ~32 ms / 1250 KB | **~30 ms** |
 
-That is ~20x slower and 9x the allocations, measured on SQLite (a local `FSDirectory`) via
-`WriteLockChurnBenchmarks`. On Azure it is worse, because the lock is a blob lease and each
-acquire/release is a network round trip.
+Measured with `WriteLockChurnBenchmarks`. Two things to read out of it:
+
+- **Azure pays about 3x more in absolute terms** (~30 ms vs ~9 ms of added latency), because the
+  lock is a blob lease and re-acquiring also re-syncs segment files through the local cache.
+- The *multiplier* is actually smaller on Azure (~15x vs ~22x) only because an ordinary Azure
+  write is already slower. Absolute added latency is the number that matters.
+
+Those Azure figures come from **Azurite running locally, so they understate real Azure**: a blob
+lease acquire and release are sub-millisecond against the emulator and tens of milliseconds
+against the real service. Budget accordingly.
 
 So set it comfortably above your normal gap between writes. Lower it only when you need another
 server to be able to take over sooner — the default of 30s means a failover waits up to 30s.
