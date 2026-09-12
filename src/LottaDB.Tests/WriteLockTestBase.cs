@@ -115,6 +115,65 @@ public abstract class WriteLockTestBase : LottaTestBase
         Assert.Single(db.Search<Actor>().ToList());
     }
 
+    /// <summary>
+    /// ReleaseWriteLockAsync drains with Timeout.InfiniteTimeSpan, which is -1ms. A naive
+    /// "elapsed > timeout" check treats that as already expired, abandons the release on the
+    /// first poll and reports success while the lock is still held.
+    /// </summary>
+    [Fact]
+    public async Task ReleaseWriteLockAsync_WithWriteInFlight_StillReleases()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(config => config.WriteLockReleaseDelay = -1, cancellationToken: ct);
+
+        // Keep a write in flight so the drain loop actually runs at least one iteration.
+        var gate = new TaskCompletionSource();
+        using var handler = db.On<Note>(async (note, kind, database, token) =>
+        {
+            await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+        });
+
+        var slowWrite = db.SaveAsync(new Note { NoteId = "n1", Content = "hi", AuthorId = "alice" }, ct);
+        await WaitUntil(() => db.HoldsWriteLock, "the slow write to take the write lock");
+
+        var release = db.ReleaseWriteLockAsync(ct);
+        await Task.Delay(150, ct);
+
+        Assert.False(release.IsCompleted, "release must wait for the in-flight write to drain");
+
+        gate.SetResult();
+        await slowWrite;
+        await release;
+
+        Assert.False(db.HoldsWriteLock);
+    }
+
+    /// <summary>
+    /// Under continuous writes every write refreshes the idle timer, so the debounce loop never
+    /// drains and the hold phase is never reached. WriteLockMaxHoldTime must still force the
+    /// writer to be yielded — that workload is the only reason the setting exists.
+    /// </summary>
+    [Fact]
+    public async Task WriteLockMaxHoldTime_UnderContinuousWrites_StillReleases()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(config =>
+        {
+            config.WriteLockReleaseDelay = -1;      // never release on idle
+            config.WriteLockMaxHoldTime = 300;      // but do yield after 300ms of holding
+        }, cancellationToken: ct);
+
+        var released = false;
+        for (int i = 0; i < 200 && !released; i++)
+        {
+            await db.SaveAsync(new Actor { Username = $"u{i}", DisplayName = $"U{i}" }, ct);
+            await Task.Delay(20, ct);
+            released = !db.HoldsWriteLock;
+        }
+
+        Assert.True(released, "WriteLockMaxHoldTime should have yielded the writer despite continuous writes");
+    }
+
     [Fact]
     public async Task ReleaseWriteLockAsync_WhenNotHeld_IsNoOp()
     {

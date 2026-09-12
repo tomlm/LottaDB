@@ -40,6 +40,9 @@ public class LottaDB : IDisposable
     private long _lastWriteTimestamp;
     private Task? _refreshTask;
 
+    // Whether RefreshLoopAsync is live. Guarded by _lock — see StartRefreshLoopIfNeededLocked.
+    private bool _refreshLoopRunning;
+
     // The Lucene IndexWriter owns the cross-process write lock (write.lock on FSDirectory,
     // a blob lease on AzureDirectory). It is created lazily on the first write and released
     // after WriteLockReleaseDelay of inactivity, so multiple processes can share a database.
@@ -308,10 +311,14 @@ public class LottaDB : IDisposable
         await _writerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Timeout.InfiniteTimeSpan is -1ms, so a naive elapsed > drainTimeout comparison is
+            // true on the very first check and would abandon the release while reporting success.
+            var unbounded = drainTimeout < TimeSpan.Zero;
+
             var start = Stopwatch.GetTimestamp();
             while (Volatile.Read(ref _activeWriters) > 0)
             {
-                if (Stopwatch.GetElapsedTime(start) > drainTimeout)
+                if (!unbounded && Stopwatch.GetElapsedTime(start) > drainTimeout)
                     return false;
                 await Task.Delay(10, cancellationToken).ConfigureAwait(false);
             }
@@ -1326,11 +1333,26 @@ public class LottaDB : IDisposable
             if (_disposed || _indexWriter == null) return;
 
             _lastWriteTimestamp = Stopwatch.GetTimestamp();
-            if (_refreshTask == null || _refreshTask.IsCompleted)
-            {
-                _refreshTask = RefreshLoopAsync();
-            }
+            StartRefreshLoopIfNeededLocked();
         }
+    }
+
+    /// <summary>
+    /// Start the refresh/release loop unless one is already running. Callers must hold
+    /// <c>_lock</c>.
+    /// </summary>
+    /// <remarks>
+    /// Tracked with an explicit flag rather than <c>_refreshTask.IsCompleted</c>: a task that
+    /// has decided to return has not yet transitioned to completed, so a write landing in that
+    /// window would see "still running", decline to start a replacement, and then be left with
+    /// no loop at all — holding the write lock indefinitely. The flag is cleared by the loop
+    /// itself under this same lock, which closes that race.
+    /// </remarks>
+    private void StartRefreshLoopIfNeededLocked()
+    {
+        if (_refreshLoopRunning) return;
+        _refreshLoopRunning = true;
+        _refreshTask = RefreshLoopAsync();
     }
 
     private void ScheduleRefresh()
@@ -1339,11 +1361,7 @@ public class LottaDB : IDisposable
         {
             _indexDirty = true;
             _lastWriteTimestamp = Stopwatch.GetTimestamp();
-
-            if (_refreshTask == null || _refreshTask.IsCompleted)
-            {
-                _refreshTask = RefreshLoopAsync();
-            }
+            StartRefreshLoopIfNeededLocked();
         }
     }
 
@@ -1364,6 +1382,7 @@ public class LottaDB : IDisposable
             {
                 // ---- commit / debounce phase ----
                 var delayMs = _config.AutoCommitDelay;
+                var maxHoldExpired = false;
                 while (true)
                 {
                     await Task.Delay(delayMs, _disposeCts.Token).ConfigureAwait(false);
@@ -1371,6 +1390,23 @@ public class LottaDB : IDisposable
                     lock (_lock)
                     {
                         if (_disposed) return;
+
+                        // Max hold is deliberately evaluated here as well as in the hold phase.
+                        // Under continuous writes every write refreshes _lastWriteTimestamp, so
+                        // this loop would debounce forever and the hold phase — where the limit
+                        // used to be checked — would never be reached. That is exactly the
+                        // workload WriteLockMaxHoldTime exists to serve.
+                        if (MaxHoldExceededLocked())
+                        {
+                            if (_indexDirty)
+                            {
+                                _indexWriter?.Commit();
+                                RefreshReadersLocked();
+                                _indexDirty = false;
+                            }
+                            maxHoldExpired = true;
+                            break;
+                        }
 
                         var elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
                         var remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
@@ -1401,7 +1437,11 @@ public class LottaDB : IDisposable
 
                 // ---- hold phase: wait out the idle window, then release the write lock ----
                 var hold = _config.WriteLockReleaseDelay;
-                if (hold < 0) return;   // configured to hold until Dispose/ReleaseWriteLockAsync
+
+                // A max-hold expiry releases even when the caller asked to hold indefinitely --
+                // yielding the writer role is the whole point of the setting.
+                if (hold < 0 && !maxHoldExpired)
+                    return;   // configured to hold until Dispose/ReleaseWriteLockAsync
 
                 var backToCommit = false;
                 while (true)
@@ -1411,13 +1451,21 @@ public class LottaDB : IDisposable
                     {
                         if (_disposed) return;
                         if (_indexWriter == null) return;          // already released elsewhere
-                        if (_indexDirty) { backToCommit = true; break; }
 
-                        wait = hold - (int)Stopwatch.GetElapsedTime(_lastWriteTimestamp).TotalMilliseconds;
-                        if (_config.WriteLockMaxHoldTime > 0)
+                        if (maxHoldExpired || MaxHoldExceededLocked())
                         {
-                            wait = Math.Min(wait, _config.WriteLockMaxHoldTime
-                                - (int)Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds);
+                            wait = 0;
+                        }
+                        else
+                        {
+                            if (_indexDirty) { backToCommit = true; break; }
+
+                            wait = hold - (int)Stopwatch.GetElapsedTime(_lastWriteTimestamp).TotalMilliseconds;
+                            if (_config.WriteLockMaxHoldTime > 0)
+                            {
+                                wait = Math.Min(wait, _config.WriteLockMaxHoldTime
+                                    - (int)Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds);
+                            }
                         }
                     }
 
@@ -1439,6 +1487,26 @@ public class LottaDB : IDisposable
         {
             // _disposeCts fired -- Dispose is draining us.
         }
+        finally
+        {
+            // Cleared under the lock so a write racing our exit reliably starts a replacement
+            // loop rather than seeing a task that has decided to return but not yet completed.
+            lock (_lock)
+            {
+                _refreshLoopRunning = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the writer has been held longer than <see cref="ILottaConfiguration.WriteLockMaxHoldTime"/>.
+    /// Callers must hold <c>_lock</c>.
+    /// </summary>
+    private bool MaxHoldExceededLocked()
+    {
+        var max = _config.WriteLockMaxHoldTime;
+        if (max <= 0 || _indexWriter == null) return false;
+        return Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds >= max;
     }
 
     // === On<T> (runtime registration) ===
@@ -1798,12 +1866,15 @@ public class LottaDB : IDisposable
                 writer.Commit();
                 _indexDirty = false;
             }
+
+            // Remove the manifest while still holding the writer. Releasing first would open a
+            // window where another process sees a live manifest, opens the database and writes
+            // rows we have already deleted — which the manifest removal would then orphan.
+            await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
         }
 
         // Don't keep holding the cross-process write lock for a database we just deleted.
         await ReleaseWriteLockAsync(cancellationToken);
-
-        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
     }
 
     // === Bulk operations ===

@@ -189,7 +189,33 @@ public class LottaCatalog : IDisposable
             }
 
             if (ownsRebuild)
-                await db.RebuildSearchIndex(cancellationToken);
+            {
+                try
+                {
+                    await db.RebuildSearchIndex(cancellationToken);
+                }
+                catch
+                {
+                    // The manifest already advertises the new schema, so without a rollback a
+                    // failed rebuild (cancelled, lost the writer, crashed mid-pass) would leave
+                    // a stale or half-cleared index permanently associated with it — every
+                    // later open would compare equal and skip the rebuild. Put the old schema
+                    // back so the next process retries.
+                    try
+                    {
+                        var rollback = new TableEntity(ManifestPartitionKey, databaseId)
+                        {
+                            { SchemaColumn, storedSchema }
+                        };
+                        await table.UpsertEntityAsync(rollback, TableUpdateMode.Replace, cancellationToken);
+                    }
+                    catch
+                    {
+                        // Rollback is best-effort — surface the original rebuild failure.
+                    }
+                    throw;
+                }
+            }
         }
         // storedSchema == currentSchema: nothing to write.
 

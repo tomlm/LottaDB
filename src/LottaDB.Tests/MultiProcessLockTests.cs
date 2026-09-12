@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
 using Lucene.Net.Store;
