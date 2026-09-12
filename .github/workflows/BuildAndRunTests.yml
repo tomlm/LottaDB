@@ -16,6 +16,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      # Fail loudly if the vendored embedding model is missing, rather than silently
+      # falling back to downloading it from HuggingFace. See models/README.md.
+      LOTTA_REQUIRE_LOCAL_MODEL: '1'
+
     steps:
     - name: Checkout LottaDB.slnx
       uses: actions/checkout@v4
@@ -24,6 +29,20 @@ jobs:
       uses: actions/setup-dotnet@v3
       with:
         dotnet-version: 10.0.x
+
+    # The vector-search tests need an ONNX embedding model. Fetch it from our own release
+    # asset rather than HuggingFace, which rate-limited CI (429) and failed the build.
+    # Cached, so it is usually not downloaded at all. See models/README.md.
+    - name: Cache test model
+      id: cache-test-model
+      uses: actions/cache@v4
+      with:
+        path: models/bge-micro-v2
+        key: test-model-bge-micro-v2-test-assets-v1
+
+    - name: Fetch test model
+      if: steps.cache-test-model.outputs.cache-hit != 'true'
+      run: bash scripts/fetch-test-model.sh
 
     - name: Restore dependencies
       run: dotnet restore src/LottaDB.slnx

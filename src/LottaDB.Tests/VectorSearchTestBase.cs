@@ -8,13 +8,10 @@ namespace Lotta.Tests;
 
 public abstract class VectorSearchTestBase : LottaTestBase
 {
-    // Shared embedding generator — loaded once across all similarity tests
+    // Shared embedding generator — loaded once across all similarity tests.
+    // Uses the model vendored at /models/bge-micro-v2 so no download happens. See LocalModel.
     private static readonly Lazy<IEmbeddingGenerator<string, Embedding<float>>> _generator =
-        new(() => new LocalEmbeddingGenerator(new LocalEmbeddingsOptions
-        {
-            ModelName = "SmartComponents/bge-micro-v2",
-            PreferQuantized = true
-        }));
+        new(() => new LocalEmbeddingGenerator(LocalModel.Options()));
 
     protected VectorSearchTestBase(Action<LottaCatalog> config) : base(config) { Catalog.EmbeddingGenerator = _generator.Value; }
 

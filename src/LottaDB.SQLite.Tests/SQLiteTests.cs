@@ -39,3 +39,4 @@ public class SQLite_SearchTests : SearchTestBase { public SQLite_SearchTests() :
 public class SQLite_StoreRegistrationTests : StoreRegistrationTestBase { public SQLite_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public SQLite_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Tests.Configure) { } }
+public class SQLite_WriteLockTests : WriteLockTestBase { public SQLite_WriteLockTests() : base(Tests.Configure) { } }

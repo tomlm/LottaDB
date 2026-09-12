@@ -41,6 +41,60 @@ public interface ILottaConfiguration
     /// </summary>
     public string[] AutoKeyProperties { get; set; }
 
+    /// <summary>
+    /// Milliseconds to wait for the cross-process Lucene write lock before throwing
+    /// <see cref="WriteLockUnavailableException"/>. Lucene polls at roughly one-second
+    /// granularity. 0 fails immediately. Default: 10000.
+    /// </summary>
+    public int WriteLockTimeout { get; set; }
+
+    /// <summary>
+    /// Milliseconds of write inactivity after which the Lucene write lock is committed and
+    /// released, so another process can take over the writer role. The lock is re-acquired
+    /// transparently on the next write. -1 holds it until <see cref="LottaDB.Dispose()"/> or
+    /// <see cref="LottaDB.ReleaseWriteLockAsync"/>. Default: 30000.
+    /// <para>
+    /// This is a trade between write latency and handover latency. Writes spaced closer together
+    /// than this cost nothing, because the writer is simply kept. Writes spaced further apart
+    /// rebuild the <c>IndexWriter</c> every time, which measures at roughly +9ms per write on a
+    /// local FSDirectory (SQLite) and +30ms on Azure, where the lock is a blob lease and segment
+    /// files re-sync through the local cache — and the Azure figure comes from Azurite, so real
+    /// Azure is higher again. Set it comfortably above your normal gap between writes; lower it
+    /// only if you need another server to be able to take over sooner.
+    /// </para>
+    /// </summary>
+    public int WriteLockReleaseDelay { get; set; }
+
+    /// <summary>
+    /// Maximum milliseconds the write lock may be held continuously before it is voluntarily
+    /// released to give other processes a turn. 0 disables. Only useful when several processes
+    /// write continuously — otherwise <see cref="WriteLockReleaseDelay"/> already hands the
+    /// writer role over whenever writes go idle. Default: 0.
+    /// <para>
+    /// After yielding, this process will not re-acquire the writer for about 1.5 seconds. That
+    /// back-off is required rather than incidental: Lucene's lock acquisition polls once per
+    /// second, so re-taking the lock on the next write — potentially milliseconds later — would
+    /// beat any waiting process back to it and the yield would accomplish nothing. Expect writes
+    /// on this instance to stall for that back-off each time the limit is hit.
+    /// </para>
+    /// </summary>
+    public int WriteLockMaxHoldTime { get; set; }
+
+    /// <summary>
+    /// Maximum milliseconds a <c>Search</c> may serve results without re-checking the Lucene
+    /// directory for commits made by other processes. 0 checks on every search; -1 never polls.
+    /// This process's own writes are always immediately visible regardless of this setting.
+    /// Default: 1000.
+    /// </summary>
+    public int MaxSearchStaleness { get; set; }
+
+    /// <summary>
+    /// Open the database for reads only. Any write throws immediately instead of attempting to
+    /// acquire the cross-process write lock, and no schema manifest or index rebuild is written
+    /// at open. Default: false.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
     /// <summary>Register an object type. Config from [Key]/[Queryable] attributes, or fluent override.</summary>
     /// <typeparam name="T">The object type to register.</typeparam>
     /// <param name="configure">Optional fluent configuration for key strategy, queryable properties, etc.</param>

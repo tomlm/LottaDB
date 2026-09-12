@@ -40,3 +40,4 @@ public class Azure_SearchTests : SearchTestBase { public Azure_SearchTests() : b
 public class Azure_StoreRegistrationTests : StoreRegistrationTestBase { public Azure_StoreRegistrationTests() : base(Tests.Configure) { } }
 public class Azure_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Azure_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Azure_VectorSearchTests : VectorSearchTestBase { public Azure_VectorSearchTests() : base(Tests.Configure) { } }
+public class Azure_WriteLockTests : WriteLockTestBase { public Azure_WriteLockTests() : base(Tests.Configure) { } }

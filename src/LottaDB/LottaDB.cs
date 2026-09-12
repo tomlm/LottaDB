@@ -39,7 +39,48 @@ public class LottaDB : IDisposable
     private ReadOnlyLuceneDataProvider _lucene;
     private long _lastWriteTimestamp;
     private Task? _refreshTask;
-    private IndexWriter _indexWriter;
+
+    // Whether RefreshLoopAsync is live. Guarded by _lock — see StartRefreshLoopIfNeededLocked.
+    private bool _refreshLoopRunning;
+
+    // The Lucene IndexWriter owns the cross-process write lock (write.lock on FSDirectory,
+    // a blob lease on AzureDirectory). It is created lazily on the first write and released
+    // after WriteLockReleaseDelay of inactivity, so multiple processes can share a database.
+    // Null means "this process does not currently hold the writer role".
+    private IndexWriter? _indexWriter;
+
+    // Live analyzer shared by the writer and the JsonExpression translator. Held separately
+    // from the IndexWriter because schema registration merges into it while no writer exists.
+    private readonly PerFieldAnalyzer _perFieldAnalyzer;
+
+    // Lock-free reader used by the untyped Search paths. Refreshed alongside _lucene.
+    // Null until the index exists — only reachable on a read-only instance opened before the
+    // writer ever created it.
+    private Lucene.Net.Search.SearcherManager? _searcherManager;
+    private volatile bool _indexAvailable;
+
+    // Serializes writer acquisition and release. Guarantees at most one thread per database
+    // is ever blocked inside Lucene's Lock.Obtain; everyone else waits asynchronously here.
+    private readonly SemaphoreSlim _writerGate = new(1, 1);
+
+    // Count of in-flight write leases. The writer cannot be released until this drains to 0.
+    private int _activeWriters;
+
+    // Reentrancy for handler chains: a nested write inherits the outer lease rather than
+    // taking its own (mirrors _heldLocks for the striped key locks).
+    private readonly AsyncLocal<int> _writerLeaseDepth = new();
+
+    private long _lastRefreshTimestamp;
+    private long _writerAcquiredTimestamp;
+
+    // Back-off after a WriteLockMaxHoldTime yield, so a waiting process can win the lock
+    // before this one re-acquires. Measured from _cooldownEpoch. See AcquireWriterAsync.
+    private readonly long _cooldownEpoch = Stopwatch.GetTimestamp();
+    private long _writerCooldownUntilMs;
+
+    // Must exceed Lucene's Lock.Obtain poll interval (1s) or a waiter never gets a look in.
+    private const int WriterYieldCooldownMs = 1500;
+
     private volatile bool _indexDirty;
     private bool _disposed;
     private readonly CancellationTokenSource _disposeCts = new();
@@ -98,20 +139,23 @@ public class LottaDB : IDisposable
         // Build a per-field analyzer that merges all mapper analyzers.
         // Default is KeywordAnalyzer (matching DocumentMapperBase) so unregistered
         // fields like _key_ are stored verbatim. Per-type field analyzers are merged below.
-        var perFieldAnalyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
-        perFieldAnalyzer.AddAnalyzer(Internal.StorageFields.Key, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+        _perFieldAnalyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
+        _perFieldAnalyzer.AddAnalyzer(Internal.StorageFields.Key, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
         foreach (var mapper in _mappers.Values)
-            perFieldAnalyzer.Merge(mapper.Analyzer);
+            _perFieldAnalyzer.Merge(mapper.Analyzer);
         foreach (var mapper in _dynamicMappers.Values)
-            perFieldAnalyzer.Merge(mapper.Analyzer);
+            _perFieldAnalyzer.Merge(mapper.Analyzer);
 
-        _indexWriter = new IndexWriter(_directory,
-            new IndexWriterConfig(LuceneVersion.LUCENE_48, perFieldAnalyzer)
-            {
-                OpenMode = OpenMode.CREATE_OR_APPEND,
-                UseCompoundFile = true,
-            });
-        _indexWriter.Commit();
+        // No IndexWriter here — the cross-process write lock is taken lazily on the first
+        // write (see AcquireWriterAsync) so read-only processes never contend for it.
+        // The index must still have at least one commit before any reader opens it, or
+        // Lucene.Net.Linq's Context.CreateSearcher falls back to creating a temporary
+        // IndexWriter of its own — taking the write lock from inside a read path.
+        // A read-only instance never creates the index, so it may legitimately open before the
+        // writer has created one. In that case searches serve empty results until it appears.
+        if (EnsureIndexBootstrapped())
+            OpenSearcherManager();
+
         _lucene = new ReadOnlyLuceneDataProvider(_directory, LuceneVersion.LUCENE_48);
         if (catalog.EmbeddingGenerator != null)
             _lucene.Settings.EmbeddingGenerator = catalog.EmbeddingGenerator;
@@ -121,6 +165,235 @@ public class LottaDB : IDisposable
             _metadata.TryGetValue(type, out var meta);
             return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
+    }
+
+    // === Cross-process write lock ===
+
+    /// <summary>
+    /// True if this instance currently owns the cross-process Lucene write lock.
+    /// </summary>
+    public bool HoldsWriteLock => Volatile.Read(ref _indexWriter) != null;
+
+    /// <summary>
+    /// The IndexWriter this call is already covered by. Index-mutating code always runs inside
+    /// a <see cref="WriterLease"/> taken by the enclosing write path, so a null writer here is
+    /// a bug — failing loudly beats silently dropping an index update.
+    /// </summary>
+    private IndexWriter RequireWriter() =>
+        _indexWriter ?? throw new InvalidOperationException(
+            $"Lucene index was modified for database '{_databaseId}' without holding a writer lease. " +
+            "This is a bug in LottaDB — the write path should have called AcquireWriterAsync first.");
+
+    private IndexWriterConfig NewWriterConfig() =>
+        new IndexWriterConfig(LuceneVersion.LUCENE_48, _perFieldAnalyzer)
+        {
+            OpenMode = OpenMode.CREATE_OR_APPEND,
+            UseCompoundFile = true,
+            WriteLockTimeout = _config.WriteLockTimeout,
+        };
+
+    /// <summary>
+    /// Lay down an empty commit if the index does not exist yet, so that readers can open it
+    /// without taking the write lock. Costs one directory listing for every database that has
+    /// ever been written to; only the very first process to touch a brand-new database creates
+    /// the index, and it releases the lock immediately.
+    /// Returns whether the index exists (and so can be opened for reading).
+    /// </summary>
+    private bool EnsureIndexBootstrapped()
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (DirectoryReader.IndexExists(_directory))
+                return true;
+
+            // A read-only instance creates nothing — not even an empty index.
+            if (_config.ReadOnly)
+                return false;
+
+            try
+            {
+                using var bootstrap = new IndexWriter(_directory, NewWriterConfig());
+                bootstrap.Commit();
+                return true;
+            }
+            catch (Lucene.Net.Store.LockObtainFailedException)
+            {
+                // Another process is creating the index right now — re-check IndexExists.
+            }
+        }
+
+        if (DirectoryReader.IndexExists(_directory))
+            return true;
+
+        throw new WriteLockUnavailableException(_databaseId);
+    }
+
+    private void OpenSearcherManager()
+    {
+        _searcherManager = new Lucene.Net.Search.SearcherManager(_directory, null);
+        _lastRefreshTimestamp = Stopwatch.GetTimestamp();
+        _indexAvailable = true;
+    }
+
+    /// <summary>The open searcher. Only valid after <see cref="IndexAvailable"/> returns true.</summary>
+    private Lucene.Net.Search.SearcherManager Searchers =>
+        _searcherManager ?? throw new InvalidOperationException(
+            $"Lucene index for database '{_databaseId}' is not open. This is a bug — callers must check IndexAvailable() first.");
+
+    /// <summary>
+    /// True once the Lucene index exists and the searcher is open. Only a read-only instance
+    /// opened before the writer ever created the index can see false, and it latches true as
+    /// soon as the index appears — so the directory check costs nothing in the normal case.
+    /// </summary>
+    private bool IndexAvailable()
+    {
+        if (_indexAvailable) return true;
+
+        lock (_lock)
+        {
+            if (_indexAvailable) return true;
+            if (!DirectoryReader.IndexExists(_directory)) return false;
+            OpenSearcherManager();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Take a write lease, creating the IndexWriter (and acquiring the cross-process write
+    /// lock) if this process does not already hold it. Must be called before any storage
+    /// mutation so that a lock failure leaves nothing half-written.
+    /// </summary>
+    private async ValueTask<WriterLease> AcquireWriterAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_config.ReadOnly)
+            throw new InvalidOperationException(
+                $"Database '{_databaseId}' was opened read-only (ILottaConfiguration.ReadOnly). Writes are not permitted.");
+
+        // Reentrant call from an On<T> handler chain — the outer lease already covers us.
+        if (_writerLeaseDepth.Value > 0)
+        {
+            _writerLeaseDepth.Value++;
+            return new WriterLease(null);
+        }
+
+        await _writerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // After yielding on WriteLockMaxHoldTime, stay out of the way long enough for a
+            // waiting process to actually win the lock. Lucene's Lock.Obtain polls once per
+            // second, so re-acquiring immediately (the next write can be milliseconds later)
+            // would almost always beat the waiter back to it and the yield would achieve
+            // nothing. Only ever set by a max-hold release, so normal writes never pay this.
+            while (_indexWriter == null)
+            {
+                var cooldown = (int)(_writerCooldownUntilMs - Stopwatch.GetElapsedTime(_cooldownEpoch).TotalMilliseconds);
+                if (cooldown <= 0) break;
+                await Task.Delay(Math.Min(cooldown, 200), cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_indexWriter == null)
+            {
+                IndexWriter writer;
+                try
+                {
+                    writer = new IndexWriter(_directory, NewWriterConfig());
+                }
+                catch (Lucene.Net.Store.LockObtainFailedException ex)
+                {
+                    throw new WriteLockUnavailableException(_databaseId, ex);
+                }
+                lock (_lock)
+                {
+                    _indexWriter = writer;
+                }
+                _writerAcquiredTimestamp = Stopwatch.GetTimestamp();
+            }
+            Interlocked.Increment(ref _activeWriters);
+        }
+        finally
+        {
+            _writerGate.Release();
+        }
+
+        _writerLeaseDepth.Value = 1;
+        return new WriterLease(this);
+    }
+
+    /// <summary>
+    /// Commit pending changes, close the IndexWriter and release the cross-process write lock.
+    /// Waits for in-flight writes to drain, holding the gate so no new lease can appear.
+    /// Returns false if the drain did not complete within <paramref name="drainTimeout"/>.
+    /// </summary>
+    private async Task<bool> TryReleaseWriterAsync(TimeSpan drainTimeout, CancellationToken cancellationToken)
+    {
+        await _writerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Timeout.InfiniteTimeSpan is -1ms, so a naive elapsed > drainTimeout comparison is
+            // true on the very first check and would abandon the release while reporting success.
+            var unbounded = drainTimeout < TimeSpan.Zero;
+
+            var start = Stopwatch.GetTimestamp();
+            while (Volatile.Read(ref _activeWriters) > 0)
+            {
+                if (!unbounded && Stopwatch.GetElapsedTime(start) > drainTimeout)
+                    return false;
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
+
+            lock (_lock)
+            {
+                if (_indexWriter != null)
+                {
+                    if (_indexDirty)
+                        _indexWriter.Commit();
+                    _indexWriter.Dispose();   // releases write.lock / blob lease
+                    _indexWriter = null;
+                    _indexDirty = false;
+                }
+                RefreshReadersLocked();
+            }
+            return true;
+        }
+        finally
+        {
+            _writerGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Commit any pending index changes, close the Lucene IndexWriter and release the
+    /// cross-process write lock so another process can take over the writer role.
+    /// Reads and searches are unaffected, and the writer is transparently re-acquired on the
+    /// next write. Safe to call when the lock is not held (no-op).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public Task ReleaseWriteLockAsync(CancellationToken cancellationToken = default)
+        => TryReleaseWriterAsync(Timeout.InfiniteTimeSpan, cancellationToken);
+
+    /// <summary>
+    /// Scope holding one in-flight write lease. A null database means the lease was reentrant
+    /// (an On&lt;T&gt; handler chain) and the outer scope owns the real lease.
+    /// </summary>
+    internal readonly struct WriterLease : IDisposable
+    {
+        private readonly LottaDB? _db;
+
+        internal WriterLease(LottaDB? db) => _db = db;
+
+        public void Dispose()
+        {
+            if (_db == null) return;
+            Interlocked.Decrement(ref _db._activeWriters);
+            _db._writerLeaseDepth.Value = 0;
+            // The lease ending is the last write activity, and it is the only signal every
+            // write path shares — maintenance operations like RebuildSearchIndex never run a
+            // Lucene handler, so arming the release here is what stops them holding the
+            // cross-process lock forever.
+            _db.ScheduleWriterRelease();
+        }
     }
 
     // Opens and immediately disposes a session per registered type so each mapper's
@@ -170,14 +443,15 @@ public class LottaDB : IDisposable
             var key = doc.GetKey()!;
             lock (_lock)
             {
-                _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+                var writer = RequireWriter();
+                writer.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
                 if (kind == TriggerKind.Saved && _dynamicMappers.TryGetValue(schemaName, out var mapper))
                 {
                     var document = new Document();
                     mapper.ToDocument(doc, document);
                     var etag = doc.GetETag() ?? "";
                     Internal.EntityMapper.AddMetadataToLuceneDocument(document, typeof(JsonDocument).FullName!, etag, schemaName);
-                    _indexWriter.AddDocument(document);
+                    writer.AddDocument(document);
                 }
                 _indexDirty = true;
             }
@@ -215,7 +489,7 @@ public class LottaDB : IDisposable
                 // Delete Lucene documents for this schema
                 lock (_lock)
                 {
-                    _indexWriter.DeleteDocuments(new Term(Internal.StorageFields.Schema, schema.Name));
+                    RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schema.Name));
                     _indexDirty = true;
                 }
                 ScheduleRefresh();
@@ -243,22 +517,20 @@ public class LottaDB : IDisposable
             var key = meta.GetKey(entity);
             lock (_lock)
             {
-                if (_indexWriter != null)
+                var writer = RequireWriter();
+                writer.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+                if (kind == TriggerKind.Saved)
                 {
-                    _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
-                    if (kind == TriggerKind.Saved)
-                    {
-                        var mapper = GetMapper<T>();
-                        var document = new Document();
-                        mapper.ToDocument(entity, document);
-                        var etag = entity.GetETag()
-                            ?? throw new InvalidOperationException(
-                                $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
-                        Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
-                        _indexWriter.AddDocument(document);
-                    }
-                    _indexDirty = true;
+                    var mapper = GetMapper<T>();
+                    var document = new Document();
+                    mapper.ToDocument(entity, document);
+                    var etag = entity.GetETag()
+                        ?? throw new InvalidOperationException(
+                            $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
+                    Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
+                    writer.AddDocument(document);
                 }
+                _indexDirty = true;
                 ScheduleRefresh();
             }
             return Task.CompletedTask;
@@ -275,9 +547,11 @@ public class LottaDB : IDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task RebuildSearchIndex(CancellationToken cancellationToken = default)
     {
+        using var lease = await AcquireWriterAsync(cancellationToken);
+
         lock (_lock)
         {
-            _indexWriter.DeleteAll();
+            RequireWriter().DeleteAll();
             _indexDirty = true;
         }
 
@@ -321,7 +595,7 @@ public class LottaDB : IDisposable
 
             lock (_lock)
             {
-                _indexWriter.AddDocument(document);
+                RequireWriter().AddDocument(document);
                 _indexDirty = true;
             }
         }
@@ -388,6 +662,11 @@ public class LottaDB : IDisposable
             if (meta0.KeyMode == KeyMode.Auto && meta0.SetKey != null)
                 meta0.SetKey(entity, key);
         }
+
+        // Writer lease first: acquiring the cross-process write lock before the table write
+        // means a lock failure leaves nothing half-written, and serializes the
+        // [table write -> lucene index] sequence across processes.
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
 
         // Per-key lock: table write + Lucene handler are atomic for this key
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
@@ -490,6 +769,7 @@ public class LottaDB : IDisposable
         var meta = GetMeta<T>();
         var key = meta.GetKey(entity);
 
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
             await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
@@ -525,6 +805,7 @@ public class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing the deletion and any handler-triggered changes.</returns>
     public async Task<ObjectResult> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
             // Fetch to discover type and run handlers
@@ -534,7 +815,7 @@ public class LottaDB : IDisposable
 
             lock (_lock)
             {
-                _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+                RequireWriter().DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
             }
             ScheduleRefresh();
 
@@ -599,6 +880,11 @@ public class LottaDB : IDisposable
     {
         const int maxAttempts = 50;
         var meta = GetMeta<T>();
+
+        // One lease for the whole retry loop. The 412 retries come from in-process writers,
+        // which the cross-process lock does not exclude, so they remain necessary — but
+        // re-acquiring the writer on every attempt would be pure thrash.
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -703,27 +989,33 @@ public class LottaDB : IDisposable
     /// <param name="query">Optional Lucene query string to pre-filter results.</param>
     public IQueryable<T> Search<T>(string? query = null) where T : class, new()
     {
+        // A read-only replica can open before the writer has ever created the index.
+        if (!IndexAvailable())
+            return Enumerable.Empty<T>().AsQueryable();
+
         // Search<object>() → untyped search across all types using ObjectDocumentMapper
         if (typeof(T) == typeof(object))
         {
-            ReloadSearcher();
-            lock (_lock)
-            {
-                Lucene.Net.Search.Query luceneQuery;
-                if (!String.IsNullOrEmpty(query))
-                {
-                    var parser = new Lucene.Net.QueryParsers.Classic.QueryParser(
-                        Lucene.Net.Util.LuceneVersion.LUCENE_48, Internal.StorageFields.Content, _lottaCatalog.Analyzer);
-                    parser.AllowLeadingWildcard = true;
-                    luceneQuery = parser.Parse(query);
-                }
-                else
-                {
-                    luceneQuery = new Lucene.Net.Search.MatchAllDocsQuery();
-                }
+            MaybeReloadSearcher();
 
-                using var reader = _indexWriter.GetReader(applyAllDeletes: true);
-                var searcher = new Lucene.Net.Search.IndexSearcher(reader);
+            Lucene.Net.Search.Query luceneQuery;
+            if (!String.IsNullOrEmpty(query))
+            {
+                var parser = new Lucene.Net.QueryParsers.Classic.QueryParser(
+                    Lucene.Net.Util.LuceneVersion.LUCENE_48, Internal.StorageFields.Content, _lottaCatalog.Analyzer);
+                parser.AllowLeadingWildcard = true;
+                luceneQuery = parser.Parse(query);
+            }
+            else
+            {
+                luceneQuery = new Lucene.Net.Search.MatchAllDocsQuery();
+            }
+
+            // Read through the SearcherManager rather than the IndexWriter — this path must
+            // work on a process that does not hold the write lock.
+            var searcher = Searchers.Acquire();
+            try
+            {
                 var hits = searcher.Search(luceneQuery, int.MaxValue);
                 var results = new List<T>();
                 foreach (var hit in hits.ScoreDocs)
@@ -734,9 +1026,13 @@ public class LottaDB : IDisposable
                 }
                 return results.AsQueryable();
             }
+            finally
+            {
+                Searchers.Release(searcher);
+            }
         }
 
-        ReloadSearcher();
+        MaybeReloadSearcher();
 
         lock (_lock)
         {
@@ -765,20 +1061,28 @@ public class LottaDB : IDisposable
     /// </summary>
     public IEnumerable<JsonDocument> Search(Expression<Func<JsonExpression, bool>> predicate)
     {
-        ReloadSearcher();
+        // A read-only replica can open before the writer has ever created the index.
+        if (!IndexAvailable())
+            return Enumerable.Empty<JsonDocument>();
 
+        MaybeReloadSearcher();
+
+        Lucene.Net.Search.Query luceneQuery;
         lock (_lock)
         {
-            var luceneQuery = Internal.JsonExpressionLuceneVisitor.Translate(predicate, _indexWriter.Analyzer);
+            // Under _lock because RegisterJsonMetadata can merge into _perFieldAnalyzer concurrently.
+            luceneQuery = Internal.JsonExpressionLuceneVisitor.Translate(predicate, _perFieldAnalyzer);
+        }
 
-            // Also filter to only JsonDocument types
-            var bq = new Lucene.Net.Search.BooleanQuery();
-            bq.Add(luceneQuery, Lucene.Net.Search.Occur.MUST);
-            bq.Add(new Lucene.Net.Search.TermQuery(new Lucene.Net.Index.Term(Internal.StorageFields.Type, typeof(JsonDocument).FullName!)),
-                Lucene.Net.Search.Occur.MUST);
+        // Also filter to only JsonDocument types
+        var bq = new Lucene.Net.Search.BooleanQuery();
+        bq.Add(luceneQuery, Lucene.Net.Search.Occur.MUST);
+        bq.Add(new Lucene.Net.Search.TermQuery(new Lucene.Net.Index.Term(Internal.StorageFields.Type, typeof(JsonDocument).FullName!)),
+            Lucene.Net.Search.Occur.MUST);
 
-            using var reader = _indexWriter.GetReader(applyAllDeletes: true);
-            var searcher = new Lucene.Net.Search.IndexSearcher(reader);
+        var searcher = Searchers.Acquire();
+        try
+        {
             var hits = searcher.Search(bq, int.MaxValue);
             var results = new List<JsonDocument>();
             foreach (var hit in hits.ScoreDocs)
@@ -789,6 +1093,10 @@ public class LottaDB : IDisposable
                     results.Add(jsonDoc);
             }
             return results;
+        }
+        finally
+        {
+            Searchers.Release(searcher);
         }
     }
 
@@ -818,6 +1126,8 @@ public class LottaDB : IDisposable
     {
         var allChanges = new List<ObjectChange>();
 
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
+
         await foreach (var doc in GetManyAsync(predicate, cancellationToken: cancellationToken))
         {
             var key = doc.GetKey();
@@ -828,7 +1138,7 @@ public class LottaDB : IDisposable
 
             lock (_lock)
             {
-                _indexWriter.DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
+                RequireWriter().DeleteDocuments([new Term(Internal.StorageFields.Key, key)]);
             }
             ScheduleRefresh();
 
@@ -903,11 +1213,11 @@ public class LottaDB : IDisposable
         var mapper = new JsonDocumentMapper(dynSchema, LuceneVersion.LUCENE_48, _lottaCatalog.Analyzer, _lottaCatalog.EmbeddingGenerator);
         _dynamicMappers[schema.Name] = mapper;
 
-        // Merge the mapper's per-field analyzer into the IndexWriter
+        // Merge the mapper's per-field analyzer into the shared analyzer. A writer created
+        // later picks this up automatically, since it is configured with the same instance.
         lock (_lock)
         {
-            var writerAnalyzer = (Lucene.Net.Linq.Analysis.PerFieldAnalyzer)_indexWriter.Analyzer;
-            writerAnalyzer.Merge(mapper.Analyzer);
+            _perFieldAnalyzer.Merge(mapper.Analyzer);
         }
     }
 
@@ -917,9 +1227,11 @@ public class LottaDB : IDisposable
         if (!_schemas.TryGetValue(schemaName, out var dynSchema)) return;
         if (!_dynamicMappers.TryGetValue(schemaName, out var mapper)) return;
 
+        using var lease = await AcquireWriterAsync(cancellationToken);
+
         lock (_lock)
         {
-            _indexWriter.DeleteDocuments(new Term(Internal.StorageFields.Schema, schemaName));
+            RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schemaName));
             _indexDirty = true;
         }
 
@@ -932,7 +1244,7 @@ public class LottaDB : IDisposable
             Internal.EntityMapper.AddMetadataToLuceneDocument(document, typeof(JsonDocument).FullName!, etag ?? "", schemaName);
             lock (_lock)
             {
-                _indexWriter.AddDocument(document);
+                RequireWriter().AddDocument(document);
                 _indexDirty = true;
             }
         }
@@ -977,23 +1289,90 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Force a Lucene index commit and refresh the searcher if there are pending writes.
+    /// Commit any pending index changes and refresh the searcher, including commits made by
+    /// other processes. Always re-checks the directory, bypassing
+    /// <see cref="ILottaConfiguration.MaxSearchStaleness"/>.
     /// Normally this happens automatically via <see cref="LottaConfiguration.AutoCommitDelay"/>.
     /// </summary>
-    public void ReloadSearcher()
+    public void ReloadSearcher() => ReloadSearcherCore(force: true);
+
+    /// <summary>
+    /// Refresh before a search, honouring <see cref="ILottaConfiguration.MaxSearchStaleness"/>
+    /// so the directory re-check does not run on every single query.
+    /// </summary>
+    private void MaybeReloadSearcher() => ReloadSearcherCore(force: false);
+
+    private void ReloadSearcherCore(bool force)
     {
         lock (_lock)
         {
-            if (!_disposed)
+            if (_disposed) return;
+
+            if (_indexDirty && _indexWriter != null)
             {
-                if (_indexDirty)
-                {
-                    _indexWriter.Commit();
-                    _lucene.Refresh();
-                    _indexDirty = false;
-                }
+                _indexWriter.Commit();
+                _indexDirty = false;
+                force = true;   // our own writes must be visible immediately
             }
+
+            if (!force)
+            {
+                var maxStale = _config.MaxSearchStaleness;
+                if (maxStale < 0) return;   // never poll for other processes' commits
+                if (maxStale > 0 &&
+                    Stopwatch.GetElapsedTime(_lastRefreshTimestamp).TotalMilliseconds < maxStale)
+                    return;
+            }
+
+            RefreshReadersLocked();
         }
+    }
+
+    /// <summary>
+    /// Re-open both readers against the directory, picking up commits from any process.
+    /// Cheap when the index is unchanged — both end in DirectoryReader.OpenIfChanged, which
+    /// returns null and short-circuits. Callers must hold <c>_lock</c>.
+    /// </summary>
+    private void RefreshReadersLocked()
+    {
+        if (_searcherManager == null) return;   // index does not exist yet
+        _searcherManager.MaybeRefresh();
+        _lucene.Refresh();
+        _lastRefreshTimestamp = Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>
+    /// Mark write activity as of now and make sure the refresh/release loop is running, so the
+    /// write lock is eventually given back. Unlike <see cref="ScheduleRefresh"/> this does not
+    /// mark the index dirty — it is for write paths that have already committed their own work.
+    /// </summary>
+    private void ScheduleWriterRelease()
+    {
+        lock (_lock)
+        {
+            if (_disposed || _indexWriter == null) return;
+
+            _lastWriteTimestamp = Stopwatch.GetTimestamp();
+            StartRefreshLoopIfNeededLocked();
+        }
+    }
+
+    /// <summary>
+    /// Start the refresh/release loop unless one is already running. Callers must hold
+    /// <c>_lock</c>.
+    /// </summary>
+    /// <remarks>
+    /// Tracked with an explicit flag rather than <c>_refreshTask.IsCompleted</c>: a task that
+    /// has decided to return has not yet transitioned to completed, so a write landing in that
+    /// window would see "still running", decline to start a replacement, and then be left with
+    /// no loop at all — holding the write lock indefinitely. The flag is cleared by the loop
+    /// itself under this same lock, which closes that race.
+    /// </remarks>
+    private void StartRefreshLoopIfNeededLocked()
+    {
+        if (_refreshLoopRunning) return;
+        _refreshLoopRunning = true;
+        _refreshTask = RefreshLoopAsync();
     }
 
     private void ScheduleRefresh()
@@ -1002,54 +1381,166 @@ public class LottaDB : IDisposable
         {
             _indexDirty = true;
             _lastWriteTimestamp = Stopwatch.GetTimestamp();
+            StartRefreshLoopIfNeededLocked();
+        }
+    }
 
-            if (_refreshTask == null || _refreshTask.IsCompleted)
+    // Cap on a single hold-phase wait, so a long WriteLockReleaseDelay still responds
+    // promptly to Dispose.
+    private const int HoldPollCapMs = 250;
+
+    /// <summary>
+    /// Debounced commit loop, followed by a hold phase that releases the cross-process write
+    /// lock once writes have been idle for <see cref="ILottaConfiguration.WriteLockReleaseDelay"/>.
+    /// Exits after releasing; <see cref="ScheduleRefresh"/> restarts it on the next write.
+    /// </summary>
+    private async Task RefreshLoopAsync()
+    {
+        try
+        {
+            while (!_disposed)
             {
-                _refreshTask = RefreshLoopAsync();
+                // ---- commit / debounce phase ----
+                var delayMs = _config.AutoCommitDelay;
+                var maxHoldExpired = false;
+                while (true)
+                {
+                    await Task.Delay(delayMs, _disposeCts.Token).ConfigureAwait(false);
+
+                    lock (_lock)
+                    {
+                        if (_disposed) return;
+
+                        // Max hold is deliberately evaluated here as well as in the hold phase.
+                        // Under continuous writes every write refreshes _lastWriteTimestamp, so
+                        // this loop would debounce forever and the hold phase — where the limit
+                        // used to be checked — would never be reached. That is exactly the
+                        // workload WriteLockMaxHoldTime exists to serve.
+                        if (MaxHoldExceededLocked())
+                        {
+                            if (_indexDirty)
+                            {
+                                _indexWriter?.Commit();
+                                RefreshReadersLocked();
+                                _indexDirty = false;
+                            }
+                            maxHoldExpired = true;
+                            break;
+                        }
+
+                        var elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
+                        var remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
+                        if (remaining > 0)
+                        {
+                            // A write arrived during our wait -- only wait the remaining delta
+                            delayMs = remaining;
+                            continue;
+                        }
+                        if (_indexDirty)
+                        {
+                            _indexWriter?.Commit();
+                            RefreshReadersLocked();
+                            _indexDirty = false;
+                        }
+
+                        // Re-check: did a write arrive while we were committing?
+                        elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
+                        remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
+                        if (remaining > 0)
+                        {
+                            delayMs = remaining;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                // ---- hold phase: wait out the idle window, then release the write lock ----
+                var hold = _config.WriteLockReleaseDelay;
+
+                // A max-hold expiry releases even when the caller asked to hold indefinitely --
+                // yielding the writer role is the whole point of the setting.
+                if (hold < 0 && !maxHoldExpired)
+                    return;   // configured to hold until Dispose/ReleaseWriteLockAsync
+
+                var backToCommit = false;
+                while (true)
+                {
+                    int wait;
+                    lock (_lock)
+                    {
+                        if (_disposed) return;
+                        if (_indexWriter == null) return;          // already released elsewhere
+
+                        if (maxHoldExpired || MaxHoldExceededLocked())
+                        {
+                            wait = 0;
+                        }
+                        else
+                        {
+                            if (_indexDirty) { backToCommit = true; break; }
+
+                            wait = hold - (int)Stopwatch.GetElapsedTime(_lastWriteTimestamp).TotalMilliseconds;
+                            if (_config.WriteLockMaxHoldTime > 0)
+                            {
+                                wait = Math.Min(wait, _config.WriteLockMaxHoldTime
+                                    - (int)Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds);
+                            }
+                        }
+                    }
+
+                    if (wait <= 0)
+                    {
+                        // A max-hold yield must be followed by a back-off, or this process's
+                        // next write re-takes the lock before any waiter's 1s poll sees it free.
+                        var yielding = maxHoldExpired;
+                        if (await TryReleaseWriterAsync(TimeSpan.FromSeconds(5), _disposeCts.Token)
+                                .ConfigureAwait(false))
+                        {
+                            if (yielding)
+                            {
+                                lock (_lock)
+                                {
+                                    _writerCooldownUntilMs =
+                                        (long)Stopwatch.GetElapsedTime(_cooldownEpoch).TotalMilliseconds
+                                        + WriterYieldCooldownMs;
+                                }
+                            }
+                            return;     // released -- the next write restarts this loop
+                        }
+                        wait = 50;      // writes still draining; try again shortly
+                    }
+
+                    await Task.Delay(Math.Min(wait, HoldPollCapMs), _disposeCts.Token).ConfigureAwait(false);
+                }
+
+                if (!backToCommit) return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // _disposeCts fired -- Dispose is draining us.
+        }
+        finally
+        {
+            // Cleared under the lock so a write racing our exit reliably starts a replacement
+            // loop rather than seeing a task that has decided to return but not yet completed.
+            lock (_lock)
+            {
+                _refreshLoopRunning = false;
             }
         }
     }
 
-    private async Task RefreshLoopAsync()
+    /// <summary>
+    /// Whether the writer has been held longer than <see cref="ILottaConfiguration.WriteLockMaxHoldTime"/>.
+    /// Callers must hold <c>_lock</c>.
+    /// </summary>
+    private bool MaxHoldExceededLocked()
     {
-        var delayMs = _config.AutoCommitDelay;
-
-        while (!_disposed)
-        {
-            try { await Task.Delay(delayMs, _disposeCts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
-
-            lock (_lock)
-            {
-                if (_disposed) return;
-
-                var elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
-                var remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
-                if (remaining > 0)
-                {
-                    // A write arrived during our wait -- only wait the remaining delta
-                    delayMs = remaining;
-                    continue;
-                }
-                if (_indexDirty)
-                {
-                    _indexWriter?.Commit();
-                    _lucene.Refresh();
-                    _indexDirty = false;
-                }
-
-                // Re-check: did a write arrive while we were committing?
-                elapsed = Stopwatch.GetElapsedTime(_lastWriteTimestamp);
-                remaining = _config.AutoCommitDelay - (int)elapsed.TotalMilliseconds;
-                if (remaining > 0)
-                {
-                    delayMs = remaining;
-                    continue;
-                }
-            }
-
-            return; // Done -- no more pending writes
-        }
+        var max = _config.WriteLockMaxHoldTime;
+        if (max <= 0 || _indexWriter == null) return false;
+        return Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds >= max;
     }
 
     // === On<T> (runtime registration) ===
@@ -1349,14 +1840,16 @@ public class LottaDB : IDisposable
     /// Deletes all documents from the Lucene index without touching Table Storage.
     /// Used by tests to verify that RebuildSearchIndex repopulates the index.
     /// </summary>
-    internal void DeleteSearchIndex()
+    internal async Task DeleteSearchIndexAsync(CancellationToken cancellationToken = default)
     {
+        using var lease = await AcquireWriterAsync(cancellationToken);
         lock (_lock)
         {
-            _indexWriter.DeleteAll();
-            _indexWriter.Commit();
-            _lucene.Refresh();
+            var writer = RequireWriter();
+            writer.DeleteAll();
+            writer.Commit();
             _indexDirty = false;
+            RefreshReadersLocked();
         }
     }
 
@@ -1366,16 +1859,19 @@ public class LottaDB : IDisposable
     /// </summary>
     public async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
     {
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
+
         // 1. Delete all rows in this database's partition
         await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
         {
-            _indexWriter.DeleteAll();
-            _indexWriter.Commit();
-            _lucene.Refresh();
+            var writer = RequireWriter();
+            writer.DeleteAll();
+            writer.Commit();
             _indexDirty = false;
+            RefreshReadersLocked();
         }
 
         // 3. delete all blobs except search index directory
@@ -1394,13 +1890,25 @@ public class LottaDB : IDisposable
     /// </summary>
     public async Task DeleteDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
-        lock (_lock)
+        using (var writerLease = await AcquireWriterAsync(cancellationToken))
         {
-            _indexWriter.DeleteAll();
-            _indexWriter.Flush(true, true);
+            await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+            lock (_lock)
+            {
+                var writer = RequireWriter();
+                writer.DeleteAll();
+                writer.Commit();
+                _indexDirty = false;
+            }
+
+            // Remove the manifest while still holding the writer. Releasing first would open a
+            // window where another process sees a live manifest, opens the database and writes
+            // rows we have already deleted — which the manifest removal would then orphan.
+            await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
         }
-        await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
+
+        // Don't keep holding the cross-process write lock for a database we just deleted.
+        await ReleaseWriteLockAsync(cancellationToken);
     }
 
     // === Bulk operations ===
@@ -1424,6 +1932,9 @@ public class LottaDB : IDisposable
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
         var pendingEntities = new List<(object entity, Type type)>();
+
+        // One lease covering every batch flush.
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
 
         try
         {
@@ -1552,6 +2063,9 @@ public class LottaDB : IDisposable
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
         var pendingEntities = new List<(object? entity, Type? type, string key)>();
+
+        // One lease covering every batch flush.
+        using var writerLease = await AcquireWriterAsync(cancellationToken);
 
         try
         {
@@ -1738,11 +2252,19 @@ public class LottaDB : IDisposable
 
                 lock (_lock)
                 {
-                    _indexWriter?.Commit();
-                    _indexWriter?.Dispose();
+                    // The writer may already have been released by the idle timer — nothing
+                    // is lost, since releasing commits first.
+                    if (_indexWriter != null)
+                    {
+                        try { _indexWriter.Commit(); } catch { }
+                        _indexWriter.Dispose();
+                        _indexWriter = null;
+                    }
+                    _searcherManager?.Dispose();   // must precede _directory.Dispose()
                     _lucene?.Dispose();
                     _directory?.Dispose();
                 }
+                _writerGate.Dispose();
                 _disposeCts.Dispose();
             }
         }

@@ -141,12 +141,19 @@ public class LottaCatalog : IDisposable
 
         // Compute current schema and compare with stored manifest
         var currentSchema = TypeMetadata.ComputeSchemaJson(db._metadata.Values, db._schemas.Values);
+
+        // A read-only replica writes nothing at open — no manifest, no index rebuild.
+        if (config.ReadOnly)
+            return db;
+
         var table = GetTableClient();
         string? storedSchema = null;
+        ETag manifestETag = default;
 
         try
         {
             var response = await table.GetEntityAsync<TableEntity>(ManifestPartitionKey, databaseId, cancellationToken: cancellationToken);
+            manifestETag = response.Value.ETag;
             if (response.Value.TryGetValue(SchemaColumn, out var schemaObj))
                 storedSchema = schemaObj as string;
         }
@@ -155,18 +162,62 @@ public class LottaCatalog : IDisposable
             // No manifest row yet
         }
 
-        // Write/update manifest with current schema
         var manifestEntity = new TableEntity(ManifestPartitionKey, databaseId)
         {
             { SchemaColumn, currentSchema }
         };
-        await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace, cancellationToken);
 
-        // If schema changed, rebuild the index
-        if (storedSchema != null && storedSchema != currentSchema)
+        if (storedSchema == null)
         {
-            await db.RebuildSearchIndex(cancellationToken);
+            // First ever open of this database.
+            await table.UpsertEntityAsync(manifestEntity, TableUpdateMode.Replace, cancellationToken);
         }
+        else if (storedSchema != currentSchema)
+        {
+            // The schema changed. Several servers may be rolling out the new build at once,
+            // and they would all try to rebuild — with all but one failing to get the write
+            // lock at startup. Use the manifest ETag to elect exactly one rebuilder.
+            bool ownsRebuild;
+            try
+            {
+                await table.UpdateEntityAsync(manifestEntity, manifestETag, TableUpdateMode.Replace, cancellationToken);
+                ownsRebuild = true;
+            }
+            catch (RequestFailedException ex) when (ex.Status == 412)
+            {
+                ownsRebuild = false;   // another server won the race and is rebuilding
+            }
+
+            if (ownsRebuild)
+            {
+                try
+                {
+                    await db.RebuildSearchIndex(cancellationToken);
+                }
+                catch
+                {
+                    // The manifest already advertises the new schema, so without a rollback a
+                    // failed rebuild (cancelled, lost the writer, crashed mid-pass) would leave
+                    // a stale or half-cleared index permanently associated with it — every
+                    // later open would compare equal and skip the rebuild. Put the old schema
+                    // back so the next process retries.
+                    try
+                    {
+                        var rollback = new TableEntity(ManifestPartitionKey, databaseId)
+                        {
+                            { SchemaColumn, storedSchema }
+                        };
+                        await table.UpsertEntityAsync(rollback, TableUpdateMode.Replace, cancellationToken);
+                    }
+                    catch
+                    {
+                        // Rollback is best-effort — surface the original rebuild failure.
+                    }
+                    throw;
+                }
+            }
+        }
+        // storedSchema == currentSchema: nothing to write.
 
         return db;
     }

@@ -22,7 +22,7 @@ A .NET library that stores POCOs in Azure Table Storage and indexes them in Luce
 
 ## What's honest about the limitations
 
-**Lucene is local.** Single-writer, single-process. Scaling is horizontal (one LottaDB instance per tenant), not vertical. No distributed search.
+**Lucene is local.** One writer at a time, enforced by a cross-process lock. Multiple processes can open the same database — reads never lock, and the writer role is acquired on the first write and released after an idle window, so it migrates between servers. That buys lock-free replicas and failover, not concurrent write throughput: a server writing continuously keeps the lock and others time out. Scaling is still horizontal (one LottaDB instance per tenant), not vertical. No distributed search.
 
 **`[Key]` + `[Field(Key=true)]` duplication.** Two attributes on the same property — one for LottaDB, one for Lucene. Needs a fix in `Iciclecreek.Lucene.Net.Linq` to unify.
 
