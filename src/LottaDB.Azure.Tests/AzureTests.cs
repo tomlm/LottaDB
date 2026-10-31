@@ -34,6 +34,7 @@ public class Azure_MultiValuedFieldTests : MultiValuedFieldTestBase { public Azu
 public class Azure_ObserveTests : ObserveTestBase { public Azure_ObserveTests() : base(Tests.Configure) { } }
 public class Azure_PolymorphismTests : PolymorphismTestBase { public Azure_PolymorphismTests() : base(Tests.Configure) { } }
 public class Azure_QueryMethodTests : QueryMethodTestBase { public Azure_QueryMethodTests() : base(Tests.Configure) { } }
+public class Azure_QueryScoreTests : QueryScoreTestBase { public Azure_QueryScoreTests() : base(Tests.Configure) { } }
 public class Azure_QueryTests : QueryTestBase { public Azure_QueryTests() : base(Tests.Configure) { } }
 public class Azure_RebuildIndexTests : RebuildIndexTestBase { public Azure_RebuildIndexTests() : base(Tests.Configure) { } }
 public class Azure_NearRealTimeSearchTests : NearRealTimeSearchTestBase { public Azure_NearRealTimeSearchTests() : base(Tests.Configure) { } }

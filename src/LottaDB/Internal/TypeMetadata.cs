@@ -24,6 +24,12 @@ internal class TypeMetadata
     /// <summary>User-defined default search property. When set, the _content_ composite field is not created.</summary>
     public PropertyInfo? DefaultSearchProperty { get; set; }
 
+    /// <summary>
+    /// The <c>float</c> or <c>double</c> property marked <see cref="Lucene.Net.Linq.Mapping.QueryScoreAttribute"/>,
+    /// set to each hit's relevance score on search results.
+    /// </summary>
+    public PropertyInfo? ScoreProperty { get; set; }
+
     public TypeMetadata(Type type)
     {
         Type = type;
@@ -44,8 +50,25 @@ internal class TypeMetadata
             meta.SetKey = (obj, key) => keyProp.SetValue(obj, key);
 
         ResolveQueryableProperties<T>(meta, fluentConfig);
+        meta.ScoreProperty = ResolveScoreProperty(type);
 
         return meta;
+    }
+
+    private static PropertyInfo? ResolveScoreProperty(Type type)
+    {
+        var scored = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetCustomAttribute<Lucene.Net.Linq.Mapping.QueryScoreAttribute>(inherit: true) != null)
+            .ToList();
+        if (scored.Count == 0)
+            return null;
+        if (scored.Count > 1)
+            throw new InvalidOperationException($"{type.Name} has more than one [QueryScore] property.");
+
+        var prop = scored[0];
+        if (!prop.CanWrite || (prop.PropertyType != typeof(float) && prop.PropertyType != typeof(double)))
+            throw new InvalidOperationException($"[QueryScore] property {type.Name}.{prop.Name} must be a writable float or double.");
+        return prop;
     }
 
     private static (Func<object, string> getter, KeyMode keymode, PropertyInfo? prop) ResolveKey<T>(StorageConfiguration<T>? fluent, string[]? autoKeyProperties = null) where T : class, new()
