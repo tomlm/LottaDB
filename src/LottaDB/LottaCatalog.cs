@@ -61,9 +61,10 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Embedding generator for vector similarity search, shared across all databases in this catalog.
-    /// Set via the constructor's <c>configure</c> callback.
+    /// Set via the constructor's <c>configure</c> callback, before any database is opened.
+    /// Required for <c>.Similar()</c> queries; vector fields are indexed without embeddings when it is null.
     /// </summary>
-    internal IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
+    public IEmbeddingGenerator<string, Embedding<float>>? EmbeddingGenerator { get; set; }
 
     /// <summary>
     /// Default Analyzer to use for indexing/querying, shared across all databases in this catalog.

@@ -17,7 +17,7 @@
                 BorderBrush="#22000000" BorderThickness="0,0,0,1">
             <Grid ColumnDefinitions="*,Auto,8,Auto">
                 <TextBox Grid.Column="0"
-                         Watermark="Search (Lucene-backed: title + notes)"
+                         PlaceholderText="Search (Lucene-backed: title + notes)"
                          Text="{Binding SearchText, Mode=TwoWay}" />
                 <Button Grid.Column="1" Content="Clear"
                         Command="{Binding ClearSearchCommand}"
@@ -42,7 +42,7 @@
         <Border DockPanel.Dock="Top" Padding="14,10,14,10">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBox Grid.Column="0"
-                         Watermark="New todo — press Enter to add"
+                         PlaceholderText="New todo — press Enter to add"
                          Text="{Binding NewTodoTitle, Mode=TwoWay}">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter" Command="{Binding AddCommand}" />
@@ -75,7 +75,7 @@
                                              Classes.done="{Binding IsDone}"
                                              FontSize="15" FontWeight="SemiBold" />
                                     <TextBox Text="{Binding Notes, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                             Watermark="Notes…"
+                                             PlaceholderText="Notes…"
                                              Classes="inlineEdit"
                                              FontSize="12"
                                              Opacity="0.75"

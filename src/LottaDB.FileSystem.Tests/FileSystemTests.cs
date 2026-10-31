@@ -28,6 +28,7 @@ public class FileSystem_JsonMetadataTests : JsonMetadataTestBase { public FileSy
 public class FileSystem_JsonRoundtripTests : JsonRoundtripTestBase { public FileSystem_JsonRoundtripTests() : base(Tests.Configure) { } }
 public class FileSystem_LargeObjectTests : LargeObjectTestBase { public FileSystem_LargeObjectTests() : base(Tests.Configure) { } }
 public class FileSystem_MatchTests : MatchTestBase { public FileSystem_MatchTests() : base(Tests.Configure) { } }
+public class FileSystem_MultiValuedFieldTests : MultiValuedFieldTestBase { public FileSystem_MultiValuedFieldTests() : base(Tests.Configure) { } }
 public class FileSystem_ObserveTests : ObserveTestBase { public FileSystem_ObserveTests() : base(Tests.Configure) { } }
 public class FileSystem_PolymorphismTests : PolymorphismTestBase { public FileSystem_PolymorphismTests() : base(Tests.Configure) { } }
 public class FileSystem_QueryMethodTests : QueryMethodTestBase { public FileSystem_QueryMethodTests() : base(Tests.Configure) { } }
