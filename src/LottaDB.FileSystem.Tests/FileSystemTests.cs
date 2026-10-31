@@ -32,6 +32,7 @@ public class FileSystem_MultiValuedFieldTests : MultiValuedFieldTestBase { publi
 public class FileSystem_ObserveTests : ObserveTestBase { public FileSystem_ObserveTests() : base(Tests.Configure) { } }
 public class FileSystem_PolymorphismTests : PolymorphismTestBase { public FileSystem_PolymorphismTests() : base(Tests.Configure) { } }
 public class FileSystem_QueryMethodTests : QueryMethodTestBase { public FileSystem_QueryMethodTests() : base(Tests.Configure) { } }
+public class FileSystem_QueryScoreTests : QueryScoreTestBase { public FileSystem_QueryScoreTests() : base(Tests.Configure) { } }
 public class FileSystem_QueryTests : QueryTestBase { public FileSystem_QueryTests() : base(Tests.Configure) { } }
 public class FileSystem_RebuildIndexTests : RebuildIndexTestBase { public FileSystem_RebuildIndexTests() : base(Tests.Configure) { } }
 public class FileSystem_SearchTests : SearchTestBase { public FileSystem_SearchTests() : base(Tests.Configure) { } }

@@ -33,6 +33,7 @@ public class SQLite_MultiValuedFieldTests : MultiValuedFieldTestBase { public SQ
 public class SQLite_ObserveTests : ObserveTestBase { public SQLite_ObserveTests() : base(Tests.Configure) { } }
 public class SQLite_PolymorphismTests : PolymorphismTestBase { public SQLite_PolymorphismTests() : base(Tests.Configure) { } }
 public class SQLite_QueryMethodTests : QueryMethodTestBase { public SQLite_QueryMethodTests() : base(Tests.Configure) { } }
+public class SQLite_QueryScoreTests : QueryScoreTestBase { public SQLite_QueryScoreTests() : base(Tests.Configure) { } }
 public class SQLite_QueryTests : QueryTestBase { public SQLite_QueryTests() : base(Tests.Configure) { } }
 public class SQLite_RebuildIndexTests : RebuildIndexTestBase { public SQLite_RebuildIndexTests() : base(Tests.Configure) { } }
 public class SQLite_NearRealTimeSearchTests : NearRealTimeSearchTestBase { public SQLite_NearRealTimeSearchTests() : base(Tests.Configure) { } }

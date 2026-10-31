@@ -30,11 +30,13 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     private static UtcDateTimeOffsetConverter _dtoConverter = new UtcDateTimeOffsetConverter("yyyyMMddTHHmmssfffZ");
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
     private readonly LottaDB _db;
+    private readonly PropertyInfo? _scoreProperty;
 
     public TypeDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
         : base(version, analyzer)
     {
         _db = db;
+        _scoreProperty = meta?.ScoreProperty;
         if (meta == null) return;
         var classMap = new ClassMap<T>(version);
 
@@ -142,7 +144,13 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     public override T CreateFromDocument(Document source, IQueryExecutionContext context,
           Type actualType, ObjectLookup<T> factory)
     {
-        return EntityMapper.FromLuceneDocument<T>(source, _db);
+        var result = EntityMapper.FromLuceneDocument<T>(source, _db);
+
+        // Hand the hit's relevance score to the [QueryScore] property, if the type has one.
+        if (_scoreProperty != null && context?.CurrentScoreDoc is { } hit && !float.IsNaN(hit.Score))
+            _scoreProperty.SetValue(result, _scoreProperty.PropertyType == typeof(double) ? (object)(double)hit.Score : hit.Score);
+
+        return result;
     }
 
     // For simplicity, we always treat documents as modified. Lucene.Net.Linq's upsert logic will compare the new document
