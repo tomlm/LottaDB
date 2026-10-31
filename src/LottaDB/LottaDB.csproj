@@ -20,8 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.28.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.13.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.30.1" />
     <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.6-beta00018" />
     <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta021" />
     <PackageReference Include="MimeMapping" Version="4.0.0" />
