@@ -1,6 +1,8 @@
 using Lucene.Net.Analysis;
+using Lucene.Net.Analysis.Core;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
+using Lucene.Net.Index;
 using Lucene.Net.Linq;
 using Lucene.Net.Linq.Fluent;
 using Lucene.Net.Linq.Mapping;
@@ -41,16 +43,16 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
             classMap.Key(PropExpr(meta.KeyProperty)).NotAnalyzed();
 
         // Indexed properties from [Queryable], [Field], or fluent config
-        var stringArrayProperties = new List<PropertyInfo>();
+        var stringCollectionProperties = new List<IndexedTypeProperty>();
         foreach (var indexed in meta.IndexedProperties)
         {
             if (meta.KeyProperty != null && indexed.Property == meta.KeyProperty)
                 continue;
 
-            // string[] can't go through ClassMap — handle separately
-            if (indexed.Property.PropertyType == typeof(string[]))
+            // String collections get their own multi-valued mapper (one Lucene field per element)
+            if (TypeUtils.IsStringCollection(indexed.Property.PropertyType))
             {
-                stringArrayProperties.Add(indexed.Property);
+                stringCollectionProperties.Add(indexed);
                 continue;
             }
 
@@ -102,9 +104,9 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         }
         AddField(new JsonFieldMapper<T>(version, analyzer));
 
-        // Add string[] field mappers (multi-valued Lucene fields)
-        foreach (var prop in stringArrayProperties)
-            AddField(new StringArrayFieldMapper<T>(prop, _propertyAnalyzer));
+        // Add string collection field mappers (multi-valued Lucene fields)
+        foreach (var indexed in stringCollectionProperties)
+            AddField(new StringCollectionFieldMapper<T>(indexed.Property, indexed.IsNotAnalyzed, _propertyAnalyzer));
 
         if (meta.DefaultSearchProperty != null)
         {
@@ -113,9 +115,9 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         }
         else
         {
-            // No user default — create _content_ composite field (include string[] properties)
+            // No user default — create _content_ composite field (include string collection properties)
             var contentProps = meta.IndexedProperties
-                .Where(p => !p.IsNotAnalyzed && (p.Property.PropertyType == typeof(string) || p.Property.PropertyType == typeof(string[])))
+                .Where(p => !p.IsNotAnalyzed && (p.Property.PropertyType == typeof(string) || TypeUtils.IsStringCollection(p.Property.PropertyType)))
                 .Select(p => p.Property);
 
             IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, contentProps);
@@ -163,35 +165,42 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
 }
 
 /// <summary>
-/// Custom field mapper for string[] properties. Adds each array element as a separate
-/// TextField with the same field name, enabling multi-valued search.
+/// Field mapper for string collection properties (string[], List&lt;string&gt;, IEnumerable&lt;string&gt;…).
+/// Adds each element as a separate field with the same name, enabling multi-valued search:
+/// <c>x.Tags.Contains("a")</c> matches documents where any element matches.
+/// Analyzed collections tokenize each element; NotAnalyzed collections match whole elements verbatim.
 /// </summary>
-internal class StringArrayFieldMapper<T> : IFieldMapper<T> where T : class, new()
+internal class StringCollectionFieldMapper<T> : IFieldMapper<T> where T : class, new()
 {
     private readonly PropertyInfo _property;
+    private readonly bool _isNotAnalyzed;
     private readonly Analyzer _analyzer;
     private readonly Version _version;
 
-    public StringArrayFieldMapper(PropertyInfo property, Analyzer analyzer)
+    public StringCollectionFieldMapper(PropertyInfo property, bool isNotAnalyzed, Analyzer analyzer)
     {
         _property = property;
-        _analyzer = analyzer;
+        _isNotAnalyzed = isNotAnalyzed;
+        _analyzer = isNotAnalyzed ? new KeywordAnalyzer() : analyzer;
         _version = Version.LUCENE_48;
     }
 
     public string FieldName => _property.Name;
     public string PropertyName => _property.Name;
     public Analyzer Analyzer => _analyzer;
-    public IndexMode IndexMode => Lucene.Net.Linq.Mapping.IndexMode.Analyzed;
+    public IndexMode IndexMode => _isNotAnalyzed ? IndexMode.NotAnalyzed : IndexMode.Analyzed;
 
     public void CopyToDocument(T source, Document target)
     {
-        var value = _property.GetValue(source) as string[];
-        if (value == null) return;
-        foreach (var element in value)
+        target.RemoveFields(_property.Name);
+        if (_property.GetValue(source) is not IEnumerable<string> values) return;
+        foreach (var element in values)
         {
-            if (!string.IsNullOrEmpty(element))
-                target.Add(new TextField(_property.Name, element, Field.Store.NO));
+            if (string.IsNullOrEmpty(element))
+                continue;
+            target.Add(_isNotAnalyzed
+                ? new StringField(_property.Name, element, Field.Store.NO)
+                : new TextField(_property.Name, element, Field.Store.NO));
         }
     }
 
@@ -208,18 +217,54 @@ internal class StringArrayFieldMapper<T> : IFieldMapper<T> where T : class, new(
 
     public Query CreateQuery(string pattern)
     {
+        // QueryParser splits on whitespace before analysis, which would break a verbatim
+        // element like "Iowa Property" into two terms. Build the single term directly instead.
+        if (_isNotAnalyzed && pattern.Any(char.IsWhiteSpace))
+            return CreateVerbatimQuery(pattern);
+
         var parser = new QueryParser(_version, FieldName, _analyzer)
         {
             AllowLeadingWildcard = true,
-            LowercaseExpandedTerms = true,
+            LowercaseExpandedTerms = !_isNotAnalyzed,
         };
         return parser.Parse(pattern);
     }
 
+    /// <summary>
+    /// Term query for an escaped pattern, or a wildcard query when it has unescaped * or ? characters.
+    /// </summary>
+    private Query CreateVerbatimQuery(string pattern)
+    {
+        // literal: the element text with escapes removed. wildcard: the same text for WildcardQuery,
+        // where unescaped * and ? stay wildcards and escaped ones stay escaped (literal).
+        var literal = new System.Text.StringBuilder(pattern.Length);
+        var wildcard = new System.Text.StringBuilder(pattern.Length);
+        var isWildcard = false;
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            if (c == '\\' && i + 1 < pattern.Length)
+            {
+                c = pattern[++i];
+                if (c is '*' or '?' or '\\')
+                    wildcard.Append('\\');
+            }
+            else if (c is '*' or '?')
+            {
+                isWildcard = true;
+            }
+            literal.Append(c);
+            wildcard.Append(c);
+        }
+
+        return isWildcard
+            ? new WildcardQuery(new Term(FieldName, wildcard.ToString()))
+            : new TermQuery(new Term(FieldName, literal.ToString()));
+    }
+
     public Query CreateRangeQuery(object lowerBound, object upperBound, RangeType lowerRange, RangeType upperRange)
-        => throw new NotSupportedException("Range queries not supported on string[] fields");
+        => throw new NotSupportedException("Range queries not supported on string collection fields");
 
     public SortField CreateSortField(bool reverse)
-        => throw new NotSupportedException("Sorting not supported on string[] fields");
+        => throw new NotSupportedException("Sorting not supported on string collection fields");
 }
-

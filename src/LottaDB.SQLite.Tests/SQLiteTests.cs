@@ -29,6 +29,7 @@ public class SQLite_JsonMetadataTests : JsonMetadataTestBase { public SQLite_Jso
 public class SQLite_JsonRoundtripTests : JsonRoundtripTestBase { public SQLite_JsonRoundtripTests() : base(Tests.Configure) { } }
 public class SQLite_LargeObjectTests : LargeObjectTestBase { public SQLite_LargeObjectTests() : base(Tests.Configure) { } }
 public class SQLite_MatchTests : MatchTestBase { public SQLite_MatchTests() : base(Tests.Configure) { } }
+public class SQLite_MultiValuedFieldTests : MultiValuedFieldTestBase { public SQLite_MultiValuedFieldTests() : base(Tests.Configure) { } }
 public class SQLite_ObserveTests : ObserveTestBase { public SQLite_ObserveTests() : base(Tests.Configure) { } }
 public class SQLite_PolymorphismTests : PolymorphismTestBase { public SQLite_PolymorphismTests() : base(Tests.Configure) { } }
 public class SQLite_QueryMethodTests : QueryMethodTestBase { public SQLite_QueryMethodTests() : base(Tests.Configure) { } }

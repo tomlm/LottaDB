@@ -30,6 +30,7 @@ public class Azure_JsonMetadataTests : JsonMetadataTestBase { public Azure_JsonM
 public class Azure_JsonRoundtripTests : JsonRoundtripTestBase { public Azure_JsonRoundtripTests() : base(Tests.Configure) { } }
 public class Azure_LargeObjectTests : LargeObjectTestBase { public Azure_LargeObjectTests() : base(Tests.Configure) { } }
 public class Azure_MatchTests : MatchTestBase { public Azure_MatchTests() : base(Tests.Configure) { } }
+public class Azure_MultiValuedFieldTests : MultiValuedFieldTestBase { public Azure_MultiValuedFieldTests() : base(Tests.Configure) { } }
 public class Azure_ObserveTests : ObserveTestBase { public Azure_ObserveTests() : base(Tests.Configure) { } }
 public class Azure_PolymorphismTests : PolymorphismTestBase { public Azure_PolymorphismTests() : base(Tests.Configure) { } }
 public class Azure_QueryMethodTests : QueryMethodTestBase { public Azure_QueryMethodTests() : base(Tests.Configure) { } }

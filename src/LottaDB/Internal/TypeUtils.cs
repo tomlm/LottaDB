@@ -5,6 +5,13 @@ namespace Lotta.Internal
     internal static class TypeUtils
     {
         /// <summary>
+        /// True for string collections indexed as multi-valued fields: string[], List&lt;string&gt;,
+        /// IEnumerable&lt;string&gt; and anything else assignable to IEnumerable&lt;string&gt; (except string).
+        /// </summary>
+        internal static bool IsStringCollection(Type type)
+            => type != typeof(string) && typeof(IEnumerable<string>).IsAssignableFrom(type);
+
+        /// <summary>
         /// Walks the BaseType chain from the given type up to (but not including) object.
         /// </summary>
         internal static IEnumerable<Type> GetTypeHierarchy(Type type)

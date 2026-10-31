@@ -28,6 +28,7 @@ public class Memory_JsonMetadataTests : JsonMetadataTestBase { public Memory_Jso
 public class Memory_JsonRoundtripTests : JsonRoundtripTestBase { public Memory_JsonRoundtripTests() : base(Tests.Configure) { } }
 public class Memory_LargeObjectTests : LargeObjectTestBase { public Memory_LargeObjectTests() : base(Tests.Configure) { } }
 public class Memory_MatchTests : MatchTestBase { public Memory_MatchTests() : base(Tests.Configure) { } }
+public class Memory_MultiValuedFieldTests : MultiValuedFieldTestBase { public Memory_MultiValuedFieldTests() : base(Tests.Configure) { } }
 public class Memory_ObserveTests : ObserveTestBase { public Memory_ObserveTests() : base(Tests.Configure) { } }
 public class Memory_PolymorphismTests : PolymorphismTestBase { public Memory_PolymorphismTests() : base(Tests.Configure) { } }
 public class Memory_QueryMethodTests : QueryMethodTestBase { public Memory_QueryMethodTests() : base(Tests.Configure) { } }

@@ -260,7 +260,7 @@ internal class TypeMetadata
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
         return type == typeof(string)
-            || type == typeof(string[])
+            || TypeUtils.IsStringCollection(type)
             || type == typeof(int)
             || type == typeof(long)
             || type == typeof(double)
@@ -305,8 +305,8 @@ internal class TypeMetadata
         {
             QueryableMode.NotAnalyzed => true,
             QueryableMode.Analyzed => false,
-            // Auto: strings and string arrays are analyzed, everything else is not
-            _ => prop.PropertyType != typeof(string) && prop.PropertyType != typeof(string[])
+            // Auto: strings and string collections are analyzed, everything else is not
+            _ => prop.PropertyType != typeof(string) && !TypeUtils.IsStringCollection(prop.PropertyType)
         };
 
         meta.IndexedProperties.Add(new IndexedTypeProperty
