@@ -6,8 +6,8 @@
     <Description>LottaDB is a .NET library that stores POCO objects =&gt; Table Storage and Lucene catalogs with all of the goodness of LINQ.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>lottadb;azure;table-storage;blob-storage;lucene</PackageTags>
-    <Version>5.0.1</Version>
-    <AssemblyVersion>5.0.1.0</AssemblyVersion>
+    <Version>5.1.0</Version>
+    <AssemblyVersion>5.1.0.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="LottaDB.Tests" />
+    <InternalsVisibleTo Include="LottaDB.Lucene.Tests" />
     <InternalsVisibleTo Include="LottaDB.Benchmarks" />
   </ItemGroup>
 
@@ -28,6 +29,7 @@
     <PackageReference Include="System.IO.Pipelines" Version="10.0.14" />
     <PackageReference Include="System.Linq.Async" Version="7.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="Ulid" Version="1.4.1" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.OData" Version="2.0.4" />
   </ItemGroup>
 
 </Project>

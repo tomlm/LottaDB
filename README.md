@@ -232,6 +232,23 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data")
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 ```
 
+### Pure Lucene storage
+
+`UseLucene()` drops the separate table store: each object is written once, into its database's Lucene
+index, and point reads, `GetManyAsync` queries and ETag concurrency are all served from the index. Call it
+after a provider that supplies the Lucene directory and blob storage:
+
+```csharp
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseFileSystem(@"C:\data").UseLucene());
+```
+
+Things to know:
+
+- Writes are durable once the index commits (`AutoCommitDelay`), so a crash can lose writes made since the
+  last commit. The writing process always reads its own writes; other processes see committed state.
+- `RebuildSearchIndex()` remaps the stored objects in place — the index is its own source.
+- Blobs still come from the base provider.
+
 ## Documentation
 
 Full documentation is available in the [wiki](https://github.com/tomlm/LottaDB/wiki):

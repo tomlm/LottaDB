@@ -253,6 +253,17 @@ Key behaviors:
 
 Wraps `Azure.Data.Tables`. Each row stores `_json` (full POCO), `_type` (concrete type), `_types` (type hierarchy), and promoted tag columns. Polymorphic queries filter by `_types.Contains(typeof(T).FullName)` and deserialize from `_json` using the concrete type from `_type`.
 
+### LuceneTableServiceClient (index as storage)
+
+`catalog.UseLucene()` swaps the table store for `LuceneTableServiceClient`, a `TableServiceClient` whose rows live in the Lucene indexes:
+
+- Each `LottaDB` attaches itself to the client for its partition (database ID). A table write runs that database's indexing pipeline through its internal methods — `AcquireWriterAsync` for the write lease, then `WriteIndexDocument(key, () => BuildIndexDocument(row))`, the same mapping and index write the `On<T>` indexing handlers use. Reads go through `ReadIndex`. Because the write has already indexed the object, LottaDB does not register those handlers.
+- Each document also carries the row's non-JSON columns in a stored-only `_row` field, so the row (promoted `[Queryable]`/`[Tag]` columns included) can be read back. The JSON itself is the document's existing `_object` field.
+- Reads go through a near-real-time searcher over the `IndexWriter` while this process holds it, so they see uncommitted writes. Otherwise they read the latest commit.
+- The client generates ETags and checks If-Match itself. OData filters are evaluated against the reconstructed rows, so `GetManyAsync` keeps table semantics.
+- Rows outside any database (the catalog manifest) live in a small catalog-level index that commits on every write.
+- `RebuildSearchIndex` snapshots the rows before clearing the index, and rows no mapper covers are kept as unmapped documents, so a rebuild never loses data.
+
 ### No modifications to Lucene.Net.Linq
 
 LottaDB uses Lucene.Net.Linq's public API as designed:
