@@ -232,22 +232,41 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data")
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 ```
 
-### Pure Lucene storage
+### Pure Lucene storage (`UseLucene()`)
 
-`UseLucene()` drops the separate table store: each object is written once, into its database's Lucene
-index, and point reads, `GetManyAsync` queries and ETag concurrency are all served from the index. Call it
-after a provider that supplies the Lucene directory and blob storage:
+With `UseLucene()`, the Lucene search index *is* the storage. Each object is written once, into its
+database's Lucene index, with no separate table store. Point reads (`GetAsync`), `GetManyAsync` queries
+and ETag concurrency are all served from the index.
+
+`UseLucene()` replaces only the table storage. The index files and blobs still come from a storage
+provider, so **register a storage provider first, then call `UseLucene()`**:
 
 ```csharp
+// Index and blobs on the local file system (LottaDB.FileSystem)
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseFileSystem(@"C:\data").UseLucene());
+
+// Index and blobs in Azure Blob Storage
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseAzure(connectionString).UseLucene());
+
+// Blobs in SQLite, index on disk next to it (LottaDB.SQLite)
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data").UseLucene());
+
+// Everything in memory, for unit tests (LottaDB.Memory)
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory().UseLucene());
 ```
+
+The order matters. Each `Use…()` provider sets table storage, blob storage and the Lucene directory,
+so a provider registered *after* `UseLucene()` puts table storage back and you're no longer in
+pure-Lucene mode.
 
 Things to know:
 
-- Writes are durable once the index commits (`AutoCommitDelay`), so a crash can lose writes made since the
-  last commit. The writing process always reads its own writes; other processes see committed state.
-- `RebuildSearchIndex()` remaps the stored objects in place — the index is its own source.
-- Blobs still come from the base provider.
+- **Preview.** Pure-Lucene storage is new; treat it as a preview while it gets real-world use.
+- **Durability:** writes are durable once the index commits (`AutoCommitDelay`), so a crash can lose
+  writes made since the last commit. The writing process always reads its own writes; other processes
+  see committed state.
+- **Rebuilds:** `RebuildSearchIndex()` remaps the stored objects in place, since the index is its own
+  source.
 
 ## Documentation
 
