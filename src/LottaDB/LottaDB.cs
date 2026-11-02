@@ -2279,34 +2279,62 @@ public class LottaDB : IDisposable
 
     // Tracks which stripe indices the current async call chain already holds,
     // so reentrant calls (e.g., handler chains) skip re-acquisition and avoid deadlock.
-    private readonly AsyncLocal<HashSet<int>> _heldLocks = new();
+    // Immutable, so concurrent child tasks each see their parent's set without sharing mutations.
+    private readonly AsyncLocal<ImmutableHashSet<int>?> _heldLocks = new();
 
-    private async Task<KeyLock> AcquireLockAsync(string key, CancellationToken ct)
+    /// <summary>The lock stripe a key maps to. Keys sharing a stripe serialize against each other.</summary>
+    internal static int LockStripeOf(string key) => (key.GetHashCode() & 0x7FFFFFFF) % LockStripeCount;
+
+    // Not async: the stripe must be recorded as held in the caller's execution context, so the
+    // handlers the caller runs inherit it. An async method's AsyncLocal changes are undone when it
+    // returns — recording it in there left nested saves on the same stripe waiting on their own
+    // call chain forever.
+    private Task<KeyLock> AcquireLockAsync(string key, CancellationToken ct)
     {
-        var index = (key.GetHashCode() & 0x7FFFFFFF) % LockStripeCount;
-        var held = _heldLocks.Value ??= new HashSet<int>();
+        var index = LockStripeOf(key);
+        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
         if (held.Contains(index))
-            return new KeyLock(null, -1, _heldLocks); // already held — no-op
+            return Task.FromResult(new KeyLock(null, -1, _heldLocks)); // already held — no-op
 
+        _heldLocks.Value = held.Add(index);
+        return WaitForLockAsync(index, ct);
+    }
+
+    private async Task<KeyLock> WaitForLockAsync(int index, CancellationToken ct)
+    {
         await _keyLocks[index].WaitAsync(ct);
-        held.Add(index);
         return new KeyLock(_keyLocks[index], index, _heldLocks);
     }
 
-    private async Task<KeyLocks> AcquireLocksAsync(IEnumerable<string> keys, CancellationToken ct)
+    // Not async, for the same reason as AcquireLockAsync.
+    private Task<KeyLocks> AcquireLocksAsync(IEnumerable<string> keys, CancellationToken ct)
     {
-        var held = _heldLocks.Value ??= new HashSet<int>();
+        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
         var indices = keys
-            .Select(k => (k.GetHashCode() & 0x7FFFFFFF) % LockStripeCount)
+            .Select(LockStripeOf)
             .Distinct()
             .Where(i => !held.Contains(i)) // skip already-held stripes
             .OrderBy(i => i)
             .ToArray();
 
-        foreach (var i in indices)
+        _heldLocks.Value = held.Union(indices);
+        return WaitForLocksAsync(indices, ct);
+    }
+
+    private async Task<KeyLocks> WaitForLocksAsync(int[] indices, CancellationToken ct)
+    {
+        var acquired = 0;
+        try
         {
-            await _keyLocks[i].WaitAsync(ct);
-            held.Add(i);
+            for (; acquired < indices.Length; acquired++)
+                await _keyLocks[indices[acquired]].WaitAsync(ct);
+        }
+        catch
+        {
+            // Don't leave the stripes taken so far locked forever.
+            for (var i = acquired - 1; i >= 0; i--)
+                _keyLocks[indices[i]].Release();
+            throw;
         }
         return new KeyLocks(_keyLocks, indices, _heldLocks);
     }
@@ -2315,9 +2343,9 @@ public class LottaDB : IDisposable
     {
         private readonly SemaphoreSlim? _semaphore;
         private readonly int _index;
-        private readonly AsyncLocal<HashSet<int>> _held;
+        private readonly AsyncLocal<ImmutableHashSet<int>?> _held;
 
-        internal KeyLock(SemaphoreSlim? semaphore, int index, AsyncLocal<HashSet<int>> held)
+        internal KeyLock(SemaphoreSlim? semaphore, int index, AsyncLocal<ImmutableHashSet<int>?> held)
         {
             _semaphore = semaphore;
             _index = index;
@@ -2328,7 +2356,7 @@ public class LottaDB : IDisposable
         {
             if (_semaphore == null) return; // was reentrant — nothing to release
             _semaphore.Release();
-            _held.Value?.Remove(_index);
+            _held.Value = _held.Value?.Remove(_index);
         }
     }
 
@@ -2336,9 +2364,9 @@ public class LottaDB : IDisposable
     {
         private readonly SemaphoreSlim[] _allLocks;
         private readonly int[] _acquiredIndices;
-        private readonly AsyncLocal<HashSet<int>> _held;
+        private readonly AsyncLocal<ImmutableHashSet<int>?> _held;
 
-        internal KeyLocks(SemaphoreSlim[] allLocks, int[] acquiredIndices, AsyncLocal<HashSet<int>> held)
+        internal KeyLocks(SemaphoreSlim[] allLocks, int[] acquiredIndices, AsyncLocal<ImmutableHashSet<int>?> held)
         {
             _allLocks = allLocks;
             _acquiredIndices = acquiredIndices;
@@ -2348,10 +2376,8 @@ public class LottaDB : IDisposable
         public void Dispose()
         {
             for (int i = _acquiredIndices.Length - 1; i >= 0; i--)
-            {
                 _allLocks[_acquiredIndices[i]].Release();
-                _held.Value?.Remove(_acquiredIndices[i]);
-            }
+            _held.Value = _held.Value?.Except(_acquiredIndices);
         }
     }
 
