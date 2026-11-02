@@ -83,5 +83,35 @@ public abstract class CycleDetectionTestBase : LottaTestBase
         Assert.NotNull(await db.GetAsync<CycleB>("cb-x1", ct));
         Assert.NotNull(await db.GetAsync<CycleB>("cb-x2", ct));
     }
+
+    [Fact]
+    public async Task HandlerSave_OnSameLockStripe_DoesNotDeadlock()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Key locks are striped, and string hashes are randomized per process — so pick, for this
+        // process, a second key that lands on the outer key's stripe. The handler's nested save must
+        // see that its own call chain already holds the stripe.
+        const string outer = "stripe-outer";
+        var inner = Enumerable.Range(0, int.MaxValue)
+            .Select(i => $"stripe-inner-{i}")
+            .First(k => LottaDB.LockStripeOf(k) == LottaDB.LockStripeOf(outer));
+
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.On<CycleA>(async (a, kind, db, _) =>
+            {
+                if (kind == TriggerKind.Saved)
+                    await db.SaveAsync(new CycleB { Id = inner, Value = "nested" });
+            });
+        }, cancellationToken: ct);
+
+        var save = db.SaveAsync(new CycleA { Id = outer, Value = "outer" }, ct);
+        Assert.True(await Task.WhenAny(save, Task.Delay(TimeSpan.FromSeconds(10), ct)) == save,
+            "A handler's save on a key sharing the outer key's lock stripe deadlocked.");
+        await save;
+
+        Assert.NotNull(await db.GetAsync<CycleB>(inner, ct));
+    }
 }
 

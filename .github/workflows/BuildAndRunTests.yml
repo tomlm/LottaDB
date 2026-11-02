@@ -50,9 +50,18 @@ jobs:
     - name: Build
       run: dotnet build --no-restore src/LottaDB.slnx --property WarningLevel=0
       
+    - name: Test Core
+      run: dotnet test --no-build --verbosity normal src/LottaDB.Tests/LottaDB.Tests.csproj
+
     - name: Test Memory
       run: dotnet test --no-build --verbosity normal src/LottaDB.Memory.Tests/LottaDB.Memory.Tests.csproj
 
     - name: Test SQLite
       run: dotnet test --no-build --verbosity normal src/LottaDB.SQLite.Tests/LottaDB.SQLite.Tests.csproj
+
+    - name: Test Lucene
+      run: dotnet test --no-build --verbosity normal src/LottaDB.Lucene.Tests/LottaDB.Lucene.Tests.csproj
+
+    - name: Test Tiki
+      run: dotnet test --no-build --verbosity normal src/LottaDB.Tiki.Tests/LottaDB.Tiki.Tests.csproj
 

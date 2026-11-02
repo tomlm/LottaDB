@@ -6,8 +6,8 @@
     <Description>Filesystem storage provider for LottaDB. Adds UseFileSystem() extension method for local development with inspectable files on disk.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>lottadb;azure;table-storage;lucene;filesystem;local</PackageTags>
-    <Version>5.0.1</Version>
-    <AssemblyVersion>5.0.1.0</AssemblyVersion>
+    <Version>5.1.0</Version>
+    <AssemblyVersion>5.1.0.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LottaDB\LottaDB.csproj" />
-    <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.3" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.FileSystem" Version="2.0.4" />
   </ItemGroup>
 
 </Project>

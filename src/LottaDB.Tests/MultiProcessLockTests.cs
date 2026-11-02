@@ -32,13 +32,20 @@ namespace Lotta.Tests;
 public class MultiProcessLockTests
 {
     /// <summary>
+    /// When set, each catalog stores its objects in the Lucene index itself (<c>UseLucene()</c>)
+    /// instead of the shared in-memory tables — so the shared on-disk directory is the only storage
+    /// the two "processes" have in common, as it would be for two real servers.
+    /// </summary>
+    protected virtual bool IndexIsStorage => false;
+
+    /// <summary>
     /// Build two catalogs over one shared backing store: shared in-memory tables and blobs,
     /// and a shared on-disk Lucene directory that carries a real file lock.
     /// </summary>
-    private static (LottaCatalog first, LottaCatalog second) CreateSharedCatalogs(
+    protected (LottaCatalog first, LottaCatalog second) CreateSharedCatalogs(
         [CallerMemberName] string? testName = null)
     {
-        var root = Path.Combine(TestRun.GetTempFolder(), "MultiProcessLock",
+        var root = Path.Combine(TestRun.GetTempFolder(), "MultiProcessLock" + (IndexIsStorage ? "Lucene" : ""),
             string.Join("", testName!.Where(char.IsLetterOrDigit)));
         System.IO.Directory.CreateDirectory(root);
 
@@ -58,6 +65,7 @@ public class MultiProcessLockTests
             tableFactory = catalog.TableServiceClientFactory;
             blobFactory = catalog.BlobServiceClientFactory;
             catalog.LuceneDirectoryFactory = SharedLuceneDirectory;
+            if (IndexIsStorage) catalog.UseLucene();
         });
 
         var second = new LottaCatalog("shared", catalog =>
@@ -65,6 +73,8 @@ public class MultiProcessLockTests
             catalog.TableServiceClientFactory = tableFactory!;
             catalog.BlobServiceClientFactory = blobFactory!;
             catalog.LuceneDirectoryFactory = SharedLuceneDirectory;
+            // Each process has its own storage client; with UseLucene() they share only the files.
+            if (IndexIsStorage) catalog.UseLucene();
         });
 
         return (first, second);
@@ -231,6 +241,38 @@ public class MultiProcessLockTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => reader.SaveAsync(new Actor { Username = "bob", DisplayName = "Bob" }, ct));
+    }
+
+    /// <summary>
+    /// The writer role changes hands while both servers read and read-modify-write the same
+    /// object. Each must see the other's committed changes once it takes the role — nothing it
+    /// wrote or read while it last held the role may be served stale.
+    /// </summary>
+    [Fact]
+    public async Task WriterHandover_ReadsAndChanges_SeeOtherProcessesWrites()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (c1, c2) = CreateSharedCatalogs();
+        using var _1 = c1;
+        using var _2 = c2;
+
+        var db1 = await OpenAsync(c1, ct, config => config.MaxSearchStaleness = 0);
+        var db2 = await OpenAsync(c2, ct, config => config.MaxSearchStaleness = 0);
+
+        await db1.SaveAsync(new Actor { Username = "alice", DisplayName = "v1", Counter = 1 }, ct);
+        await db1.ReleaseWriteLockAsync(ct);
+
+        Assert.Equal(1, (await db2.GetAsync<Actor>("alice", ct))!.Counter);
+        await db2.ChangeAsync<Actor>("alice", a => a.Counter++, ct);
+        await db2.ReleaseWriteLockAsync(ct);
+
+        Assert.Equal(2, (await db1.GetAsync<Actor>("alice", ct))!.Counter);
+        await db1.ChangeAsync<Actor>("alice", a => a.Counter++, ct);
+        await db1.ReleaseWriteLockAsync(ct);
+
+        var final = (await db2.GetAsync<Actor>("alice", ct))!;
+        Assert.Equal(3, final.Counter);
+        Assert.Equal(final.GetETag(), (await db1.GetAsync<Actor>("alice", ct))!.GetETag());
     }
 
     /// <summary>
