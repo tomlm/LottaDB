@@ -238,20 +238,6 @@ and the Lucene index together, so calling a second one (e.g. `UseMemory().UseLuc
 `InvalidOperationException`. The connection-string constructor `new LottaCatalog(name, connectionString)`
 registers Azure for you.
 
-### Pure Lucene storage
-
-With `UseLucene()`, Lucene is the only storage. Each object is written once, into its database's
-Lucene index, and point reads, `GetManyAsync` queries and ETag concurrency are served from there.
-Blobs are stored as files in a `{catalog}/blobs` Lucene directory.
-
-```csharp
-// Everything in memory, for unit tests
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseLucene());
-
-// Everything on the local file system
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseLucene(LuceneDirectories.FileSystem(@"C:\data")));
-```
-
 `LuceneDirectories` has ready-made directory factories:
 
 | Factory | Description |
@@ -261,17 +247,6 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseLucene(LuceneDirec
 | `LuceneDirectories.Azure(connectionString)` | `AzureDirectory` backed by Azure Blob Storage, with a local cache. |
 
 You can also pass your own `Func<string, Directory>`; it receives paths like `{catalog}/{database}/Search`.
-
-Things to know:
-
-- **Preview.** Pure-Lucene storage is new; treat it as a preview while it gets real-world use.
-- **Durability:** object writes are durable once the index commits (`AutoCommitDelay`), so a crash can
-  lose writes made since the last commit. The writing process always reads its own writes; other
-  processes see committed state. Blobs are durable as soon as the upload completes.
-- **Blob concurrency:** conditional blob writes (`overwrite: false`) are checked within a process;
-  two processes uploading the same blob path at the same moment are not coordinated.
-- **Rebuilds:** `RebuildSearchIndex()` remaps the stored objects in place, since the index is its own
-  source.
 
 ## Documentation
 
