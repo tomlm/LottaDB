@@ -221,7 +221,7 @@ LottaDB works with Azure Table Storage out of the box. For local development and
 | Package | Install | Usage | Description |
 |---------|---------|-------| ---------|
 | **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` | The default provider. Uses Azure Table Storage API for durability. |
-| **LottaDB** **Lucene** | `dotnet add package LottaDB` | `catalog.UseLucene(LuceneDirectories.XXXX())` | A pure lucene only implementation, data is stored in Lucene directories directly. |
+| **LottaDB** (Lucene) | `dotnet add package LottaDB` | `catalog.UseLucene(LuceneDirectories.FileSystem(path))` | Pure-Lucene storage: objects, search index and blobs are all stored in Lucene directories. |
 | **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` | In-memory provider for unit testing. No durability, but lightning fast and supports all features. |
 | **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` | Local storage with SQLite. Durable and supports all features, but no serverless scaling. |
 
@@ -233,15 +233,45 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data")
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 ```
 
+Register **one** storage provider per catalog. Each `Use…()` configures table storage, blob storage
+and the Lucene index together, so calling a second one (e.g. `UseMemory().UseLucene()`) throws an
+`InvalidOperationException`. The connection-string constructor `new LottaCatalog(name, connectionString)`
+registers Azure for you.
 
+### Pure Lucene storage
 
-`LuceneDirectories` has ready-made directory factories: 
+With `UseLucene()`, Lucene is the only storage. Each object is written once, into its database's
+Lucene index, and point reads, `GetManyAsync` queries and ETag concurrency are served from there.
+Blobs are stored as files in a `{catalog}/blobs` Lucene directory.
 
-| Factory                                   | Description                                                  |
-| ----------------------------------------- | ------------------------------------------------------------ |
-| LuceneDirectories.Memory()                | Instantiates a RAM lucene directory, contents will disappear when process restarts |
-| LuceneDirectories.FileSystem(rootPath)    | Instantiates a File system directory  in root path           |
-| LuceneDirectories.Azure(connectionstring) | Instantiates a AzureDirectory backed by azure blob storage   |
+```csharp
+// Everything in memory, for unit tests
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseLucene());
+
+// Everything on the local file system
+var catalog = new LottaCatalog("myapp", catalog => catalog.UseLucene(LuceneDirectories.FileSystem(@"C:\data")));
+```
+
+`LuceneDirectories` has ready-made directory factories:
+
+| Factory | Description |
+|---------|-------------|
+| `LuceneDirectories.Memory()` | In-memory `RAMDirectory`. Contents are lost when the process exits. |
+| `LuceneDirectories.FileSystem(rootPath)` | `FSDirectory` on disk under `rootPath`. |
+| `LuceneDirectories.Azure(connectionString)` | `AzureDirectory` backed by Azure Blob Storage, with a local cache. |
+
+You can also pass your own `Func<string, Directory>`; it receives paths like `{catalog}/{database}/Search`.
+
+Things to know:
+
+- **Preview.** Pure-Lucene storage is new; treat it as a preview while it gets real-world use.
+- **Durability:** object writes are durable once the index commits (`AutoCommitDelay`), so a crash can
+  lose writes made since the last commit. The writing process always reads its own writes; other
+  processes see committed state. Blobs are durable as soon as the upload completes.
+- **Blob concurrency:** conditional blob writes (`overwrite: false`) are checked within a process;
+  two processes uploading the same blob path at the same moment are not coordinated.
+- **Rebuilds:** `RebuildSearchIndex()` remaps the stored objects in place, since the index is its own
+  source.
 
 ## Documentation
 
