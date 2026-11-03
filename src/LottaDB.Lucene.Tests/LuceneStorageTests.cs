@@ -20,7 +20,7 @@ public class LuceneStorageTests
         public string Title { get; set; } = "";
     }
 
-    private static LottaCatalog MemoryCatalog(string name) => new(name, c => c.UseMemory().UseLucene());
+    private static LottaCatalog MemoryCatalog(string name) => new(name, c => c.UseLucene());
 
     private static Task<LottaDB> OpenAsync(LottaCatalog catalog, Action<ILottaConfiguration>? configure = null)
         => catalog.GetDatabaseAsync("db", config =>
@@ -184,13 +184,13 @@ public class LuceneStorageTests
         var root = Path.Combine(TestRun.GetTempFolder(), nameof(FileSystem_DataAndCatalogSurviveReopen), Guid.NewGuid().ToString("N"));
         const string name = "reopen";
 
-        using (var catalog = new LottaCatalog(name, c => c.UseFileSystem(root).UseLucene()))
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
         {
             var db = await OpenAsync(catalog);
             await db.SaveAsync(new Actor { Username = "erin", DisplayName = "Erin" }, ct);
         }
 
-        using (var catalog = new LottaCatalog(name, c => c.UseFileSystem(root).UseLucene()))
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
         {
             Assert.Contains("db", await catalog.ListAsync(ct));
             var db = await OpenAsync(catalog);
@@ -206,18 +206,93 @@ public class LuceneStorageTests
         var root = Path.Combine(TestRun.GetTempFolder(), nameof(FileSystem_DeleteCatalogRemovesData), Guid.NewGuid().ToString("N"));
         const string name = "deleted";
 
-        using (var catalog = new LottaCatalog(name, c => c.UseFileSystem(root).UseLucene()))
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
         {
             var db = await OpenAsync(catalog);
             await db.SaveAsync(new Actor { Username = "frank", DisplayName = "Frank" }, ct);
             await catalog.DeleteAsync(ct);
         }
 
-        using (var catalog = new LottaCatalog(name, c => c.UseFileSystem(root).UseLucene()))
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
         {
             Assert.Empty(await catalog.ListAsync(ct));
             var db = await OpenAsync(catalog);
             Assert.Null(await db.GetAsync<Actor>("frank", ct));
+        }
+    }
+
+    [Fact]
+    public async Task FileSystem_BlobsLiveInBlobsDirectoryAndSurviveReopen()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(TestRun.GetTempFolder(), nameof(FileSystem_BlobsLiveInBlobsDirectoryAndSurviveReopen), Guid.NewGuid().ToString("N"));
+        const string name = "blobreopen";
+
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
+        {
+            var db = await OpenAsync(catalog);
+            await db.UploadBlobAsync("Docs/Readme.txt", "upper", cancellationToken: ct);
+            await db.UploadBlobAsync("docs/readme.txt", "lower", cancellationToken: ct); // differs only by case
+        }
+
+        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, name, "blobs"), "*.blob"));
+
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
+        {
+            var db = await OpenAsync(catalog);
+            Assert.Equal("upper", await db.DownloadBlobStringAsync("Docs/Readme.txt", ct));
+            Assert.Equal("lower", await db.DownloadBlobStringAsync("docs/readme.txt", ct));
+            Assert.Equal(["Docs/Readme.txt", "docs/readme.txt"], await db.ListBlobsAsync(cancellationToken: ct));
+        }
+    }
+
+    [Fact]
+    public async Task Blob_FailedOverwrite_KeepsPreviousContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var catalog = MemoryCatalog(nameof(Blob_FailedOverwrite_KeepsPreviousContent));
+        var db = await OpenAsync(catalog);
+        await db.UploadBlobAsync("a.txt", "original", cancellationToken: ct);
+
+        await Assert.ThrowsAsync<IOException>(() => db.UploadBlobAsync("a.txt", new FailingStream(), cancellationToken: ct));
+
+        Assert.Equal("original", await db.DownloadBlobStringAsync("a.txt", ct));
+        Assert.Equal(["a.txt"], await db.ListBlobsAsync(cancellationToken: ct));
+    }
+
+    [Fact]
+    public async Task Blob_NoOverwrite_RejectsExisting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var catalog = MemoryCatalog(nameof(Blob_NoOverwrite_RejectsExisting));
+        var db = await OpenAsync(catalog);
+        await db.UploadBlobAsync("a.txt", "first", overwrite: false, cancellationToken: ct);
+
+        var ex = await Assert.ThrowsAsync<Azure.RequestFailedException>(() => db.UploadBlobAsync("a.txt", "second", overwrite: false, cancellationToken: ct));
+        Assert.Equal(409, ex.Status);
+        Assert.Equal("first", await db.DownloadBlobStringAsync("a.txt", ct));
+    }
+
+    /// <summary>Yields some bytes, then fails mid-upload.</summary>
+    private sealed class FailingStream : Stream
+    {
+        private bool _sent;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_sent) throw new IOException("connection lost");
+            _sent = true;
+            buffer[offset] = (byte)'x';
+            return 1;
         }
     }
 

@@ -1,8 +1,6 @@
 ﻿using System.Runtime.CompilerServices;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
-using Lucene.Net.Store;
-using LuceneDirectory = Lucene.Net.Store.Directory;
 
 namespace Lotta.Tests;
 
@@ -49,11 +47,13 @@ public class MultiProcessLockTests
             string.Join("", testName!.Where(char.IsLetterOrDigit)));
         System.IO.Directory.CreateDirectory(root);
 
-        LuceneDirectory SharedLuceneDirectory(string path)
+        var sharedLuceneDirectory = LuceneDirectories.FileSystem(root);
+
+        if (IndexIsStorage)
         {
-            var dir = Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar));
-            System.IO.Directory.CreateDirectory(dir);
-            return FSDirectory.Open(dir);
+            // Each process has its own storage client; with UseLucene() they share only the files.
+            return (new LottaCatalog("shared", catalog => catalog.UseLucene(sharedLuceneDirectory)),
+                    new LottaCatalog("shared", catalog => catalog.UseLucene(sharedLuceneDirectory)));
         }
 
         Func<TableServiceClient>? tableFactory = null;
@@ -64,17 +64,14 @@ public class MultiProcessLockTests
             catalog.UseMemory();
             tableFactory = catalog.TableServiceClientFactory;
             blobFactory = catalog.BlobServiceClientFactory;
-            catalog.LuceneDirectoryFactory = SharedLuceneDirectory;
-            if (IndexIsStorage) catalog.UseLucene();
+            catalog.LuceneDirectoryFactory = sharedLuceneDirectory;
         });
 
         var second = new LottaCatalog("shared", catalog =>
         {
             catalog.TableServiceClientFactory = tableFactory!;
             catalog.BlobServiceClientFactory = blobFactory!;
-            catalog.LuceneDirectoryFactory = SharedLuceneDirectory;
-            // Each process has its own storage client; with UseLucene() they share only the files.
-            if (IndexIsStorage) catalog.UseLucene();
+            catalog.LuceneDirectoryFactory = sharedLuceneDirectory;
         });
 
         return (first, second);

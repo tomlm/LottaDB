@@ -3,13 +3,13 @@ using Lotta.Tests;
 namespace Lotta.Lucene.Tests;
 
 /// <summary>
-/// The shared suite with the search index as the storage: UseLucene() over in-memory
-/// directories, and over the file system for the tests that reopen storage.
+/// The shared suite with Lucene as the only storage: UseLucene() over in-memory directories,
+/// and over the file system for the tests that reopen storage.
 /// </summary>
 internal static class Tests
 {
-    internal static void Configure(LottaCatalog catalog) => catalog.UseMemory().UseLucene();
-    internal static void ConfigureFileSystem(LottaCatalog catalog) => catalog.UseFileSystem(TestRun.GetTempFolder()).UseLucene();
+    internal static void Configure(LottaCatalog catalog) => catalog.UseLucene();
+    internal static void ConfigureFileSystem(LottaCatalog catalog) => catalog.UseLucene(LuceneDirectories.FileSystem(TestRun.GetTempFolder()));
 }
 
 public class Lucene_AdHocJoinTests : AdHocJoinTestBase { public Lucene_AdHocJoinTests() : base(Tests.Configure) { } }
@@ -54,6 +54,8 @@ public class LuceneFileSystem_DatabaseLifecycleTests : DatabaseLifecycleTestBase
 public class LuceneFileSystem_DatabaseIsolationTests : DatabaseIsolationTestBase { public LuceneFileSystem_DatabaseIsolationTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_ETagTests : ETagTestBase { public LuceneFileSystem_ETagTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_JsonMetadataTests : JsonMetadataTestBase { public LuceneFileSystem_JsonMetadataTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_BlobTests : BlobTestBase { public LuceneFileSystem_BlobTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public LuceneFileSystem_BlobOnUploadTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_RebuildIndexTests : RebuildIndexTestBase { public LuceneFileSystem_RebuildIndexTests() : base(Tests.ConfigureFileSystem) { } }
 
 /// <summary>Cross-process write-lock contention with the index as the only shared storage.</summary>

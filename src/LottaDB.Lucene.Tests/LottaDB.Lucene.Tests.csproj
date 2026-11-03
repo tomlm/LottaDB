@@ -10,7 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LottaDB.FileSystem\LottaDB.FileSystem.csproj" />
     <ProjectReference Include="..\LottaDB.Tests\LottaDB.Tests.csproj" />
     <PackageReference Include="coverlet.collector" Version="10.1.0">
       <PrivateAssets>all</PrivateAssets>

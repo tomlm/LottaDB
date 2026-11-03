@@ -1,7 +1,5 @@
 using Iciclecreek.Azure.Storage.Memory.Blobs;
 using Iciclecreek.Azure.Storage.Memory.Tables;
-using Lucene.Net.Store;
-using System.Runtime.CompilerServices;
 
 namespace Lotta;
 
@@ -10,8 +8,6 @@ namespace Lotta;
 /// </summary>
 public static class LottaMemoryExtensions
 {
-    private static ConditionalWeakTable<string, Lucene.Net.Store.Directory> _luceneDirectories = new();
-
     /// <summary>
     /// Configure the catalog to use in-memory storage. All data lives in RAM and is lost
     /// when the process exits. Ideal for unit tests -- fast, isolated, no cleanup needed.
@@ -21,9 +17,6 @@ public static class LottaMemoryExtensions
     {
         var tableClient = new MemoryTableServiceClient();
         var blobClient = new MemoryBlobServiceClient();
-        catalog.TableServiceClientFactory = () => tableClient;
-        catalog.BlobServiceClientFactory = () => blobClient;
-        catalog.LuceneDirectoryFactory = (path) => _luceneDirectories.GetValue(path, _ => new RAMDirectory());
-        return catalog;
+        return catalog.UseStorage("Memory", () => tableClient, () => blobClient, LuceneDirectories.Memory());
     }
 }

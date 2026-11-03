@@ -51,13 +51,44 @@ public class LottaCatalog : IDisposable
     /// <summary>
     /// Factory for creating the Lucene Directory. Receives a composite path
     /// (<c>{catalog}/{databaseId}/Search</c>) to create per-database indexes.
-    /// For local providers (Memory, FileSystem, SQLite) set this to return
-    /// RAMDirectory or FSDirectory directly.
-    /// When null (default), AzureDirectory is used to persist the index to blob storage
-    /// with an FSDirectory cache in temp.
+    /// Set by the storage provider; see <see cref="LuceneDirectories"/> for ready-made factories.
     /// </summary>
     public Func<string, LuceneDirectory> LuceneDirectoryFactory { get; set; }
         = (_) => throw new InvalidOperationException($"LottaCatalog.LuceneDirectoryFactory is not configured");
+
+    /// <summary>
+    /// The storage provider registered with <see cref="UseStorage"/> (e.g. "Memory", "Lucene"),
+    /// or null if none has been.
+    /// </summary>
+    public string? StorageProvider { get; private set; }
+
+    /// <summary>
+    /// Register this catalog's storage provider: table storage, blob storage and Lucene directories.
+    /// Each <c>Use…()</c> provider calls this, and a catalog has exactly one provider — registering
+    /// a second throws.
+    /// </summary>
+    /// <param name="provider">Provider name, used in error messages.</param>
+    /// <param name="tableServiceClientFactory">Sets <see cref="TableServiceClientFactory"/>.</param>
+    /// <param name="blobServiceClientFactory">Sets <see cref="BlobServiceClientFactory"/>.</param>
+    /// <param name="luceneDirectoryFactory">Sets <see cref="LuceneDirectoryFactory"/>.</param>
+    /// <exception cref="InvalidOperationException">A storage provider is already registered.</exception>
+    public LottaCatalog UseStorage(
+        string provider,
+        Func<TableServiceClient> tableServiceClientFactory,
+        Func<BlobServiceClient> blobServiceClientFactory,
+        Func<string, LuceneDirectory> luceneDirectoryFactory)
+    {
+        if (StorageProvider != null)
+            throw new InvalidOperationException(
+                $"Catalog '{Name}' already uses {StorageProvider} storage, so it cannot also use {provider}. " +
+                $"Each Use…() provider configures tables, blobs and the Lucene index, so register only one.");
+
+        StorageProvider = provider;
+        TableServiceClientFactory = tableServiceClientFactory;
+        BlobServiceClientFactory = blobServiceClientFactory;
+        LuceneDirectoryFactory = luceneDirectoryFactory;
+        return this;
+    }
 
     /// <summary>
     /// Embedding generator for vector similarity search, shared across all databases in this catalog.
@@ -73,7 +104,9 @@ public class LottaCatalog : IDisposable
     internal Analyzer Analyzer { get; set; } = new EnglishAnalyzer(Lucene.Net.Util.LuceneVersion.LUCENE_48);
 
     /// <summary>
-    /// Create a catalog with an Azure Storage connection string.
+    /// Create a catalog with an Azure Storage connection string. This registers Azure storage
+    /// (<see cref="LottaCatalogExtensions.UseAzure"/>), so <paramref name="configure"/> must not
+    /// register another storage provider.
     /// </summary>
     /// <param name="catalogName">Catalog name. Used as the Azure table name and blob container.</param>
     /// <param name="connectionString">Azure Storage connection string.</param>

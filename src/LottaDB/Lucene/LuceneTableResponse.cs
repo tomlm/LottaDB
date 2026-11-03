@@ -5,8 +5,9 @@ using System.Diagnostics.CodeAnalysis;
 namespace Lotta;
 
 /// <summary>
-/// In-process <see cref="Response"/> returned by <see cref="LuceneTableClient"/>. Carries the
-/// status code and, for writes, the new ETag header that LottaDB reads back.
+/// In-process <see cref="Response"/> returned by <see cref="LuceneTableClient"/> and the Lucene
+/// blob clients. Carries the status code and, for table writes, the new ETag header that LottaDB
+/// reads back.
 /// </summary>
 internal sealed class LuceneTableResponse : Response
 {
@@ -43,6 +44,7 @@ internal sealed class LuceneTableResponse : Response
     }
 
     public static Response Ok() => new LuceneTableResponse(200, "OK");
+    public static Response Created() => new LuceneTableResponse(201, "Created");
     public static Response Accepted() => new LuceneTableResponse(202, "Accepted");
     public static Response NotFound() => new LuceneTableResponse(404, "Not Found");
 

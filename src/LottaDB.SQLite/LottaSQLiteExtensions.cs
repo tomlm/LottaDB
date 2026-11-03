@@ -1,6 +1,5 @@
 using Iciclecreek.Azure.Storage.SQLite.Blobs;
 using Iciclecreek.Azure.Storage.SQLite.Tables;
-using Lucene.Net.Store;
 
 namespace Lotta;
 
@@ -21,14 +20,9 @@ public static class LottaSQLiteExtensions
         var fullPath = Path.GetFullPath(rootPath);
         System.IO.Directory.CreateDirectory(fullPath);
         var dbPath = Path.Combine(fullPath, $"{catalog.Name}.db");
-        catalog.TableServiceClientFactory = () => new SqliteTableServiceClient(dbPath);
-        catalog.BlobServiceClientFactory = () => new SqliteBlobServiceClient(dbPath);
-        catalog.LuceneDirectoryFactory = path =>
-        {
-            var luceneDir = Path.Combine(fullPath, path.Replace('/', Path.DirectorySeparatorChar));
-            System.IO.Directory.CreateDirectory(luceneDir);
-            return FSDirectory.Open(luceneDir);
-        };
-        return catalog;
+        return catalog.UseStorage("SQLite",
+            () => new SqliteTableServiceClient(dbPath),
+            () => new SqliteBlobServiceClient(dbPath),
+            LuceneDirectories.FileSystem(fullPath));
     }
 }
