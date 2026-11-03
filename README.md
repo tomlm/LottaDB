@@ -233,11 +233,6 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data")
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 ```
 
-Register **one** storage provider per catalog. Each `Use…()` configures table storage, blob storage
-and the Lucene index together, so calling a second one (e.g. `UseMemory().UseLucene()`) throws an
-`InvalidOperationException`. The connection-string constructor `new LottaCatalog(name, connectionString)`
-registers Azure for you.
-
 `LuceneDirectories` has ready-made directory factories:
 
 | Factory | Description |
