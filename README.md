@@ -221,6 +221,7 @@ LottaDB works with Azure Table Storage out of the box. For local development and
 | Package | Install | Usage | Description |
 |---------|---------|-------| ---------|
 | **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` | The default provider. Uses Azure Table Storage API for durability. |
+| **LottaDB** (Lucene) | `dotnet add package LottaDB` | `catalog.UseLucene(LuceneDirectories.FileSystem(path))` | Pure-Lucene storage: objects, search index and blobs are all stored in Lucene directories. |
 | **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` | In-memory provider for unit testing. No durability, but lightning fast and supports all features. |
 | **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` | Local storage with SQLite. Durable and supports all features, but no serverless scaling. |
 
@@ -232,41 +233,15 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data")
 var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 ```
 
-### Pure Lucene storage (`UseLucene()`)
+`LuceneDirectories` has ready-made directory factories:
 
-With `UseLucene()`, the Lucene search index *is* the storage. Each object is written once, into its
-database's Lucene index, with no separate table store. Point reads (`GetAsync`), `GetManyAsync` queries
-and ETag concurrency are all served from the index.
+| Factory | Description |
+|---------|-------------|
+| `LuceneDirectories.Memory()` | In-memory `RAMDirectory`. Contents are lost when the process exits. |
+| `LuceneDirectories.FileSystem(rootPath)` | `FSDirectory` on disk under `rootPath`. |
+| `LuceneDirectories.Azure(connectionString)` | `AzureDirectory` backed by Azure Blob Storage, with a local cache. |
 
-`UseLucene()` replaces only the table storage. The index files and blobs still come from a storage
-provider, so **register a storage provider first, then call `UseLucene()`**:
-
-```csharp
-// Index and blobs on the local file system (LottaDB.FileSystem)
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseFileSystem(@"C:\data").UseLucene());
-
-// Index and blobs in Azure Blob Storage
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseAzure(connectionString).UseLucene());
-
-// Blobs in SQLite, index on disk next to it (LottaDB.SQLite)
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseSQLite(@"C:\data").UseLucene());
-
-// Everything in memory, for unit tests (LottaDB.Memory)
-var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory().UseLucene());
-```
-
-The order matters. Each `Use…()` provider sets table storage, blob storage and the Lucene directory,
-so a provider registered *after* `UseLucene()` puts table storage back and you're no longer in
-pure-Lucene mode.
-
-Things to know:
-
-- **Preview.** Pure-Lucene storage is new; treat it as a preview while it gets real-world use.
-- **Durability:** writes are durable once the index commits (`AutoCommitDelay`), so a crash can lose
-  writes made since the last commit. The writing process always reads its own writes; other processes
-  see committed state.
-- **Rebuilds:** `RebuildSearchIndex()` remaps the stored objects in place, since the index is its own
-  source.
+You can also pass your own `Func<string, Directory>`; it receives paths like `{catalog}/{database}/Search`.
 
 ## Documentation
 

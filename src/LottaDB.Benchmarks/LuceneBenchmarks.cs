@@ -7,5 +7,5 @@ namespace Lotta.Benchmarks;
 public class LuceneBenchmarks : LottaDBBenchmarkBase
 {
     protected override void Configure(LottaCatalog catalog) =>
-        catalog.UseMemory().UseLucene();
+        catalog.UseLucene();
 }

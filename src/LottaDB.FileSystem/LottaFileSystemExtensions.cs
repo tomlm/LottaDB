@@ -1,6 +1,5 @@
 using Iciclecreek.Azure.Storage.FileSystem.Blobs;
 using Iciclecreek.Azure.Storage.FileSystem.Tables;
-using Lucene.Net.Store;
 
 namespace Lotta;
 
@@ -16,15 +15,8 @@ public static class LottaFileSystemExtensions
     /// <param name="catalog">The catalog to configure.</param>
     /// <param name="rootPath">Root directory for all storage (tables, blobs, and Lucene index).</param>
     public static LottaCatalog UseFileSystem(this LottaCatalog catalog, string rootPath)
-    {
-        catalog.TableServiceClientFactory = () => new FileTableServiceClient(rootPath);
-        catalog.BlobServiceClientFactory = () => new FileBlobServiceClient(rootPath);
-        catalog.LuceneDirectoryFactory = path =>
-        {
-            var dir = Path.Combine(rootPath, path.Replace('/', Path.DirectorySeparatorChar));
-            System.IO.Directory.CreateDirectory(dir);
-            return FSDirectory.Open(dir);
-        };
-        return catalog;
-    }
+        => catalog.UseStorage("FileSystem",
+            () => new FileTableServiceClient(rootPath),
+            () => new FileBlobServiceClient(rootPath),
+            LuceneDirectories.FileSystem(rootPath));
 }

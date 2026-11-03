@@ -253,9 +253,13 @@ Key behaviors:
 
 Wraps `Azure.Data.Tables`. Each row stores `_json` (full POCO), `_type` (concrete type), `_types` (type hierarchy), and promoted tag columns. Polymorphic queries filter by `_types.Contains(typeof(T).FullName)` and deserialize from `_json` using the concrete type from `_type`.
 
+### Storage providers
+
+Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tables, blobs, directories)`, which sets the three factories together and records `StorageProvider`. A catalog has exactly one provider: a second `UseStorage` call throws, rather than silently replacing some of the first provider's factories. Setting a factory property directly is still allowed as a deliberate override. The Lucene directory factories the providers use are public in `LuceneDirectories` (`Memory`, `FileSystem`, `Azure`), so a pure-Lucene catalog can put its directories in any of those stores.
+
 ### LuceneTableServiceClient (index as storage)
 
-`catalog.UseLucene()` swaps the table store for `LuceneTableServiceClient`, a `TableServiceClient` whose rows live in the Lucene indexes:
+`catalog.UseLucene(directoryFactory)` registers Lucene as the catalog's only storage provider (`UseLucene()` is shorthand for `LuceneDirectories.Memory()`). It uses `LuceneTableServiceClient` as the table store, a `TableServiceClient` whose rows live in the Lucene indexes:
 
 - Each `LottaDB` attaches itself to the client for its partition (database ID). A table write runs that database's indexing pipeline through its internal methods — `AcquireWriterAsync` for the write lease, then `WriteIndexDocument(key, () => BuildIndexDocument(row))`, the same mapping and index write the `On<T>` indexing handlers use. Reads go through `ReadIndex`. Because the write has already indexed the object, LottaDB does not register those handlers.
 - Each document also carries the row's non-JSON columns in a stored-only `_row` field, so the row (promoted `[Queryable]`/`[Tag]` columns included) can be read back. The JSON itself is the document's existing `_object` field.
@@ -263,6 +267,14 @@ Wraps `Azure.Data.Tables`. Each row stores `_json` (full POCO), `_type` (concret
 - The client generates ETags and checks If-Match itself. OData filters are evaluated against the reconstructed rows, so `GetManyAsync` keeps table semantics.
 - Rows outside any database (the catalog manifest) live in a small catalog-level index that commits on every write.
 - `RebuildSearchIndex` snapshots the rows before clearing the index, and rows no mapper covers are kept as unmapped documents, so a rebuild never loses data.
+
+### LuceneBlobServiceClient (blobs in a Lucene directory)
+
+Blob storage is `LuceneBlobServiceClient`, so no other provider is involved. Each container's blobs are files in the Lucene directory for `{container}/blobs`:
+
+- Lucene directories are flat, and file systems may fold case, so a blob's file is named by a hash of its blob name; the name itself, content type, ETag, timestamps and metadata are in the file header, and a Lucene checksum footer ends the file.
+- Each blob has two slots (`{hash}.a.blob`, `{hash}.b.blob`). An upload streams into the slot that is not current, syncs it, and only then deletes the old slot — a failed upload leaves the previous content intact. A slot without a valid footer is ignored.
+- Reads and writes of a blob are serialized per blob within the process; If-None-Match and If-Match are checked under that gate. Listing scans the directory and reads each blob's header.
 
 ### No modifications to Lucene.Net.Linq
 
