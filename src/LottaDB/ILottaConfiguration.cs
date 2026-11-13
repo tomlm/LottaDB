@@ -172,6 +172,11 @@ public interface IQueryableConfiguration
     IQueryableConfiguration NotAnalyzed();
     /// <summary>Enable vector embeddings for similarity search.</summary>
     IQueryableConfiguration Vector();
+    /// <summary>
+    /// Make the property's values countable with <c>.Facets(...)</c> on a
+    /// <c>Search&lt;T&gt;()</c> query.
+    /// </summary>
+    IQueryableConfiguration Facet();
 }
 
 /// <summary>
@@ -185,4 +190,9 @@ public interface IFieldConfiguration
     IFieldConfiguration NotAnalyzed();
     /// <summary>Enable vector embeddings for similarity search.</summary>
     IFieldConfiguration Vector();
+    /// <summary>
+    /// Make the property's values countable with <c>.Facets(...)</c> on a
+    /// <c>Search&lt;T&gt;()</c> query.
+    /// </summary>
+    IFieldConfiguration Facet();
 }

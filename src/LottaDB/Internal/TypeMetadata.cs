@@ -142,7 +142,7 @@ internal class TypeMetadata
             var queryableAttr = prop.GetCustomAttribute<QueryableAttribute>();
             if (queryableAttr != null)
             {
-                AddQueryable(meta, prop, queryableAttr.Mode, queryableAttr.Vector);
+                AddQueryable(meta, prop, queryableAttr.Mode, queryableAttr.Vector, queryableAttr.Facet);
                 continue;
             }
 
@@ -166,6 +166,7 @@ internal class TypeMetadata
                         IsNotAnalyzed = fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzed
                                      || fieldAttr.IndexMode == Lucene.Net.Linq.Mapping.IndexMode.NotAnalyzedNoNorms,
                         IsVectorField = vectorAttr != null,
+                        IsFacet = fieldAttr.Facet,
                     });
                 }
             }
@@ -194,7 +195,7 @@ internal class TypeMetadata
         {
             var propInfo = ExtractPropertyInfo(config.Expression);
             if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
-                AddQueryable(meta, propInfo, config.Mode, config.IsVectorField);
+                AddQueryable(meta, propInfo, config.Mode, config.IsVectorField, config.IsFacet);
         }
 
         // Fluent AddTag → Table Storage column only
@@ -216,6 +217,7 @@ internal class TypeMetadata
                     Property = propInfo,
                     IsNotAnalyzed = config.IsNotAnalyzed,
                     IsVectorField = config.IsVectorField,
+                    IsFacet = config.IsFacet,
                 });
             }
         }
@@ -313,7 +315,7 @@ internal class TypeMetadata
         });
     }
 
-    private static void AddQueryable(TypeMetadata meta, PropertyInfo prop, QueryableMode mode, bool vector = false)
+    private static void AddQueryable(TypeMetadata meta, PropertyInfo prop, QueryableMode mode, bool vector = false, bool facet = false)
     {
         // Table Storage tag
         meta.Tags.Add(new TagInfo
@@ -337,6 +339,7 @@ internal class TypeMetadata
             Property = prop,
             IsNotAnalyzed = isNotAnalyzed,
             IsVectorField = vector,
+            IsFacet = facet,
         });
     }
 
@@ -359,12 +362,20 @@ internal class TypeMetadata
                 DefaultSearchProperty = m.DefaultSearchProperty?.Name,
                 IndexedProperties = m.IndexedProperties
                     .OrderBy(p => p.Property.Name)
-                    .Select(p => new
+                    .Select(p =>
                     {
-                        Name = p.Property.Name,
-                        PropertyType = p.Property.PropertyType.FullName,
-                        p.IsNotAnalyzed,
-                        p.IsVectorField,
+                        // IsFacet is written only when set, so the hash of a schema
+                        // without facets is unchanged and upgrading does not force a rebuild.
+                        var entry = new Dictionary<string, object?>
+                        {
+                            ["Name"] = p.Property.Name,
+                            ["PropertyType"] = p.Property.PropertyType.FullName,
+                            ["IsNotAnalyzed"] = p.IsNotAnalyzed,
+                            ["IsVectorField"] = p.IsVectorField,
+                        };
+                        if (p.IsFacet)
+                            entry["IsFacet"] = true;
+                        return entry;
                     }),
                 Tags = m.Tags
                     .OrderBy(t => t.Name)
@@ -444,4 +455,5 @@ internal class IndexedTypeProperty
     public required PropertyInfo Property { get; init; }
     public bool IsNotAnalyzed { get; init; }
     public bool IsVectorField { get; init; }
+    public bool IsFacet { get; init; }
 }

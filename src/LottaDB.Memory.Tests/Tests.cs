@@ -8,6 +8,8 @@ internal static class Tests
 }
 
 public class Memory_AdHocJoinTests : AdHocJoinTestBase { public Memory_AdHocJoinTests() : base(Tests.Configure) { } }
+public class Memory_FacetTests : FacetTestBase { public Memory_FacetTests() : base(Tests.Configure) { } }
+public class Memory_JoinTests : JoinTestBase { public Memory_JoinTests() : base(Tests.Configure) { } }
 public class Memory_AutoQueryableTests : AutoQueryableTestBase { public Memory_AutoQueryableTests() : base(Tests.Configure) { } }
 public class Memory_BatchTests : BatchTestBase { public Memory_BatchTests() : base(Tests.Configure) { } }
 public class Memory_BlobOnUploadTests : BlobOnUploadTestBase { public Memory_BlobOnUploadTests() : base(Tests.Configure) { } }

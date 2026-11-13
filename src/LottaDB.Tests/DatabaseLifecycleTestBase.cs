@@ -1,3 +1,4 @@
+using Lucene.Net.Linq;
 using System.Runtime.CompilerServices;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
@@ -142,6 +143,48 @@ public abstract class DatabaseLifecycleTestBase : LottaTestBase
         var results2 = db2.Search<Actor>().ToList();
         Assert.Single(results2);
         Assert.Equal("alice", results2[0].Username);
+        catalog2.Dispose();
+    }
+
+    [Fact]
+    public async Task DeclaringAFacet_RebuildsIndex_AndCountsExistingObjects()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        Func<TableServiceClient>? sharedTableFactory = null;
+        Func<BlobServiceClient>? sharedBlobFactory = null;
+
+        // First run: Kind is queryable but not a facet.
+        var catalog1 = CreateCatalog(catalog =>
+        {
+            sharedTableFactory = catalog.TableServiceClientFactory;
+            sharedBlobFactory = catalog.BlobServiceClientFactory;
+        });
+        var db1 = await catalog1.GetDatabaseAsync("facetdb", config =>
+        {
+            config.Store<FacetSchemaTests.Plain>(s => s.AddQueryable(p => p.Kind).NotAnalyzed());
+        }, ct);
+        await db1.ResetDatabaseAsync(ct);
+        await db1.SaveAsync(new FacetSchemaTests.Plain { Id = "1", Kind = "a" }, ct);
+        await db1.SaveAsync(new FacetSchemaTests.Plain { Id = "2", Kind = "a" }, ct);
+        await db1.SaveAsync(new FacetSchemaTests.Plain { Id = "3", Kind = "b" }, ct);
+        catalog1.Dispose();
+
+        // Second run: same storage, Kind is now a facet.
+        var catalog2 = CreateCatalog(catalog =>
+        {
+            catalog.TableServiceClientFactory = sharedTableFactory!;
+            catalog.BlobServiceClientFactory = sharedBlobFactory!;
+        });
+        var db2 = await catalog2.GetDatabaseAsync("facetdb", config =>
+        {
+            config.Store<FacetSchemaTests.Plain>(s => s.AddQueryable(p => p.Kind).NotAnalyzed().Facet());
+        }, ct);
+        db2.ReloadSearcher();
+
+        // The objects saved before the facet existed are counted, without being saved again.
+        db2.Search<FacetSchemaTests.Plain>().Facets(out var facets, f => f.Count(p => p.Kind)).ToList();
+        Assert.Equal(["a=2", "b=1"], facets.For(p => p.Kind).Select(v => $"{v.Label}={v.Count}"));
         catalog2.Dispose();
     }
 

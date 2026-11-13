@@ -20,6 +20,14 @@ public class QueryableAttribute : Attribute
     /// </summary>
     public bool Vector { get; set; }
 
+    /// <summary>
+    /// When <c>true</c>, the property's values can be counted with
+    /// <c>.Facets(...)</c> on a <c>Search&lt;T&gt;()</c> query. Works on strings, string
+    /// collections, numbers, booleans, GUIDs and dates; numbers and dates also support
+    /// range counts. Composable with any <see cref="QueryableMode"/>.
+    /// </summary>
+    public bool Facet { get; set; }
+
     /// <summary>Queryable with smart defaults based on property type.</summary>
     public QueryableAttribute()
     {
