@@ -8,7 +8,7 @@ namespace Lotta.Tests;
 /// not-analyzed string property runs inside Lucene; any other join is done in memory. Either
 /// way the rows must be the ones LINQ to Objects gives for the same data.
 /// </summary>
-public abstract class JoinTestBase : LottaTestBase
+public abstract partial class JoinTestBase : LottaTestBase
 {
     protected JoinTestBase(Action<LottaCatalog> config) : base(config) { }
 

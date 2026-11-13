@@ -80,6 +80,16 @@ public class Truck : Vehicle
     public int Axles { get; set; }
 }
 
+/// <summary>A type whose key is a number, so a join on it cannot run inside Lucene.</summary>
+public class Depot
+{
+    [Key]
+    public int DepotId { get; set; }
+
+    [Queryable(QueryableMode.NotAnalyzed)]
+    public string Region { get; set; } = "";
+}
+
 internal static class FacetJoinData
 {
     public static readonly Shop[] Shops =
@@ -110,5 +120,6 @@ internal static class FacetJoinData
         });
         config.Store<Vehicle>();
         config.Store<Truck>();
+        config.Store<Depot>();
     }
 }
