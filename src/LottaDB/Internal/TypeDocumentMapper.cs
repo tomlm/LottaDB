@@ -98,8 +98,9 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         foreach (var propName in source.KeyProperties)
         {
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
-            // A plain string key keeps its ReflectionFieldMapper base, which is what lets
-            // Lucene.Net.Linq run a join on the key inside Lucene.
+            // A key mapped by a plain ReflectionFieldMapper (string, int, Guid and other
+            // converted keys) keeps that base, which is what lets Lucene.Net.Linq run a
+            // join on a string key inside Lucene. Any other mapper is wrapped.
             AddKeyField(fieldMapper.GetType() == typeof(ReflectionFieldMapper<T>)
                 ? new LottaKeyFieldMapper<T>((ReflectionFieldMapper<T>)fieldMapper)
                 : new LottaDocumentKeyFieldMapper<T>(fieldMapper));

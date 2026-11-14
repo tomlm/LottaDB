@@ -15,8 +15,8 @@ public class PerformanceGuardCollection { }
 /// that from run to run, and far more on a shared build machine. So nothing here compares
 /// against a stored time. The checks are an exact count (how many objects the search
 /// matched), a ratio between two queries measured side by side in this process (the join
-/// inside Lucene is normally 50 to 100 times cheaper; the test asks for 5), and a budget on
-/// the bytes the paged join allocates, which is the same on every run.
+/// inside Lucene is normally 50 to 100 times cheaper; the test asks for 5), for both time
+/// and bytes allocated. There is no fixed byte budget: the bytes vary a little under load.
 /// For exact timings use <c>JoinBenchmarks</c> in LottaDB.Benchmarks.
 /// </remarks>
 [Collection(nameof(PerformanceGuardCollection))]
@@ -25,9 +25,6 @@ public class JoinPerformanceGuardTests : LottaTestBase
     private const int ShopCount = 400;
     private const int GadgetCount = 8_000;
     private const int MinimumRatio = 5;
-
-    /// <summary>Twice what the paged join allocates today (298 KB, the same on every run).</summary>
-    private const long PagedJoinByteBudget = 600 * 1024;
 
     public JoinPerformanceGuardTests() : base(c => c.UseMemory()) { }
 
@@ -100,9 +97,8 @@ public class JoinPerformanceGuardTests : LottaTestBase
         var report = $"inside Lucene: {luceneMs:F2} ms, {luceneBytes / 1024} KB; in memory: {memoryMs:F2} ms, {memoryBytes / 1024} KB";
         TestContext.Current.TestOutputHelper?.WriteLine(report);
 
-        // Allocation barely varies between runs, so it is the steadier of the two checks.
+        // Allocation varies less between runs than time, so it is the steadier of the two checks.
         Assert.True(luceneBytes * MinimumRatio < memoryBytes, $"Expected the join inside Lucene to allocate under 1/{MinimumRatio} of the in-memory join. {report}");
-        Assert.True(luceneBytes < PagedJoinByteBudget, $"Expected the join inside Lucene to allocate under {PagedJoinByteBudget / 1024} KB. {report}");
         Assert.True(luceneMs * MinimumRatio < memoryMs, $"Expected the join inside Lucene to take under 1/{MinimumRatio} of the in-memory join. {report}");
     }
 

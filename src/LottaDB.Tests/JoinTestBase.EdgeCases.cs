@@ -171,6 +171,45 @@ public abstract partial class JoinTestBase
     }
 
     [Fact]
+    public async Task Join_AnalyzedPropertyToKey_JoinsEqualValues_CaseSensitively()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(FacetJoinData.Configure, cancellationToken: ct);
+
+        // Analysis lowercases and splits SoldByText in the index; the key is indexed as written.
+        Shop[] shops =
+        [
+            new Shop { ShopId = "alice", Name = "lower" },
+            new Shop { ShopId = "Bob", Name = "mixed" },
+            new Shop { ShopId = "01HZX7Q4KJ8M2N3P5R6S7T8V9W", Name = "ulid" },
+            new Shop { ShopId = "two words", Name = "words" },
+        ];
+        Gadget[] gadgets =
+        [
+            new Gadget { GadgetId = "k1", SoldByText = "alice" },
+            new Gadget { GadgetId = "k2", SoldByText = "Bob" },
+            new Gadget { GadgetId = "k3", SoldByText = "bob" },      // no such shop: the key is case-sensitive
+            new Gadget { GadgetId = "k4", SoldByText = "01HZX7Q4KJ8M2N3P5R6S7T8V9W" },
+            new Gadget { GadgetId = "k5", SoldByText = "two words" },
+            new Gadget { GadgetId = "k6", SoldByText = "two" },      // no such shop
+        ];
+        await db.SaveManyAsync(shops, ct);
+        await db.SaveManyAsync(gadgets, ct);
+
+        var expected = (from g in gadgets join s in shops on g.SoldByText equals s.ShopId orderby g.GadgetId select $"{g.GadgetId}:{s.Name}").ToList();
+        Assert.Equal(["k1:lower", "k2:mixed", "k4:ulid", "k5:words"], expected);
+
+        var gadgetFirst = (from g in db.Search<Gadget>() join s in db.Search<Shop>() on g.SoldByText equals s.ShopId select new { g.GadgetId, s.Name }).ToList();
+        Assert.Equal(expected, gadgetFirst.Select(r => $"{r.GadgetId}:{r.Name}").Order());
+
+        var shopFirst = (from s in db.Search<Shop>() join g in db.Search<Gadget>() on s.ShopId equals g.SoldByText select new { g.GadgetId, s.Name }).ToList();
+        Assert.Equal(expected, shopFirst.Select(r => $"{r.GadgetId}:{r.Name}").Order());
+
+        var gadgetSide = (from g in db.Search<Gadget>() join s in db.Search<Shop>() on g.SoldByText equals s.ShopId select g.GadgetId).ToList();
+        Assert.Equal(["k1", "k2", "k4", "k5"], gadgetSide.Order());
+    }
+
+    [Fact]
     public async Task Join_ThousandsOfKeys_MatchesLinqToObjects()
     {
         var ct = TestContext.Current.CancellationToken;

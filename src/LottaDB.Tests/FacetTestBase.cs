@@ -234,11 +234,12 @@ public class FacetSchemaTests
     [Fact]
     public void DeclaringAFacet_ChangesTheSchemaHash()
     {
-        var plain = Hash(null);
+        // The two configurations differ only in the facet.
+        var plain = Hash(s => s.AddQueryable(p => p.Kind).NotAnalyzed());
         var faceted = Hash(s => s.AddQueryable(p => p.Kind).NotAnalyzed().Facet());
 
         Assert.NotEqual(plain, faceted);
-        Assert.Equal(plain, Hash(null));
+        Assert.Equal(faceted, Hash(s => s.AddQueryable(p => p.Kind).NotAnalyzed().Facet()));
     }
 
     [Fact]

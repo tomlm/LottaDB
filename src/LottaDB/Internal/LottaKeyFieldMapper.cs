@@ -8,12 +8,16 @@ using Lucene.Net.Util;
 namespace Lotta.Internal;
 
 /// <summary>
-/// Key field mapper for a plain string key. Behaves like
+/// Key field mapper for a key that Lucene.Net.Linq maps with a plain
+/// <see cref="ReflectionFieldMapper{T}"/>: a string key, and keys stored through a
+/// converter such as <c>int</c> or <c>Guid</c>. Behaves like
 /// <see cref="LottaDocumentKeyFieldMapper{T}"/> (also writes the shared
 /// <see cref="StorageFields.Key"/> field and queries the key through it), but stays a
 /// <see cref="ReflectionFieldMapper{T}"/>. Lucene.Net.Linq only runs a join inside
-/// Lucene when both key mappers are that type, so this is what lets
+/// Lucene when both key mappers are that type and both keys are strings indexed as
+/// written, so for a string key this is what lets
 /// <c>join b in db.Search&lt;B&gt;() on a.BId equals b.Key</c> avoid loading both sides.
+/// Joins on other key types are still done in memory.
 /// </summary>
 internal sealed class LottaKeyFieldMapper<T> : ReflectionFieldMapper<T>
 {

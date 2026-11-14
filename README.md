@@ -119,24 +119,33 @@ var page = db.Search<Product>(p => p.Category == "phone")
         .Count(p => p.Tags)
         .Ranges(p => p.Price, new[] { new FacetRange("under 100", null, 100.0), new FacetRange("100 and up", 100.0, null) }))
     .Take(20)
-    .ToList();
+    .ToList();   // .Facets(...) and FacetRange need: using Lucene.Net.Linq;
 
 foreach (var tag in facets.For(p => p.Tags))
     Console.WriteLine($"{tag.Label}: {tag.Count}");
 ```
 
-LINQ `join` works between `Search<T>()` queries. A join from a `[Key]` to a `NotAnalyzed` string property runs inside Lucene, so a query that returns one side never loads the other:
+LINQ `join` works between `Search<T>()` queries. A join between a string `[Key]` and a `NotAnalyzed` string property runs inside Lucene, so a query that returns one side never loads the other:
 
 ```csharp
+public class Author
+{
+    [Key]
+    public string AuthorId { get; set; } = "";
+
+    [Queryable]
+    public string DisplayName { get; set; } = "";
+}
+
 var notes = (
-    from note in db.Search<Note>()
-    join actor in db.Search<Actor>(a => a.DisplayName == "Alice") on note.AuthorId equals actor.Username
+    from note in db.Search<Note>()                      // Note.AuthorId is NotAnalyzed
+    join author in db.Search<Author>(a => a.DisplayName == "Alice") on note.AuthorId equals author.AuthorId
     orderby note.Published descending
     select note
 ).Take(20).ToList();
 ```
 
-Other joins are done in memory and return the same rows. See the wiki pages [Facets](https://github.com/tomlm/LottaDB/wiki/Facets) and [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ#joins).
+Other joins are done in memory, which loads the rows of both sides. A join to a `[Key]` or a `NotAnalyzed` property is case-sensitive. See the wiki pages [Facets](https://github.com/tomlm/LottaDB/wiki/Facets) and [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ#joins).
 
 ## Concurrency
 
