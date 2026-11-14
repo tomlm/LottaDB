@@ -13,6 +13,8 @@ internal static class Tests
 }
 
 public class Lucene_AdHocJoinTests : AdHocJoinTestBase { public Lucene_AdHocJoinTests() : base(Tests.Configure) { } }
+public class Lucene_FacetTests : FacetTestBase { public Lucene_FacetTests() : base(Tests.Configure) { } }
+public class Lucene_JoinTests : JoinTestBase { public Lucene_JoinTests() : base(Tests.Configure) { } }
 public class Lucene_AutoQueryableTests : AutoQueryableTestBase { public Lucene_AutoQueryableTests() : base(Tests.Configure) { } }
 public class Lucene_BatchTests : BatchTestBase { public Lucene_BatchTests() : base(Tests.Configure) { } }
 public class Lucene_BlobOnUploadTests : BlobOnUploadTestBase { public Lucene_BlobOnUploadTests() : base(Tests.Configure) { } }

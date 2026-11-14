@@ -93,8 +93,59 @@ public class Note
 |-----------|--------|
 | `[Key]` | Designates the unique key property. Without it, a ULID is auto-generated. |
 | `[Queryable]` | Controls how a property is indexed. Strings get full-text search by default. |
+| `[Queryable(Facet = true)]` | Also makes the property's values countable with `.Facets(...)`. |
 | `[NotQueryable]` | Excludes a property from automatic indexing (useful for large strings). |
 | `[DefaultSearch]` | (class-level) Sets the default property for free-text queries. |
+
+## Facets and Joins
+
+Count how many matching objects carry each value of a property, in the same search that returns the results:
+
+```csharp
+public class Product
+{
+    [Queryable(QueryableMode.NotAnalyzed, Facet = true)]
+    public string Category { get; set; } = "";
+
+    [Queryable(Facet = true)]
+    public List<string> Tags { get; set; } = new();
+
+    [Queryable(Facet = true)]
+    public double Price { get; set; }
+}
+
+var page = db.Search<Product>(p => p.Category == "phone")
+    .Facets(out var facets, f => f
+        .Count(p => p.Tags)
+        .Ranges(p => p.Price, new[] { new FacetRange("under 100", null, 100.0), new FacetRange("100 and up", 100.0, null) }))
+    .Take(20)
+    .ToList();   // .Facets(...) and FacetRange need: using Lucene.Net.Linq;
+
+foreach (var tag in facets.For(p => p.Tags))
+    Console.WriteLine($"{tag.Label}: {tag.Count}");
+```
+
+LINQ `join` works between `Search<T>()` queries. A join between a string `[Key]` and a `NotAnalyzed` string property runs inside Lucene, so a query that returns one side never loads the other:
+
+```csharp
+public class Author
+{
+    [Key]
+    public string AuthorId { get; set; } = "";
+
+    [Queryable]
+    public string DisplayName { get; set; } = "";
+}
+
+var notes = (
+    from note in db.Search<Note>()                      // Note.AuthorId is NotAnalyzed
+    join author in db.Search<Author>(a => a.DisplayName == "Alice") on note.AuthorId equals author.AuthorId
+    orderby note.Published descending
+    select note
+).Take(20).ToList();
+```
+
+Other joins are done in memory, which loads the rows of both sides. A join to a `[Key]` or a `NotAnalyzed` property is case-sensitive. See the wiki pages [Facets](https://github.com/tomlm/LottaDB/wiki/Facets) and [Search and LINQ](https://github.com/tomlm/LottaDB/wiki/Search-and-LINQ#joins).
 
 ## Concurrency
 

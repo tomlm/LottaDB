@@ -5,7 +5,7 @@ public abstract class AdHocJoinTestBase : LottaTestBase
     protected AdHocJoinTestBase(Action<LottaCatalog> config) : base(config) { }
 
     [Fact]
-    public async Task AdHocJoin_MaterializeThenJoinInMemory()
+    public async Task AdHocJoin_BothSidesSelected()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(cancellationToken: ct);
@@ -15,11 +15,11 @@ public abstract class AdHocJoinTestBase : LottaTestBase
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n1", AuthorId = "alice", Content = "Hello from Alice", Published = DateTimeOffset.UtcNow }, ct);
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n2", AuthorId = "bob", Content = "Hello from Bob", Published = DateTimeOffset.UtcNow }, ct);
 
-        // Ad-hoc join: materialize both sides via SearchAsync, then LINQ join in memory
+        // Ad-hoc join run by the search provider. AuthorId is analyzed, so the rows are joined in memory.
 
         var joined = (
-            from note in db.Search<Note>().ToList()
-            join actor in db.Search<Actor>().ToList()
+            from note in db.Search<Note>()
+            join actor in db.Search<Actor>()
                 on note.AuthorId equals actor.Username
             select new { note.NoteId, note.Content, actor.DisplayName }
         ).ToList();
@@ -40,7 +40,7 @@ public abstract class AdHocJoinTestBase : LottaTestBase
         await db.SaveAsync(new Note { Domain = "join.test", NoteId = "n4", AuthorId = "carol", Content = "Boring note", Published = DateTimeOffset.UtcNow }, ct);
 
         var joined = (
-            from note in db.Search<Note>().Where(n => n.Content.Contains("Important")).ToList()
+            from note in db.Search<Note>().Where(n => n.Content.Contains("Important"))
             join actor in db.Search<Actor>()
                 on note.AuthorId equals actor.Username
             select new { note.NoteId, actor.DisplayName }

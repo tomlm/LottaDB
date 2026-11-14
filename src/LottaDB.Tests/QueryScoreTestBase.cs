@@ -36,6 +36,19 @@ public class DoubleScoredNote
     public double Score { get; set; }
 }
 
+/// <summary>A vector property that is also declared as a facet, which is not supported.</summary>
+public class FacetedVectorNote
+{
+    [Key]
+    public string Id { get; set; } = "";
+
+    [Queryable(QueryableMode.NotAnalyzed, Facet = true)]
+    public string Category { get; set; } = "";
+
+    [Queryable(Vector = true, Facet = true)]
+    public string Title { get; set; } = "";
+}
+
 public abstract class QueryScoreTestBase : LottaTestBase
 {
     // Shared embedding generator, loaded once. Uses the vendored model (see LocalModel).
@@ -82,6 +95,21 @@ public abstract class QueryScoreTestBase : LottaTestBase
         Assert.All(results, r => Assert.InRange(r.Score, 0f, 1f));
         Assert.Equal("1", results[0].Id);
         Assert.True(results[0].Score > results[^1].Score);
+    }
+
+    [Fact]
+    public async Task VectorProperty_CannotAlsoBeAFacet()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Lucene.Net.Linq rejects the combination; LottaDB passes its message through.
+        var error = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            var db = await CreateDbAsync(c => c.Store<FacetedVectorNote>(), cancellationToken: ct);
+            await db.SaveAsync(new FacetedVectorNote { Id = "1", Category = "animals", Title = "a small kitten" }, ct);
+        });
+
+        Assert.Contains("cannot be both a vector field and a facet", error.ToString());
     }
 
     [Fact]

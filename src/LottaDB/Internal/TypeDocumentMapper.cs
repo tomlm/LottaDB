@@ -60,6 +60,10 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
 
             var propMap = classMap.Property(PropExpr(indexed.Property));
 
+            // Set before AsNumericField/AsVectorField, which copy the settings into a new map.
+            if (indexed.IsFacet)
+                propMap.Facet();
+
             if (indexed.Property.PropertyType == typeof(DateTime) || indexed.Property.PropertyType == typeof(DateTime?))
                 propMap.ConvertWith(_dtConverter);
             else if (indexed.Property.PropertyType == typeof(DateTimeOffset) || indexed.Property.PropertyType == typeof(DateTimeOffset?))
@@ -94,7 +98,12 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         foreach (var propName in source.KeyProperties)
         {
             var fieldMapper = (IFieldMapper<T>)source.GetMappingInfo(propName);
-            AddKeyField(new LottaDocumentKeyFieldMapper<T>(fieldMapper));
+            // A key mapped by a plain ReflectionFieldMapper (string, int, Guid and other
+            // converted keys) keeps that base, which is what lets Lucene.Net.Linq run a
+            // join on a string key inside Lucene. Any other mapper is wrapped.
+            AddKeyField(fieldMapper.GetType() == typeof(ReflectionFieldMapper<T>)
+                ? new LottaKeyFieldMapper<T>((ReflectionFieldMapper<T>)fieldMapper)
+                : new LottaDocumentKeyFieldMapper<T>(fieldMapper));
         }
 
         foreach (var propName in source.AllProperties)
@@ -108,7 +117,7 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
 
         // Add string collection field mappers (multi-valued Lucene fields)
         foreach (var indexed in stringCollectionProperties)
-            AddField(new StringCollectionFieldMapper<T>(indexed.Property, indexed.IsNotAnalyzed, _propertyAnalyzer));
+            AddField(new StringCollectionFieldMapper<T>(indexed.Property, indexed.IsNotAnalyzed, _propertyAnalyzer, indexed.IsFacet));
 
         if (meta.DefaultSearchProperty != null)
         {
@@ -178,20 +187,34 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
 /// <c>x.Tags.Contains("a")</c> matches documents where any element matches.
 /// Analyzed collections tokenize each element; NotAnalyzed collections match whole elements verbatim.
 /// </summary>
-internal class StringCollectionFieldMapper<T> : IFieldMapper<T> where T : class, new()
+internal class StringCollectionFieldMapper<T> : IFacetFieldMapper<T> where T : class, new()
 {
     private readonly PropertyInfo _property;
     private readonly bool _isNotAnalyzed;
     private readonly Analyzer _analyzer;
     private readonly Version _version;
 
-    public StringCollectionFieldMapper(PropertyInfo property, bool isNotAnalyzed, Analyzer analyzer)
+    public StringCollectionFieldMapper(PropertyInfo property, bool isNotAnalyzed, Analyzer analyzer, bool facet = false)
     {
         _property = property;
         _isNotAnalyzed = isNotAnalyzed;
         _analyzer = isNotAnalyzed ? new KeywordAnalyzer() : analyzer;
         _version = Version.LUCENE_48;
+        Facet = facet;
     }
+
+    /// <summary>Whether each element is written as a facet value, whole and as written.</summary>
+    public bool Facet { get; }
+
+    // A document can hold several elements, and Lucene 4.8 has no multi-valued numeric
+    // doc values, so a collection has value counts only.
+    public string RangeFacetField => null!;
+    public NumericFieldType RangeFacetValueType => NumericFieldType.NONE;
+    public object ConvertToRangeFacetValue(object value)
+        => throw new NotSupportedException("Range counts are not supported on string collection fields");
+
+    public IEnumerable<string> GetFacetValues(T source)
+        => _property.GetValue(source) as IEnumerable<string> ?? Array.Empty<string>();
 
     public string FieldName => _property.Name;
     public string PropertyName => _property.Name;

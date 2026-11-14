@@ -10,6 +10,8 @@ internal static class Tests
 }
 
 public class Azure_AdHocJoinTests : AdHocJoinTestBase { public Azure_AdHocJoinTests() : base(Tests.Configure) { } }
+public class Azure_FacetTests : FacetTestBase { public Azure_FacetTests() : base(Tests.Configure) { } }
+public class Azure_JoinTests : JoinTestBase { public Azure_JoinTests() : base(Tests.Configure) { } }
 public class Azure_AutoQueryableTests : AutoQueryableTestBase { public Azure_AutoQueryableTests() : base(Tests.Configure) { } }
 public class Azure_BatchTests : BatchTestBase { public Azure_BatchTests() : base(Tests.Configure) { } }
 public class Azure_BlobOnUploadTests : BlobOnUploadTestBase { public Azure_BlobOnUploadTests() : base(Tests.Configure) { } }

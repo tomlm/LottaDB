@@ -9,6 +9,8 @@ internal static class Tests
 }
 
 public class SQLite_AdHocJoinTests : AdHocJoinTestBase { public SQLite_AdHocJoinTests() : base(Tests.Configure) { } }
+public class SQLite_FacetTests : FacetTestBase { public SQLite_FacetTests() : base(Tests.Configure) { } }
+public class SQLite_JoinTests : JoinTestBase { public SQLite_JoinTests() : base(Tests.Configure) { } }
 public class SQLite_AutoQueryableTests : AutoQueryableTestBase { public SQLite_AutoQueryableTests() : base(Tests.Configure) { } }
 public class SQLite_BatchTests : BatchTestBase { public SQLite_BatchTests() : base(Tests.Configure) { } }
 public class SQLite_BlobOnUploadTests : BlobOnUploadTestBase { public SQLite_BlobOnUploadTests() : base(Tests.Configure) { } }

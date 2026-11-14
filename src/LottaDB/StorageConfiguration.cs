@@ -78,6 +78,8 @@ internal class QueryablePropertyConfig : IQueryableConfiguration
     public IQueryableConfiguration Analyzed() { Mode = QueryableMode.Analyzed; return this; }
     public IQueryableConfiguration NotAnalyzed() { Mode = QueryableMode.NotAnalyzed; return this; }
     public IQueryableConfiguration Vector() { IsVectorField = true; return this; }
+    public IQueryableConfiguration Facet() { IsFacet = true; return this; }
+    internal bool IsFacet { get; private set; }
 }
 
 internal class FieldPropertyConfig : IFieldConfiguration
@@ -94,4 +96,6 @@ internal class FieldPropertyConfig : IFieldConfiguration
     public IFieldConfiguration Analyzed() { IsNotAnalyzed = false; return this; }
     public IFieldConfiguration NotAnalyzed() { IsNotAnalyzed = true; return this; }
     public IFieldConfiguration Vector() { IsVectorField = true; return this; }
+    public IFieldConfiguration Facet() { IsFacet = true; return this; }
+    internal bool IsFacet { get; private set; }
 }

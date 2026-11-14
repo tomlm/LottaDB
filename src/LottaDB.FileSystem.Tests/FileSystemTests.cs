@@ -8,6 +8,8 @@ internal static class Tests
 }
 
 public class FileSystem_AdHocJoinTests : AdHocJoinTestBase { public FileSystem_AdHocJoinTests() : base(Tests.Configure) { } }
+public class FileSystem_FacetTests : FacetTestBase { public FileSystem_FacetTests() : base(Tests.Configure) { } }
+public class FileSystem_JoinTests : JoinTestBase { public FileSystem_JoinTests() : base(Tests.Configure) { } }
 public class FileSystem_AutoQueryableTests : AutoQueryableTestBase { public FileSystem_AutoQueryableTests() : base(Tests.Configure) { } }
 public class FileSystem_BatchTests : BatchTestBase { public FileSystem_BatchTests() : base(Tests.Configure) { } }
 public class FileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public FileSystem_BlobOnUploadTests() : base(Tests.Configure) { } }
