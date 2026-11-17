@@ -683,6 +683,98 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Single(await both[0].GetHandlerStatusAsync(ct));
     }
 
+    [Fact]
+    public async Task CallersSharingAnOpen_EachWaitWithTheirOwnToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var hold = new OpenHold(Catalog);
+        static void Configure(ILottaConfiguration opts)
+        {
+            opts.Store<Actor>();
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+        }
+        using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var gaveUp = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        var a = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, first.Token), ct);
+        await hold.Reached.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        // Each on its own thread: before, joining an open could block until it finished.
+        var b = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, ct), ct);
+        var c = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, gaveUp.Token), ct);
+
+        // Before, everyone waited on the open under the token of the caller who started it: one
+        // who gave up waited on regardless, and the starter giving up failed the open for all.
+        gaveUp.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => c.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        first.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => a.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        Assert.False(b.IsCompleted);   // the open is still held
+
+        hold.Release();
+        var db = await b.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        Assert.Same(db, await Catalog.GetDatabaseAsync("shared", Configure, ct));
+        var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        Assert.Empty(saved.Errors);
+        Assert.Single(await db.GetHandlerStatusAsync(ct));
+    }
+
+    /// <summary>
+    /// Holds the catalog's next open at its last step, making the handlers' queues, until
+    /// <see cref="Release"/>: the queue storage's first request for a queue waits for it.
+    /// </summary>
+    private sealed class OpenHold : IDisposable
+    {
+        private readonly TaskCompletionSource _reached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _released = new();
+        private readonly ConcurrentBag<QueueServiceClient> _clients = [];
+        private int _taken;
+
+        public OpenHold(LottaCatalog catalog)
+        {
+            var inner = catalog.QueueServiceClientFactory!;
+            catalog.QueueServiceClientFactory = () =>
+            {
+                var client = inner();
+                _clients.Add(client);
+                return new Held(client, this);
+            };
+        }
+
+        /// <summary>Completes once an open is being held.</summary>
+        public Task Reached => _reached.Task;
+
+        public void Release() => _released.Set();
+
+        public void Dispose()
+        {
+            _released.Set();
+            foreach (var client in _clients)
+                (client as IDisposable)?.Dispose();
+        }
+
+        /// <summary>
+        /// Not IDisposable: the catalog letting go of it while an open is held must not close the
+        /// client under that open. <see cref="OpenHold"/> closes them at the end of the test.
+        /// </summary>
+        private sealed class Held(QueueServiceClient inner, OpenHold hold) : QueueServiceClient
+        {
+            public override QueueClient GetQueueClient(string queueName)
+            {
+                if (Interlocked.Exchange(ref hold._taken, 1) == 0)
+                {
+                    hold._reached.TrySetResult();
+                    hold._released.Wait();
+                }
+                return inner.GetQueueClient(queueName);
+            }
+
+            public override AsyncPageable<Azure.Storage.Queues.Models.QueueItem> GetQueuesAsync(
+                Azure.Storage.Queues.Models.QueueTraits traits = default, string? prefix = null, CancellationToken cancellationToken = default) =>
+                inner.GetQueuesAsync(traits, prefix, cancellationToken);
+        }
+    }
+
     /// <summary>Queue storage whose first request for a queue fails, as a transient error would.</summary>
     private sealed class FailsOnceQueueServiceClient(QueueServiceClient inner) : QueueServiceClient, IDisposable
     {

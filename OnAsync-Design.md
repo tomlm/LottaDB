@@ -90,7 +90,7 @@ A message whose object no longer exists is dropped. Deletes are not queued: `On<
 ## The pump
 
 - One per open, writable database that has queued handlers. It starts when the catalog has fully opened the database, never for a read-only one.
-- The catalog hands out a database only once it is fully open, handlers started. If any step of opening fails (a schema rebuild, the manifest, creating the queues), the half-open database is disposed and nothing is kept, so the next `GetDatabaseAsync` opens it again from scratch. Callers asking for the database while it is being opened share that one open.
+- The catalog hands out a database only once it is fully open, handlers started. If any step of opening fails (a schema rebuild, the manifest, creating the queues), the half-open database is disposed and nothing is kept, so the next `GetDatabaseAsync` opens it again from scratch. Callers asking for the database while it is being opened share that one open. The open runs under the catalog's token, not any one caller's, and each caller waits with its own: one that cancels stops waiting without failing the open for the others. An open that every caller has given up on still finishes and is kept.
 - `config.AsyncHandlers = AsyncHandlerMode.Manual` leaves it stopped; handlers then run only in `DrainAsync`.
 - One handler run at a time per database.
 - A run holds its message with a short lease, renewed while it runs. A run that loses its lease, or outlasts `Timeout`, is cancelled and counts as a failure.

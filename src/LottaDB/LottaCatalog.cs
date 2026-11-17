@@ -22,7 +22,12 @@ public class LottaCatalog : IDisposable
     /// <summary>The databases fully open: schemas loaded, any rebuild done, handlers started.</summary>
     private readonly ConcurrentDictionary<string, LottaDB> _databases = new();
     /// <summary>Opens in progress, shared by everyone asking for the same database meanwhile.</summary>
-    private readonly ConcurrentDictionary<string, Lazy<Task<LottaDB>>> _opening = new();
+    private readonly ConcurrentDictionary<string, Task<LottaDB>> _opening = new();
+    /// <summary>
+    /// The token opens run under: the catalog's, cancelled when it is disposed, rather than that of
+    /// whichever caller happened to start the open. Never disposed, so a second Dispose can still cancel it.
+    /// </summary>
+    private readonly CancellationTokenSource _closing = new();
     private TableServiceClient? _tableServiceClient;
     private TableClient? _tableClient;
     private BlobServiceClient? _blobServiceClient;
@@ -175,6 +180,10 @@ public class LottaCatalog : IDisposable
     /// </summary>
     /// <param name="databaseId">Database ID within this catalog.</param>
     /// <param name="configure">Configuration callback for registering types and handlers for this database.</param>
+    /// <param name="cancellationToken">
+    /// Stops this call waiting. Callers asking for a database while it is being opened share one
+    /// open, which runs on whether or not they cancel, and is kept for the next caller.
+    /// </param>
     public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null, CancellationToken cancellationToken = default)
     {
         if (_databases.TryGetValue(databaseId, out var existing))
@@ -183,22 +192,46 @@ public class LottaCatalog : IDisposable
             return existing;
         }
 
-        // Callers that ask while the database is being opened wait for that same open.
-        var mine = new Lazy<Task<LottaDB>>(() => OpenDatabaseAsync(databaseId, configure, cancellationToken));
-        var opening = _opening.GetOrAdd(databaseId, mine);
+        // Callers that ask while the database is being opened wait for that same open. It runs
+        // under the catalog's token, and each caller waits with its own: one that gives up stops
+        // waiting without failing the open for the others. An open that every caller has given up
+        // on still finishes and is kept, as the simplest thing: its work, perhaps an index
+        // rebuild, is not thrown away, and the next caller gets the database at once.
+        var mine = new TaskCompletionSource<LottaDB>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opening = _opening.GetOrAdd(databaseId, mine.Task);
+        // Not on this caller's thread: parts of opening block (creating the queues), and the
+        // caller must be free to stop waiting.
+        if (opening == mine.Task)
+            _ = Task.Run(() => ShareOpenAsync(databaseId, configure, mine));
+        var db = await opening.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (opening != mine.Task)
+            CheckSameSchema(db, databaseId, configure);
+        return db;
+    }
+
+    /// <summary>
+    /// Runs one open for everyone waiting on <paramref name="opened"/>, and takes it off
+    /// <see cref="_opening"/> when it ends. That is done by the open and not by its callers,
+    /// because a caller that gives up must not let a second open of the database start meanwhile.
+    /// </summary>
+    private async Task ShareOpenAsync(string databaseId, Action<ILottaConfiguration>? configure, TaskCompletionSource<LottaDB> opened)
+    {
+        var entry = new KeyValuePair<string, Task<LottaDB>>(databaseId, opened.Task);
+        LottaDB db;
         try
         {
-            var db = await opening.Value;
-            if (opening != mine)
-                CheckSameSchema(db, databaseId, configure);
-            return db;
+            db = await OpenDatabaseAsync(databaseId, configure, _closing.Token).ConfigureAwait(false);
         }
-        finally
+        catch (Exception e)
         {
-            // Finished either way: an open database is in _databases by now, and a failed open
-            // must not be handed to later callers.
-            _opening.TryRemove(new KeyValuePair<string, Lazy<Task<LottaDB>>>(databaseId, opening));
+            // Off the list before anyone hears of it, so a failed open is never handed to a later caller.
+            _opening.TryRemove(entry);
+            opened.SetException(e);
+            return;
         }
+        // By now the database is in _databases.
+        _opening.TryRemove(entry);
+        opened.SetResult(db);
     }
 
     /// <summary>Throws if <paramref name="configure"/> describes a different schema from the open database's.</summary>
@@ -443,6 +476,7 @@ public class LottaCatalog : IDisposable
     /// </summary>
     public void Dispose()
     {
+        _closing.Cancel();
         foreach (var db in _databases.Values)
             db.Dispose();
         _databases.Clear();
