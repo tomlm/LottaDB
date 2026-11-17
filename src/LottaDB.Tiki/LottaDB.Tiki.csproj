@@ -15,7 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../LottaDB/LottaDB.csproj" />
-    <PackageReference Include="Tiki.Net" Version="1.0.1" />
+    <PackageReference Include="Tiki.Net" Version="1.1.0-rc001" />
   </ItemGroup>
 
 </Project>

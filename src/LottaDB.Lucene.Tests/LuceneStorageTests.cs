@@ -275,16 +275,27 @@ public class LuceneStorageTests
     }
 
     /// <summary>
-    /// A short folder for a test: a queued message is a file with a name of about 100 characters,
-    /// and the whole path has to stay under the 260 that Windows allows by default.
+    /// A deep folder for a test, so that a queued message's file (its name alone is about 100
+    /// characters) is well past 260 characters: <see cref="LuceneDirectories.FileSystem"/> has to
+    /// open its directories by their extended path for Lucene.Net to sync them on Windows. This
+    /// test program is not long-path aware, as an ordinary program is not, so it shows the failure.
     /// </summary>
-    private static string ShortRoot(string tag) => Path.Combine(TestRun.GetTempFolder(), $"{tag}-{Guid.NewGuid():N}"[..12]);
+    private static string DeepRoot(string tag)
+    {
+        var root = Path.Combine(TestRun.GetTempFolder(), $"{tag}-{Guid.NewGuid():N}"[..12]);
+        while (root.Length < 200)
+            root = Path.Combine(root, "a-rather-long-folder-name");
+        return root;
+    }
+
+    /// <summary>Files under a folder, found by its extended path so that deep ones are listed too.</summary>
+    private static string[] FilesIn(params string[] parts) => System.IO.Directory.GetFiles(LuceneDirectories.ExtendedPath(Path.Combine(parts)));
 
     [Fact]
     public async Task FileSystem_EachTableContainerQueueAndIndexIsALuceneDirectoryOfItsOwn()
     {
         var ct = TestContext.Current.CancellationToken;
-        var root = ShortRoot("lay");
+        var root = DeepRoot("lay");
         const string name = "layout";
 
         using var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root)));
@@ -297,19 +308,20 @@ public class LuceneStorageTests
         await db.UploadBlobAsync("a.txt", "hello", cancellationToken: ct);
         db.ReloadSearcher();
 
-        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, "tables", name)));
-        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, "blobs", name)));
+        Assert.NotEmpty(FilesIn(root, "tables", name));
+        Assert.NotEmpty(FilesIn(root, "blobs", name));
         // The queue's name is a hash of the catalog and the database, then the handler's name.
-        var queue = Assert.Single(System.IO.Directory.GetDirectories(Path.Combine(root, "queues"), "*-greet"));
-        Assert.Single(System.IO.Directory.GetFiles(queue));   // the message for the save
-        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, name, "db", "Search")));
+        var queue = Assert.Single(System.IO.Directory.GetDirectories(LuceneDirectories.ExtendedPath(Path.Combine(root, "queues")), "*-greet"));
+        var message = Assert.Single(System.IO.Directory.GetFiles(queue));   // the message for the save
+        Assert.True(message.Length - @"\\?\".Length > 260, $"the test folder is not deep enough to show anything ({message.Length})");
+        Assert.NotEmpty(FilesIn(root, name, "db", "Search"));
     }
 
     [Fact]
     public async Task FileSystem_QueuedWorkSurvivesReopen()
     {
         var ct = TestContext.Current.CancellationToken;
-        var root = ShortRoot("que");
+        var root = DeepRoot("que");
         const string name = "queued";
         var ran = new List<string>();
         void Configure(ILottaConfiguration c)

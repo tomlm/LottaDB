@@ -287,7 +287,7 @@ Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tab
 - A table, blob or queue write is durable when it returns. Search index writes are durable when committed (`AutoCommitDelay`).
 - The catalog keeps one client of each kind and disposes them, with their Lucene `Directory` objects, when it is disposed or deleted. With `LuceneDirectories.Memory()` the data lives as long as the catalog does.
 - Two catalogs (or two processes) can open the same folder: the storage clients share it, and the search index has one writer at a time (see *Running Multiple Servers Against One Database* in the README).
-- A queued message is a file with a name of about 100 characters. Under `LuceneDirectories.FileSystem(rootPath)` the whole path has to fit what the file system allows, so keep `rootPath` short on Windows.
+- On Windows, `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`), so `rootPath` can be as deep as you like. Lucene.Net syncs each file through its own call to Windows, which fails past 260 characters unless the program is declared long-path aware, and a queued message's file name alone is about 100 characters. A factory of your own should do the same.
 
 ### No modifications to Lucene.Net.Linq
 

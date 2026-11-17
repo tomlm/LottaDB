@@ -23,7 +23,9 @@ public static class TikiConfigurationExtensions
 
         config.OnUpload(async (path, contentType, stream, db, cancellationToken) =>
         {
-            var tikiFile = await engine.ParseAsync(stream);
+            // The name lets Tiki tell apart formats whose bytes look alike (CSV, JSON, DOCX); content that
+            // disagrees with the name still wins.
+            var tikiFile = await engine.ParseAsync(stream, Path.GetFileName(path), cancellationToken);
             return BlobFileMapper.FromTikiFile(tikiFile, path);
         });
 
