@@ -79,6 +79,8 @@ public class LottaConfiguration : ILottaConfiguration
             throw new ArgumentOutOfRangeException(nameof(options), "MaxAttempts must be at least 1.");
         if (options.Timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "Timeout must be positive.");
+        if (options.RetryDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), "RetryDelay cannot be negative.");
 
         AsyncRegistrations.Add(new AsyncRegistration(
             name, typeof(T), priority, latest, options,

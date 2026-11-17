@@ -720,6 +720,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Throws<ArgumentException>(() => config.OnAsync<Note>("describe-mail", (_, _, _, _) => Task.CompletedTask));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             config.OnAsync<Note>("other", (_, _, _, _) => Task.CompletedTask, options: new AsyncHandlerOptions { MaxAttempts = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            config.OnAsync<Note>("other", (_, _, _, _) => Task.CompletedTask, options: new AsyncHandlerOptions { RetryDelay = TimeSpan.FromSeconds(-1) }));
     }
 }
 
