@@ -108,8 +108,8 @@ public partial class LottaDB
     /// <summary>
     /// Stops running queued handlers. A run in progress, the background loop's or a
     /// <see cref="DrainAsync"/>'s, has its token cancelled and its message stays queued with no
-    /// failure counted. Waits up to 10 seconds for it to end, so the database is not torn down
-    /// under it.
+    /// failure counted. Waits up to 10 seconds in all for it to end, so the database is not torn
+    /// down under it.
     /// </summary>
     private void StopAsyncHandlers()
     {
@@ -117,12 +117,15 @@ public partial class LottaDB
         // A handler that disposes its own database cannot wait for itself to finish.
         if (_asyncRun.Value?.Db == this)
             return;
+        // One deadline for both waits, so a run that ignores its token holds Dispose 10 seconds, not 20.
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan Left() => TimeSpan.FromTicks(Math.Max(0, (TimeSpan.FromSeconds(10) - waiting.Elapsed).Ticks));
         if (_asyncLoop != null)
         {
-            try { _asyncLoop.Wait(TimeSpan.FromSeconds(10)); } catch { }
+            try { _asyncLoop.Wait(Left()); } catch { }
         }
         // A drain's run holds the gate until its message is settled.
-        if (_asyncRunGate.Wait(TimeSpan.FromSeconds(10)))
+        if (_asyncRunGate.Wait(Left()))
             _asyncRunGate.Release();
     }
 
