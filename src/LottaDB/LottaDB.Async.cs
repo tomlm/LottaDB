@@ -65,10 +65,11 @@ public partial class LottaDB
     private Task? _asyncLoop;
 
     /// <summary>
-    /// Makes the queues and, unless handlers are run by hand, starts running them. Called by the
-    /// catalog once the database is fully open; never for a read-only database.
+    /// Makes the queues, so saves queue handler work. Called by the catalog as the last step of
+    /// opening the database; never for a read-only database. <see cref="StartAsyncHandlers"/>
+    /// then starts running them.
     /// </summary>
-    internal void StartAsyncHandlers()
+    internal void PrepareAsyncHandlers()
     {
         if (_config.AsyncRegistrations.Count == 0 || _config.ReadOnly || _asyncHandlers.Length > 0)
             return;
@@ -88,13 +89,20 @@ public partial class LottaDB
         }
         _asyncTiers = [.. handlers.GroupBy(h => h.Registration.Priority).OrderByDescending(g => g.Key).Select(g => g.ToArray())];
         _asyncHandlers = [.. handlers];
+    }
 
-        if (_config.AsyncHandlers == AsyncHandlerMode.Auto)
-        {
-            // Started without the caller's context, so nothing of a save chain leaks into the loop.
-            using (ExecutionContext.SuppressFlow())
-                _asyncLoop = Task.Run(() => AsyncLoopAsync(_asyncCts.Token));
-        }
+    /// <summary>
+    /// Unless handlers are run by hand, starts running them. Called by the catalog once it has
+    /// kept the fully open database, and only then: a database it does not keep (the catalog was
+    /// disposed or deleted meanwhile) must run no handler.
+    /// </summary>
+    internal void StartAsyncHandlers()
+    {
+        if (_asyncHandlers.Length == 0 || _config.AsyncHandlers != AsyncHandlerMode.Auto || _asyncLoop != null)
+            return;
+        // Started without the caller's context, so nothing of a save chain leaks into the loop.
+        using (ExecutionContext.SuppressFlow())
+            _asyncLoop = Task.Run(() => AsyncLoopAsync(_asyncCts.Token));
     }
 
     /// <summary>

@@ -719,6 +719,59 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Single(await db.GetHandlerStatusAsync(ct));
     }
 
+    [Fact]
+    public async Task DisposingTheCatalogDuringAnOpen_KeepsAndHandsOutNoDatabase()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var hold = new OpenHold(Catalog);
+        // Auto, so a database kept would have its pump running handlers.
+        static void Configure(ILottaConfiguration opts)
+        {
+            opts.Store<Actor>();
+            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+        }
+
+        var opening = Task.Run(() => Catalog.GetDatabaseAsync("closing", Configure, ct), ct);
+        await hold.Reached.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        Catalog.Dispose();
+        hold.Release();
+
+        // Before, the open went on to keep the database in the disposed catalog and hand it out
+        // live, its handlers running and its index open, with nothing left to dispose it.
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => opening.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => Catalog.GetDatabaseAsync("closing", Configure, ct));
+    }
+
+    [Fact]
+    public async Task DeletingTheCatalogDuringAnOpen_KeepsNothing_SoTheNextOpenStartsAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var hold = new OpenHold(Catalog);
+        var runs = 0;
+        void Configure(ILottaConfiguration opts)
+        {
+            opts.Store<Actor>();
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; });
+        }
+
+        var opening = Task.Run(() => Catalog.GetDatabaseAsync("deleted", Configure, ct), ct);
+        await hold.Reached.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        // Deletes the manifest the open has already written.
+        var deleting = Catalog.DeleteAsync(ct);
+        hold.Release();
+        await deleting.WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        // Before, the open kept a database whose manifest the deletion had removed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => opening.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        var db = await Catalog.GetDatabaseAsync("deleted", Configure, ct);
+        Assert.Contains("deleted", await Catalog.ListAsync(ct));
+        var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        Assert.Empty(saved.Errors);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(1, runs);
+    }
+
     /// <summary>
     /// Holds the catalog's next open at its last step, making the handlers' queues, until
     /// <see cref="Release"/>: the queue storage's first request for a queue waits for it.

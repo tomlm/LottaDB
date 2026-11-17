@@ -28,6 +28,16 @@ public class LottaCatalog : IDisposable
     /// whichever caller happened to start the open. Never disposed, so a second Dispose can still cancel it.
     /// </summary>
     private readonly CancellationTokenSource _closing = new();
+    /// <summary>
+    /// Taken by an open to keep its database, and by <see cref="Dispose"/> and <see cref="DeleteAsync"/>
+    /// to take the databases kept, so none is kept after they have looked.
+    /// </summary>
+    private readonly object _lifetime = new();
+    private volatile bool _disposed;
+    /// <summary>How many times a <see cref="DeleteAsync"/> has started or ended.</summary>
+    private int _deletionEvents;
+    /// <summary>How many <see cref="DeleteAsync"/> calls are in progress.</summary>
+    private int _deleting;
     private TableServiceClient? _tableServiceClient;
     private TableClient? _tableClient;
     private BlobServiceClient? _blobServiceClient;
@@ -184,8 +194,14 @@ public class LottaCatalog : IDisposable
     /// Stops this call waiting. Callers asking for a database while it is being opened share one
     /// open, which runs on whether or not they cancel, and is kept for the next caller.
     /// </param>
+    /// <exception cref="ObjectDisposedException">The catalog is disposed, or was disposed during the open.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The schema differs from that of the database already open, or the catalog was deleted
+    /// (<see cref="DeleteAsync"/>) during the open; the next call opens it again.
+    /// </exception>
     public async Task<LottaDB> GetDatabaseAsync(string databaseId = "default", Action<ILottaConfiguration>? configure = null, CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_databases.TryGetValue(databaseId, out var existing))
         {
             CheckSameSchema(existing, databaseId, configure);
@@ -253,10 +269,16 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Opens a database and adds it to <see cref="_databases"/> once it is fully open. A database
-    /// that fails to open is disposed and not kept.
+    /// that fails to open, or whose catalog is disposed or deleted while it opens, is disposed and
+    /// not kept.
     /// </summary>
     private async Task<LottaDB> OpenDatabaseAsync(string databaseId, Action<ILottaConfiguration>? configure, CancellationToken cancellationToken)
     {
+        // Before anything is written: a DeleteAsync from here on may delete what this open writes.
+        int deletionEvents;
+        lock (_lifetime)
+            deletionEvents = _deleting == 0 ? _deletionEvents : -1;
+
         // Opened by a caller whose open finished just before this one began.
         if (_databases.TryGetValue(databaseId, out var existing))
         {
@@ -276,17 +298,36 @@ public class LottaCatalog : IDisposable
         try
         {
             await InitializeDatabaseAsync(db, databaseId, config, cancellationToken);
-            // Only now: the schemas are loaded and any rebuild is done, so a queued handler sees a ready database.
-            db.StartAsyncHandlers();
+            db.PrepareAsyncHandlers();
         }
-        catch
+        catch (Exception e)
         {
             // Kept, it would be a database that saves but queues no handler work, with no error.
             db.Dispose();
+            if (_disposed)
+                throw new ObjectDisposedException($"Catalog '{Name}' was disposed while database '{databaseId}' was being opened.", e);
             throw;
         }
-        _databases[databaseId] = db;
-        return db;
+
+        // Checked and kept under the lock Dispose and DeleteAsync take the databases under, so
+        // neither can miss this database, nor run between the check and keeping it.
+        lock (_lifetime)
+        {
+            if (!_disposed && _deleting == 0 && deletionEvents == _deletionEvents)
+            {
+                _databases[databaseId] = db;
+                // Only now, and only once kept: the schemas are loaded and any rebuild is done, so
+                // a queued handler sees a ready database; and one not kept runs no handler.
+                db.StartAsyncHandlers();
+                return db;
+            }
+        }
+        // Kept, it would be a live database nobody disposes (its handlers running on), or one
+        // whose manifest, queues or index the deletion removed under it.
+        db.Dispose();
+        if (_disposed)
+            throw new ObjectDisposedException($"Catalog '{Name}' was disposed while database '{databaseId}' was being opened.");
+        throw new InvalidOperationException($"Catalog '{Name}' was deleted while database '{databaseId}' was being opened. Open it again.");
     }
 
     /// <summary>Loads the schemas, and checks the manifest and rebuilds the index if the schema changed.</summary>
@@ -422,23 +463,43 @@ public class LottaCatalog : IDisposable
     /// </summary>
     public async Task DeleteAsync(CancellationToken cancellationToken = default)
     {
-        // Dispose databases first to release Lucene locks before deleting storage
-        foreach (var db in _databases.Values)
-            db.Dispose();
-        _databases.Clear();
+        // An open in progress, or one starting before the deletion is done, keeps nothing:
+        // what it writes may be deleted under it.
+        LottaDB[] open;
+        lock (_lifetime)
+        {
+            _deleting++;
+            _deletionEvents++;
+            open = [.. _databases.Values];
+            _databases.Clear();
+        }
+        try
+        {
+            // Dispose databases first to release Lucene locks before deleting storage
+            foreach (var db in open)
+                db.Dispose();
 
-        var table = GetTableClient();
-        await table.DeleteAsync(cancellationToken);
+            var table = GetTableClient();
+            await table.DeleteAsync(cancellationToken);
 
-        var blob = GetBlobServiceClient().GetBlobContainerClient(this.Name);
-        await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
+            var blob = GetBlobServiceClient().GetBlobContainerClient(this.Name);
+            await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
 
-        // Every database's handler queues, opened in this session or not, share the catalog's prefix.
-        if (GetQueueServiceClient() is { } queues)
-            await Internal.AsyncQueueNames.DeleteQueuesAsync(queues, Internal.AsyncQueueNames.CatalogPrefix(Name), cancellationToken);
+            // Every database's handler queues, opened in this session or not, share the catalog's prefix.
+            if (GetQueueServiceClient() is { } queues)
+                await Internal.AsyncQueueNames.DeleteQueuesAsync(queues, Internal.AsyncQueueNames.CatalogPrefix(Name), cancellationToken);
 
-        // Subsequent operations recreate the clients
-        ReleaseStorageClients();
+            // Subsequent operations recreate the clients
+            ReleaseStorageClients();
+        }
+        finally
+        {
+            lock (_lifetime)
+            {
+                _deleting--;
+                _deletionEvents++;
+            }
+        }
     }
 
     /// <summary>
@@ -476,10 +537,17 @@ public class LottaCatalog : IDisposable
     /// </summary>
     public void Dispose()
     {
+        // From here on an open in progress keeps nothing; it disposes its database and throws.
+        LottaDB[] open;
+        lock (_lifetime)
+        {
+            _disposed = true;
+            open = [.. _databases.Values];
+            _databases.Clear();
+        }
         _closing.Cancel();
-        foreach (var db in _databases.Values)
+        foreach (var db in open)
             db.Dispose();
-        _databases.Clear();
         ReleaseStorageClients();
     }
 
