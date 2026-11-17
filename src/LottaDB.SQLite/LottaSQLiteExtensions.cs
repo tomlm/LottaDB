@@ -1,4 +1,5 @@
 using Iciclecreek.Azure.Storage.SQLite.Blobs;
+using Iciclecreek.Azure.Storage.SQLite.Queues;
 using Iciclecreek.Azure.Storage.SQLite.Tables;
 
 namespace Lotta;
@@ -23,6 +24,7 @@ public static class LottaSQLiteExtensions
         return catalog.UseStorage("SQLite",
             () => new SqliteTableServiceClient(dbPath),
             () => new SqliteBlobServiceClient(dbPath),
+            () => new SqliteQueueServiceClient(dbPath),
             LuceneDirectories.FileSystem(fullPath));
     }
 }

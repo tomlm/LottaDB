@@ -3,8 +3,8 @@ using Lotta.Tests;
 namespace Lotta.Lucene.Tests;
 
 /// <summary>
-/// The shared suite with Lucene as the only storage: UseLucene() over in-memory directories,
-/// and over the file system for the tests that reopen storage.
+/// The shared suite with Lucene as the only storage: UseLucene() over in-memory Lucene
+/// <c>Directory</c> objects, and over the file system for the tests that reopen storage.
 /// </summary>
 internal static class Tests
 {
@@ -48,6 +48,8 @@ public class Lucene_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class Lucene_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Lucene_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Lucene_VectorSearchTests : VectorSearchTestBase { public Lucene_VectorSearchTests() : base(Tests.Configure) { } }
 public class Lucene_WriteLockTests : WriteLockTestBase { public Lucene_WriteLockTests() : base(Tests.Configure) { } }
+public class Lucene_AsyncHandlerTests : AsyncHandlerTestBase { public Lucene_AsyncHandlerTests() : base(Tests.Configure) { } }
+public class Lucene_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public Lucene_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
 
 public class LuceneFileSystem_CrudTests : CrudTestBase { public LuceneFileSystem_CrudTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_ChangeAsyncTests : ChangeAsyncTestBase { public LuceneFileSystem_ChangeAsyncTests() : base(Tests.ConfigureFileSystem) { } }
@@ -59,11 +61,13 @@ public class LuceneFileSystem_JsonMetadataTests : JsonMetadataTestBase { public 
 public class LuceneFileSystem_BlobTests : BlobTestBase { public LuceneFileSystem_BlobTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public LuceneFileSystem_BlobOnUploadTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_RebuildIndexTests : RebuildIndexTestBase { public LuceneFileSystem_RebuildIndexTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_AsyncHandlerTests : AsyncHandlerTestBase { public LuceneFileSystem_AsyncHandlerTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public LuceneFileSystem_AsyncHandlerPumpTests() : base(Tests.ConfigureFileSystem) { } }
 
-/// <summary>Cross-process write-lock contention with the index as the only shared storage.</summary>
+/// <summary>Cross-process write-lock contention with files in Lucene <c>Directory</c> objects as the only shared storage.</summary>
 public class Lucene_MultiProcessLockTests : MultiProcessLockTests
 {
-    protected override bool IndexIsStorage => true;
+    protected override bool LuceneStorage => true;
 
     [Fact]
     public void EachProcess_HasItsOwnLuceneStorage()
@@ -71,8 +75,8 @@ public class Lucene_MultiProcessLockTests : MultiProcessLockTests
         var (c1, c2) = CreateSharedCatalogs();
         using var _1 = c1;
         using var _2 = c2;
-        var t1 = Assert.IsType<LuceneTableServiceClient>(c1.GetTableServiceClient());
-        var t2 = Assert.IsType<LuceneTableServiceClient>(c2.GetTableServiceClient());
+        var t1 = Assert.IsType<Iciclecreek.Azure.Storage.Lucene.Tables.LuceneTableServiceClient>(c1.GetTableServiceClient());
+        var t2 = Assert.IsType<Iciclecreek.Azure.Storage.Lucene.Tables.LuceneTableServiceClient>(c2.GetTableServiceClient());
         Assert.NotSame(t1, t2);
     }
 }

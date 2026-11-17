@@ -30,11 +30,11 @@ namespace Lotta.Tests;
 public class MultiProcessLockTests
 {
     /// <summary>
-    /// When set, each catalog stores its objects in the Lucene index itself (<c>UseLucene()</c>)
-    /// instead of the shared in-memory tables — so the shared on-disk directory is the only storage
-    /// the two "processes" have in common, as it would be for two real servers.
+    /// When set, each catalog keeps its tables and blobs in Lucene <c>Directory</c> objects
+    /// (<c>UseLucene()</c>) instead of the shared in-memory tables — so the shared folder is the
+    /// only storage the two "processes" have in common, as it would be for two real servers.
     /// </summary>
-    protected virtual bool IndexIsStorage => false;
+    protected virtual bool LuceneStorage => false;
 
     /// <summary>
     /// Build two catalogs over one shared backing store: shared in-memory tables and blobs,
@@ -43,13 +43,13 @@ public class MultiProcessLockTests
     protected (LottaCatalog first, LottaCatalog second) CreateSharedCatalogs(
         [CallerMemberName] string? testName = null)
     {
-        var root = Path.Combine(TestRun.GetTempFolder(), "MultiProcessLock" + (IndexIsStorage ? "Lucene" : ""),
+        var root = Path.Combine(TestRun.GetTempFolder(), "MultiProcessLock" + (LuceneStorage ? "Lucene" : ""),
             string.Join("", testName!.Where(char.IsLetterOrDigit)));
         System.IO.Directory.CreateDirectory(root);
 
         var sharedLuceneDirectory = LuceneDirectories.FileSystem(root);
 
-        if (IndexIsStorage)
+        if (LuceneStorage)
         {
             // Each process has its own storage client; with UseLucene() they share only the files.
             return (new LottaCatalog("shared", catalog => catalog.UseLucene(sharedLuceneDirectory)),

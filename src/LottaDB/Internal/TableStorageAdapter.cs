@@ -114,20 +114,6 @@ internal class TableStorageAdapter
         }
     }
 
-    public string? GetETag(string tableName, string key)
-    {
-        var table = GetTable(tableName);
-        try
-        {
-            var response = table.GetEntity<TableEntity>(_partitionKey, EncodeKey(key));
-            return response.Value.ETag.ToString();
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404)
-        {
-            return null;
-        }
-    }
-
     public async Task<bool> DeleteAsync(string tableName, string key, CancellationToken cancellationToken = default)
     {
         var table = GetTable(tableName);

@@ -1,4 +1,5 @@
 using Iciclecreek.Azure.Storage.Memory.Blobs;
+using Iciclecreek.Azure.Storage.Memory.Queues;
 using Iciclecreek.Azure.Storage.Memory.Tables;
 
 namespace Lotta;
@@ -17,6 +18,8 @@ public static class LottaMemoryExtensions
     {
         var tableClient = new MemoryTableServiceClient();
         var blobClient = new MemoryBlobServiceClient();
-        return catalog.UseStorage("Memory", () => tableClient, () => blobClient, LuceneDirectories.Memory());
+        // One instance for the catalog's life: an in-memory client's queues live in the client.
+        var queueClient = new MemoryQueueServiceClient();
+        return catalog.UseStorage("Memory", () => tableClient, () => blobClient, () => queueClient, LuceneDirectories.Memory());
     }
 }

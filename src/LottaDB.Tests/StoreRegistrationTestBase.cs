@@ -192,6 +192,30 @@ public abstract class StoreRegistrationTestBase : LottaTestBase
         Assert.Equal("Alice", loaded.DisplayName);
     }
 
+    [Fact]
+    public async Task Store_Fluent_CustomKey_ResaveAndDeleteReachTheSearchIndex()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.Store<Actor>(s =>
+            {
+                s.SetKey(a => $"{a.Domain}-{a.Username}");
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Actor { Domain = "test.com", Username = "alice", DisplayName = "Alicia" }, ct);
+
+        // One object, so one document: the index finds the first one again by the computed key.
+        var found = Assert.Single(db.Search<Actor>().ToList());
+        Assert.Equal("Alicia", found.DisplayName);
+
+        await db.RebuildSearchIndex(ct);
+        await db.DeleteAsync<Actor>("test.com-alice", ct);
+        Assert.Empty(db.Search<Actor>().ToList());
+    }
+
     // =====================================================================
     // Int key
     // =====================================================================

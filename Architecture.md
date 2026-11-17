@@ -230,6 +230,20 @@ Handlers that produce objects which trigger further handlers are tracked by type
 
 All changes across a handler chain (root save + handler-triggered saves) are aggregated into a single `ObjectResult` via `AsyncLocal`. The root caller receives the complete set of changes and any handler errors.
 
+## Queued Handlers (`OnAsync<T>`)
+
+`On<T>` runs inside the save, under the write lease. `OnAsync<T>` is for work too slow for that: every save sends a small message (type and key only) to a queue per handler, and a pump runs the handlers later, outside the write lease, by priority, retrying failures and setting aside what keeps failing in a poison queue.
+
+```csharp
+opts.OnAsync<Note>("summarize", async (note, kind, db, ct) =>
+{
+    var summary = await model.SummarizeAsync(note.Content, ct);
+    await db.ChangeAsync<Note>(note.NoteId, n => { n.Summary = summary; return n; }, ct);
+}, priority: 10, latest: true);
+```
+
+It runs from queue storage, the third Azure Storage primitive beside tables and blobs, which the storage provider supplies. See `OnAsync-Design.md` for the behaviour in full.
+
 ## Internals
 
 ### LottaDocumentMapper
@@ -255,26 +269,25 @@ Wraps `Azure.Data.Tables`. Each row stores `_json` (full POCO), `_type` (concret
 
 ### Storage providers
 
-Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tables, blobs, directories)`, which sets the three factories together and records `StorageProvider`. A catalog has exactly one provider: a second `UseStorage` call throws, rather than silently replacing some of the first provider's factories. Setting a factory property directly is still allowed as a deliberate override. The Lucene directory factories the providers use are public in `LuceneDirectories` (`Memory`, `FileSystem`, `Azure`), so a pure-Lucene catalog can put its directories in any of those stores.
+Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)`, which sets the factories together and records `StorageProvider` (an overload without `queues` is for storage that has no queues; `OnAsync<T>` is then not available). A catalog has exactly one provider: a second `UseStorage` call throws, rather than silently replacing some of the first provider's factories. Setting a factory property directly is still allowed as a deliberate override. The Lucene directory factories the providers use are public in `LuceneDirectories` (`Memory`, `FileSystem`, `Azure`), so a `UseLucene` catalog can put its Lucene `Directory` objects in any of those stores.
 
-### LuceneTableServiceClient (index as storage)
+### Lucene storage (`UseLucene`)
 
-`catalog.UseLucene(directoryFactory)` registers Lucene as the catalog's only storage provider (`UseLucene()` is shorthand for `LuceneDirectories.Memory()`). It uses `LuceneTableServiceClient` as the table store, a `TableServiceClient` whose rows live in the Lucene indexes:
+`catalog.UseLucene(directoryFactory)` registers Lucene as the catalog's only storage provider (`UseLucene()` is shorthand for `LuceneDirectories.Memory()`). Tables, blobs and queues are the clients of the `Iciclecreek.Azure.Storage.Lucene` package (`LuceneTableServiceClient`, `LuceneBlobServiceClient`, `LuceneQueueServiceClient`), all given the same directory factory as the search index. Everything is kept through the Lucene `Directory` abstraction, and each named thing is a Lucene `Directory` of its own:
 
-- Each `LottaDB` attaches itself to the client for its partition (database ID). A table write runs that database's indexing pipeline through its internal methods — `AcquireWriterAsync` for the write lease, then `WriteIndexDocument(key, () => BuildIndexDocument(row))`, the same mapping and index write the `On<T>` indexing handlers use. Reads go through `ReadIndex`. Because the write has already indexed the object, LottaDB does not register those handlers.
-- Each document also carries the row's non-JSON columns in a stored-only `_row` field, so the row (promoted `[Queryable]`/`[Tag]` columns included) can be read back. The JSON itself is the document's existing `_object` field.
-- Reads go through a near-real-time searcher over the `IndexWriter` while this process holds it, so they see uncommitted writes. Otherwise they read the latest commit.
-- The client generates ETags and checks If-Match itself. OData filters are evaluated against the reconstructed rows, so `GetManyAsync` keeps table semantics.
-- Rows outside any database (the catalog manifest) live in a small catalog-level index that commits on every write.
-- `RebuildSearchIndex` snapshots the rows before clearing the index, and rows no mapper covers are kept as unmapped documents, so a rebuild never loses data.
+| Path given to the factory | What it holds |
+|---|---|
+| `tables/{catalog}` | The catalog's table: a Lucene index with a document per row. |
+| `blobs/{catalog}` | The catalog's blob container: files in a Lucene `Directory`. |
+| `queues/{queue}` | One `OnAsync<T>` handler queue: a file per message in a Lucene `Directory`. |
+| `tables/__registry__`, `queues/__registry__` | Which tables and queues exist. |
+| `{catalog}/{database}/Search` | A database's search index. |
 
-### LuceneBlobServiceClient (blobs in a Lucene directory)
-
-Blob storage is `LuceneBlobServiceClient`, so no other provider is involved. Each container's blobs are files in the Lucene directory for `{container}/blobs`:
-
-- Lucene directories are flat, and file systems may fold case, so a blob's file is named by a hash of its blob name; the name itself, content type, ETag, timestamps and metadata are in the file header, and a Lucene checksum footer ends the file.
-- Each blob has two slots (`{hash}.a.blob`, `{hash}.b.blob`). An upload streams into the slot that is not current, syncs it, and only then deletes the old slot — a failed upload leaves the previous content intact. A slot without a valid footer is ignored.
-- Reads and writes of a blob are serialized per blob within the process; If-None-Match and If-Match are checked under that gate. Listing scans the directory and reads each blob's header.
+- It works like every other provider: the table and the blobs are the record, and the search index is written by the `On<T>` indexing handlers after the table write. `RebuildSearchIndex` clears the index and builds it again from the table.
+- A table, blob or queue write is durable when it returns. Search index writes are durable when committed (`AutoCommitDelay`).
+- The catalog keeps one client of each kind and disposes them, with their Lucene `Directory` objects, when it is disposed or deleted. With `LuceneDirectories.Memory()` the data lives as long as the catalog does.
+- Two catalogs (or two processes) can open the same folder: the storage clients share it, and the search index has one writer at a time (see *Running Multiple Servers Against One Database* in the README).
+- A queued message is a file with a name of about 100 characters. Under `LuceneDirectories.FileSystem(rootPath)` the whole path has to fit what the file system allows, so keep `rootPath` short on Windows.
 
 ### No modifications to Lucene.Net.Linq
 

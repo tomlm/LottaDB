@@ -44,3 +44,5 @@ public class SQLite_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public SQLite_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Tests.Configure) { } }
 public class SQLite_WriteLockTests : WriteLockTestBase { public SQLite_WriteLockTests() : base(Tests.Configure) { } }
+public class SQLite_AsyncHandlerTests : AsyncHandlerTestBase { public SQLite_AsyncHandlerTests() : base(Tests.Configure) { } }
+public class SQLite_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public SQLite_AsyncHandlerPumpTests() : base(Tests.Configure) { } }

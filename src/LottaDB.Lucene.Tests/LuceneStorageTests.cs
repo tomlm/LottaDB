@@ -4,7 +4,8 @@ using Lucene.Net.Index;
 namespace Lotta.Lucene.Tests;
 
 /// <summary>
-/// Behavior specific to UseLucene(), where the search index is the storage.
+/// Behavior specific to UseLucene(): tables, blobs and queues kept in Lucene <c>Directory</c> objects,
+/// beside each database's search index.
 /// </summary>
 public class LuceneStorageTests
 {
@@ -30,7 +31,7 @@ public class LuceneStorageTests
             configure?.Invoke(config);
         }, TestContext.Current.CancellationToken);
 
-    /// <summary>Live documents in the database's index, committed or not.</summary>
+    /// <summary>Live documents in the database's search index, committed or not.</summary>
     private static int CountDocuments(LottaDB db)
     {
         db.ReloadSearcher();
@@ -79,7 +80,7 @@ public class LuceneStorageTests
         await db.SaveAsync(new TaggedItem { Id = "1", Category = "books", Title = "Dune" }, ct);
         await db.SaveAsync(new TaggedItem { Id = "2", Category = "music", Title = "Blue" }, ct);
 
-        // [Tag] is a table column only — the query is answered from the stored row columns.
+        // [Tag] is a table column only — the query is answered by the table, not the search index.
         var books = await db.GetManyAsync<TaggedItem>(t => t.Category == "books", cancellationToken: ct).ToListAsync(ct);
         Assert.Equal("1", Assert.Single(books).Id);
     }
@@ -135,29 +136,6 @@ public class LuceneStorageTests
         Assert.DoesNotContain(db.Search<object>().ToList(), o => o is System.Text.Json.JsonDocument);
         var loaded = (System.Text.Json.JsonDocument?)await db.GetAsync(key, ct);
         Assert.Equal("Gina", loaded!.RootElement.GetProperty("Name").GetString());
-    }
-
-    [Fact]
-    public async Task Transaction_MappingFailure_WritesNothing()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var catalog = MemoryCatalog(nameof(Transaction_MappingFailure_WritesNothing));
-        var db = await OpenAsync(catalog);
-        var (adapter, table) = db.GetTableForTesting();
-
-        // A good row, then one whose JSON cannot be mapped to its type.
-        var good = adapter.CreateUpsertAction("good", new Actor { Username = "good", DisplayName = "Good" }, db.GetMeta(typeof(Actor)));
-        var bad = new Azure.Data.Tables.TableEntity(adapter.PartitionKey, "bad")
-        {
-            ["_type"] = typeof(Actor).FullName,
-            ["_object"] = "{ not json"u8.ToArray(),
-        };
-        var actions = new[] { good, new Azure.Data.Tables.TableTransactionAction(Azure.Data.Tables.TableTransactionActionType.UpsertReplace, bad) };
-
-        await Assert.ThrowsAnyAsync<Exception>(() => catalog.GetTableClient().SubmitTransactionAsync(actions, ct));
-
-        Assert.Null(await db.GetAsync<Actor>("good", ct));
-        Assert.Empty(await adapter.GetManyAsync(table, cancellationToken: ct).ToListAsync(ct));
     }
 
     [Fact]
@@ -222,10 +200,10 @@ public class LuceneStorageTests
     }
 
     [Fact]
-    public async Task FileSystem_BlobsLiveInBlobsDirectoryAndSurviveReopen()
+    public async Task FileSystem_BlobsLiveInTheirContainersDirectoryAndSurviveReopen()
     {
         var ct = TestContext.Current.CancellationToken;
-        var root = Path.Combine(TestRun.GetTempFolder(), nameof(FileSystem_BlobsLiveInBlobsDirectoryAndSurviveReopen), Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(TestRun.GetTempFolder(), nameof(FileSystem_BlobsLiveInTheirContainersDirectoryAndSurviveReopen), Guid.NewGuid().ToString("N"));
         const string name = "blobreopen";
 
         using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
@@ -235,7 +213,7 @@ public class LuceneStorageTests
             await db.UploadBlobAsync("docs/readme.txt", "lower", cancellationToken: ct); // differs only by case
         }
 
-        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, name, "blobs"), "*.blob"));
+        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, "blobs", name)));
 
         using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
         {
@@ -296,44 +274,79 @@ public class LuceneStorageTests
         }
     }
 
+    /// <summary>
+    /// A short folder for a test: a queued message is a file with a name of about 100 characters,
+    /// and the whole path has to stay under the 260 that Windows allows by default.
+    /// </summary>
+    private static string ShortRoot(string tag) => Path.Combine(TestRun.GetTempFolder(), $"{tag}-{Guid.NewGuid():N}"[..12]);
+
     [Fact]
-    public async Task Queries_ByTypeAndByKey_SeeCommittedAndRecentRows()
+    public async Task FileSystem_EachTableContainerQueueAndIndexIsALuceneDirectoryOfItsOwn()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var catalog = MemoryCatalog(nameof(Queries_ByTypeAndByKey_SeeCommittedAndRecentRows));
-        var db = await OpenAsync(catalog);
-        await db.SaveManyAsync(Enumerable.Range(1, 5).Select(i => new Actor { Username = $"a{i}", DisplayName = $"Actor {i}" }), ct);
-        await db.SaveAsync(new TaggedItem { Id = "t1", Category = "books", Title = "Dune" }, ct);
-        db.ReloadSearcher(); // commit: the rows above are now in the index proper
+        var root = ShortRoot("lay");
+        const string name = "layout";
 
-        // Recent writes, not yet in any refreshed searcher.
-        await db.SaveAsync(new Actor { Username = "a6", DisplayName = "Actor 6" }, ct);
-        await db.DeleteAsync<Actor>("a1", ct);
+        using var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root)));
+        var db = await OpenAsync(catalog, c =>
+        {
+            c.AsyncHandlers = AsyncHandlerMode.Manual;
+            c.OnAsync<Actor>("greet", (_, _, _, _) => Task.CompletedTask);
+        });
+        Assert.Empty((await db.SaveAsync(new Actor { Username = "gina", DisplayName = "Gina" }, ct)).Errors);
+        await db.UploadBlobAsync("a.txt", "hello", cancellationToken: ct);
+        db.ReloadSearcher();
 
-        var actors = await db.GetManyAsync<Actor>(cancellationToken: ct).ToListAsync(ct);
-        Assert.Equal(["a2", "a3", "a4", "a5", "a6"], actors.Select(a => a.Username).Order());
-
-        var (adapter, table) = db.GetTableForTesting();
-        var byKey = await adapter.GetManyAsync(table, ["a1", "a3", "a6", "t1"], cancellationToken: ct).ToListAsync(ct);
-        Assert.Equal(3, byKey.Count);
+        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, "tables", name)));
+        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, "blobs", name)));
+        // The queue's name is a hash of the catalog and the database, then the handler's name.
+        var queue = Assert.Single(System.IO.Directory.GetDirectories(Path.Combine(root, "queues"), "*-greet"));
+        Assert.Single(System.IO.Directory.GetFiles(queue));   // the message for the save
+        Assert.NotEmpty(System.IO.Directory.GetFiles(Path.Combine(root, name, "db", "Search")));
     }
 
-    [Theory]
-    [InlineData("PartitionKey eq 'db'", "db", null, null)]
-    [InlineData("PartitionKey eq 'db' and (RowKey eq 'a' or RowKey eq 'b')", "db", "a,b", null)]
-    [InlineData("PartitionKey eq 'o''neil' and _type eq 'X'", "o'neil", null, "X")]
-    [InlineData("PartitionKey eq 'db' and (_type eq 'X' or _type eq 'Y') and (Name eq 'z')", "db", null, "X,Y")]
-    [InlineData("RowKey eq 'a' and PartitionKey eq 'db'", "db", "a", null)]
-    [InlineData("PartitionKey eq 'db' and Name eq 'or'", "db", null, null)]
-    [InlineData("PartitionKey eq 'db' or PartitionKey eq 'other'", null, null, null)]
-    [InlineData("PartitionKey eq 'db' and RowKey eq 'a' or RowKey eq 'b'", null, null, null)]
-    [InlineData("PartitionKey eq 'db' and (RowKey eq 'a' or _type eq 'X')", "db", null, null)]
-    [InlineData("(PartitionKey eq 'db') and (RowKey eq 'a')", "db", "a", null)]
-    public void ScopeOf_FindsWhatTheFilterPinsDown(string filter, string? partition, string? rowKeys, string? types)
+    [Fact]
+    public async Task FileSystem_QueuedWorkSurvivesReopen()
     {
-        var scope = LuceneTableClient.ScopeOf(filter);
-        Assert.Equal(partition, scope.PartitionKey);
-        Assert.Equal(rowKeys, scope.RowKeys == null ? null : string.Join(",", scope.RowKeys.Order()));
-        Assert.Equal(types, scope.Types == null ? null : string.Join(",", scope.Types.Order()));
+        var ct = TestContext.Current.CancellationToken;
+        var root = ShortRoot("que");
+        const string name = "queued";
+        var ran = new List<string>();
+        void Configure(ILottaConfiguration c)
+        {
+            c.AsyncHandlers = AsyncHandlerMode.Manual;
+            c.OnAsync<Actor>("greet", (actor, _, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+        }
+
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
+        {
+            var db = await OpenAsync(catalog, Configure);
+            Assert.Empty((await db.SaveAsync(new Actor { Username = "hank", DisplayName = "Hank" }, ct)).Errors);
+        }
+        Assert.Empty(ran);
+
+        using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))
+        {
+            var db = await OpenAsync(catalog, Configure);
+            Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+            Assert.Equal(["hank"], ran);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteSearchIndex_LeavesTheRowsInTheirTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var catalog = MemoryCatalog(nameof(DeleteSearchIndex_LeavesTheRowsInTheirTable));
+        var db = await OpenAsync(catalog);
+        await db.SaveAsync(new Actor { Username = "ivy", DisplayName = "Ivy" }, ct);
+
+        await db.DeleteSearchIndexAsync(ct);
+
+        // The table is the record: the object is still there, and the index is rebuilt from it.
+        Assert.Empty(db.Search<Actor>().ToList());
+        Assert.Equal("Ivy", (await db.GetAsync<Actor>("ivy", ct))!.DisplayName);
+        await db.RebuildSearchIndex(ct);
+        Assert.Single(db.Search<Actor>().ToList());
     }
 }

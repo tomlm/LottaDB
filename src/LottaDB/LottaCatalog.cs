@@ -1,6 +1,7 @@
 using Azure;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
 using Lotta.Internal;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.En;
@@ -49,6 +50,12 @@ public class LottaCatalog : IDisposable
         = () => throw new InvalidOperationException("LottaCatalog.BlobServiceClientFactory is not configured.");
 
     /// <summary>
+    /// Factory for creating a <see cref="QueueServiceClient"/>, or null when the storage provider
+    /// has no queue storage. Queued handlers (<see cref="ILottaConfiguration.OnAsync{T}"/>) need one.
+    /// </summary>
+    public Func<QueueServiceClient>? QueueServiceClientFactory { get; set; }
+
+    /// <summary>
     /// Factory for creating the Lucene Directory. Receives a composite path
     /// (<c>{catalog}/{databaseId}/Search</c>) to create per-database indexes.
     /// Set by the storage provider; see <see cref="LuceneDirectories"/> for ready-made factories.
@@ -87,6 +94,28 @@ public class LottaCatalog : IDisposable
         TableServiceClientFactory = tableServiceClientFactory;
         BlobServiceClientFactory = blobServiceClientFactory;
         LuceneDirectoryFactory = luceneDirectoryFactory;
+        return this;
+    }
+
+    /// <summary>
+    /// Register this catalog's storage provider, including queue storage, which queued handlers
+    /// (<see cref="ILottaConfiguration.OnAsync{T}"/>) run from.
+    /// </summary>
+    /// <param name="provider">Provider name, used in error messages.</param>
+    /// <param name="tableServiceClientFactory">Sets <see cref="TableServiceClientFactory"/>.</param>
+    /// <param name="blobServiceClientFactory">Sets <see cref="BlobServiceClientFactory"/>.</param>
+    /// <param name="queueServiceClientFactory">Sets <see cref="QueueServiceClientFactory"/>.</param>
+    /// <param name="luceneDirectoryFactory">Sets <see cref="LuceneDirectoryFactory"/>.</param>
+    /// <exception cref="InvalidOperationException">A storage provider is already registered.</exception>
+    public LottaCatalog UseStorage(
+        string provider,
+        Func<TableServiceClient> tableServiceClientFactory,
+        Func<BlobServiceClient> blobServiceClientFactory,
+        Func<QueueServiceClient> queueServiceClientFactory,
+        Func<string, LuceneDirectory> luceneDirectoryFactory)
+    {
+        UseStorage(provider, tableServiceClientFactory, blobServiceClientFactory, luceneDirectoryFactory);
+        QueueServiceClientFactory = queueServiceClientFactory;
         return this;
     }
 
@@ -162,6 +191,12 @@ public class LottaCatalog : IDisposable
 
         var config = new LottaConfiguration();
         configure?.Invoke(config);
+        // Before the database is built: building it creates an index that would then be left behind.
+        if (config.AsyncRegistrations.Count > 0 && QueueServiceClientFactory == null)
+            throw new NotSupportedException(
+                $"OnAsync handlers need queue storage, which {StorageProvider ?? "this catalog's"} storage does not provide. " +
+                $"Use On<T> for inline handlers, or give the catalog queue storage: every built-in Use…() provider " +
+                $"has it, and UseStorage has an overload that takes a queue client factory.");
         var db = new LottaDB(this, databaseId, config);
 
         if (!_databases.TryAdd(databaseId, db))
@@ -253,6 +288,8 @@ public class LottaCatalog : IDisposable
         }
         // storedSchema == currentSchema: nothing to write.
 
+        // Only now: the schemas are loaded and any rebuild is done, so a queued handler sees a ready database.
+        db.StartAsyncHandlers();
         return db;
     }
 
@@ -313,10 +350,27 @@ public class LottaCatalog : IDisposable
         var blob = GetBlobServiceClient().GetBlobContainerClient(this.Name);
         await blob.DeleteIfExistsAsync(cancellationToken: cancellationToken);
 
-        // Clear cached clients so subsequent operations recreate them
+        // Every database's handler queues, opened in this session or not, share the catalog's prefix.
+        if (GetQueueServiceClient() is { } queues)
+            await Internal.AsyncQueueNames.DeleteQueuesAsync(queues, Internal.AsyncQueueNames.CatalogPrefix(Name), cancellationToken);
+
+        // Subsequent operations recreate the clients
+        ReleaseStorageClients();
+    }
+
+    /// <summary>
+    /// Let go of the storage clients; the next use asks the factories again. A client that holds
+    /// resources is disposed: the Lucene ones hold their Lucene <c>Directory</c> objects.
+    /// </summary>
+    private void ReleaseStorageClients()
+    {
+        (_tableServiceClient as IDisposable)?.Dispose();
+        (_blobServiceClient as IDisposable)?.Dispose();
+        (_queueServiceClient as IDisposable)?.Dispose();
         _tableClient = null;
         _tableServiceClient = null;
         _blobServiceClient = null;
+        _queueServiceClient = null;
     }
 
     /// <summary>
@@ -335,19 +389,30 @@ public class LottaCatalog : IDisposable
         return sanitized;
     }
 
-    /// Dispose all database instances managed by this catalog.
+    /// Dispose all database instances managed by this catalog, and its storage clients.
     /// </summary>
     public void Dispose()
     {
         foreach (var db in _databases.Values)
             db.Dispose();
         _databases.Clear();
+        ReleaseStorageClients();
     }
 
     internal TableServiceClient GetTableServiceClient()
     {
         _tableServiceClient ??= TableServiceClientFactory();
         return _tableServiceClient;
+    }
+
+    private QueueServiceClient? _queueServiceClient;
+
+    /// <summary>The queue storage client, or null when the storage provider has none.</summary>
+    internal QueueServiceClient? GetQueueServiceClient()
+    {
+        if (_queueServiceClient == null && QueueServiceClientFactory != null)
+            _queueServiceClient = QueueServiceClientFactory();
+        return _queueServiceClient;
     }
 
     internal BlobServiceClient GetBlobServiceClient()
