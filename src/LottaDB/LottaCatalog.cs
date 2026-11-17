@@ -19,7 +19,10 @@ namespace Lotta;
 /// </summary>
 public class LottaCatalog : IDisposable
 {
+    /// <summary>The databases fully open: schemas loaded, any rebuild done, handlers started.</summary>
     private readonly ConcurrentDictionary<string, LottaDB> _databases = new();
+    /// <summary>Opens in progress, shared by everyone asking for the same database meanwhile.</summary>
+    private readonly ConcurrentDictionary<string, Lazy<Task<LottaDB>>> _opening = new();
     private TableServiceClient? _tableServiceClient;
     private TableClient? _tableClient;
     private BlobServiceClient? _blobServiceClient;
@@ -167,6 +170,8 @@ public class LottaCatalog : IDisposable
     /// Returns the same instance for the same database ID.
     /// On first creation, writes a manifest row with the schema definition.
     /// If the schema has changed since the last run, the Lucene index is automatically rebuilt.
+    /// A database is kept only once it is fully open: if opening fails, nothing is kept and the
+    /// next call opens it again from scratch.
     /// </summary>
     /// <param name="databaseId">Database ID within this catalog.</param>
     /// <param name="configure">Configuration callback for registering types and handlers for this database.</param>
@@ -174,18 +179,55 @@ public class LottaCatalog : IDisposable
     {
         if (_databases.TryGetValue(databaseId, out var existing))
         {
-            // Detect schema mismatch if configure is provided on a subsequent call
-            if (configure != null)
-            {
-                var checkConfig = new LottaConfiguration();
-                configure.Invoke(checkConfig);
-                var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values);
-                var newSchema = TypeMetadata.ComputeSchemaFromConfig(checkConfig);
-                if (existingSchema != newSchema)
-                    throw new InvalidOperationException(
-                        $"Database '{databaseId}' already exists with a different schema. " +
-                        $"GetDatabaseAsync was called twice in the same session with conflicting configurations.");
-            }
+            CheckSameSchema(existing, databaseId, configure);
+            return existing;
+        }
+
+        // Callers that ask while the database is being opened wait for that same open.
+        var mine = new Lazy<Task<LottaDB>>(() => OpenDatabaseAsync(databaseId, configure, cancellationToken));
+        var opening = _opening.GetOrAdd(databaseId, mine);
+        try
+        {
+            var db = await opening.Value;
+            if (opening != mine)
+                CheckSameSchema(db, databaseId, configure);
+            return db;
+        }
+        finally
+        {
+            // Finished either way: an open database is in _databases by now, and a failed open
+            // must not be handed to later callers.
+            _opening.TryRemove(new KeyValuePair<string, Lazy<Task<LottaDB>>>(databaseId, opening));
+        }
+    }
+
+    /// <summary>Throws if <paramref name="configure"/> describes a different schema from the open database's.</summary>
+    private static void CheckSameSchema(LottaDB existing, string databaseId, Action<ILottaConfiguration>? configure)
+    {
+        // Detect schema mismatch if configure is provided on a subsequent call
+        if (configure != null)
+        {
+            var checkConfig = new LottaConfiguration();
+            configure.Invoke(checkConfig);
+            var existingSchema = TypeMetadata.ComputeSchemaJson(existing._metadata.Values);
+            var newSchema = TypeMetadata.ComputeSchemaFromConfig(checkConfig);
+            if (existingSchema != newSchema)
+                throw new InvalidOperationException(
+                    $"Database '{databaseId}' already exists with a different schema. " +
+                    $"GetDatabaseAsync was called twice in the same session with conflicting configurations.");
+        }
+    }
+
+    /// <summary>
+    /// Opens a database and adds it to <see cref="_databases"/> once it is fully open. A database
+    /// that fails to open is disposed and not kept.
+    /// </summary>
+    private async Task<LottaDB> OpenDatabaseAsync(string databaseId, Action<ILottaConfiguration>? configure, CancellationToken cancellationToken)
+    {
+        // Opened by a caller whose open finished just before this one began.
+        if (_databases.TryGetValue(databaseId, out var existing))
+        {
+            CheckSameSchema(existing, databaseId, configure);
             return existing;
         }
 
@@ -198,13 +240,25 @@ public class LottaCatalog : IDisposable
                 $"Use On<T> for inline handlers, or give the catalog queue storage: every built-in Use…() provider " +
                 $"has it, and UseStorage has an overload that takes a queue client factory.");
         var db = new LottaDB(this, databaseId, config);
-
-        if (!_databases.TryAdd(databaseId, db))
+        try
         {
-            db.Dispose();
-            return _databases[databaseId];
+            await InitializeDatabaseAsync(db, databaseId, config, cancellationToken);
+            // Only now: the schemas are loaded and any rebuild is done, so a queued handler sees a ready database.
+            db.StartAsyncHandlers();
         }
+        catch
+        {
+            // Kept, it would be a database that saves but queues no handler work, with no error.
+            db.Dispose();
+            throw;
+        }
+        _databases[databaseId] = db;
+        return db;
+    }
 
+    /// <summary>Loads the schemas, and checks the manifest and rebuilds the index if the schema changed.</summary>
+    private async Task InitializeDatabaseAsync(LottaDB db, string databaseId, LottaConfiguration config, CancellationToken cancellationToken)
+    {
         // Load dynamic schemas from Table Storage before computing the schema hash
         await db.InitializeJsonSchemasAsync(cancellationToken);
 
@@ -213,7 +267,7 @@ public class LottaCatalog : IDisposable
 
         // A read-only replica writes nothing at open — no manifest, no index rebuild.
         if (config.ReadOnly)
-            return db;
+            return;
 
         var table = GetTableClient();
         string? storedSchema = null;
@@ -287,10 +341,6 @@ public class LottaCatalog : IDisposable
             }
         }
         // storedSchema == currentSchema: nothing to write.
-
-        // Only now: the schemas are loaded and any rebuild is done, so a queued handler sees a ready database.
-        db.StartAsyncHandlers();
-        return db;
     }
 
     /// <summary>

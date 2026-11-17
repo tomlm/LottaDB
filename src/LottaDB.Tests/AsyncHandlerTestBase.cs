@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using Azure;
+using Azure.Storage.Queues;
 
 namespace Lotta.Tests;
 
@@ -597,6 +599,61 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Equal(0, (await StatusOf(db, "count", ct)).Waiting);
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(0, runs);
+    }
+
+    // === Opening ===
+
+    [Fact]
+    public async Task AnOpenThatFails_KeepsNothing_SoTheNextOpenStartsTheHandlers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var inner = Catalog.QueueServiceClientFactory!;
+        Catalog.QueueServiceClientFactory = () => new FailsOnceQueueServiceClient(inner());
+        void Configure(ILottaConfiguration opts)
+        {
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; });
+        }
+
+        // Fails while starting the handlers, the last step of opening.
+        await Assert.ThrowsAsync<RequestFailedException>(() => CreateDbAsync(Configure, cancellationToken: ct));
+
+        // Before, the half-open database was kept and handed out again: its saves queued nothing and said nothing.
+        var db = await CreateDbAsync(Configure, cancellationToken: ct);
+        var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        Assert.Empty(saved.Errors);
+        Assert.Single(await db.GetHandlerStatusAsync(ct));
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(1, runs);
+    }
+
+    [Fact]
+    public async Task OpeningOneDatabaseTwiceAtOnce_GivesOneInstance()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Task<LottaDB> Open() => Catalog.GetDatabaseAsync("twice", opts =>
+        {
+            opts.Store<Actor>();
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+        }, ct);
+
+        var both = await Task.WhenAll(Open(), Open());
+        Assert.Same(both[0], both[1]);
+        Assert.Same(both[0], await Open());
+        Assert.Single(await both[0].GetHandlerStatusAsync(ct));
+    }
+
+    /// <summary>Queue storage whose first request for a queue fails, as a transient error would.</summary>
+    private sealed class FailsOnceQueueServiceClient(QueueServiceClient inner) : QueueServiceClient, IDisposable
+    {
+        private int _calls;
+
+        public override QueueClient GetQueueClient(string queueName) =>
+            Interlocked.Increment(ref _calls) == 1 ? throw new RequestFailedException(503, "Queue storage is unavailable.") : inner.GetQueueClient(queueName);
+
+        public void Dispose() => (inner as IDisposable)?.Dispose();
     }
 
     // === Registration ===
