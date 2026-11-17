@@ -97,15 +97,25 @@ public partial class LottaDB
         }
     }
 
-    /// <summary>Stops running queued handlers; a run in progress is cancelled and its message stays queued.</summary>
+    /// <summary>
+    /// Stops running queued handlers. A run in progress, the background loop's or a
+    /// <see cref="DrainAsync"/>'s, has its token cancelled and its message stays queued with no
+    /// failure counted. Waits up to 10 seconds for it to end, so the database is not torn down
+    /// under it.
+    /// </summary>
     private void StopAsyncHandlers()
     {
         _asyncCts.Cancel();
         // A handler that disposes its own database cannot wait for itself to finish.
-        if (_asyncLoop != null && _asyncRun.Value?.Db != this)
+        if (_asyncRun.Value?.Db == this)
+            return;
+        if (_asyncLoop != null)
         {
             try { _asyncLoop.Wait(TimeSpan.FromSeconds(10)); } catch { }
         }
+        // A drain's run holds the gate until its message is settled.
+        if (_asyncRunGate.Wait(TimeSpan.FromSeconds(10)))
+            _asyncRunGate.Release();
     }
 
     // === Queuing ===
@@ -350,9 +360,11 @@ public partial class LottaDB
             }
             await run.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
-            interrupted = true;   // the database is closing, or the drain was cancelled
+            // The database is closing, or the drain was cancelled. Whatever the handler threw
+            // then, its cancellation or a database disposed under it, is no fault of its own.
+            interrupted = true;
         }
         catch (WriteLockUnavailableException)
         {
@@ -447,22 +459,31 @@ public partial class LottaDB
     /// </summary>
     /// <param name="max">The most handler runs to do; null for no limit.</param>
     /// <returns>How many handler runs were done, counting failed ones.</returns>
+    /// <remarks>
+    /// The token each handler is given is cancelled when <paramref name="cancellationToken"/> is,
+    /// or when the database is disposed. A run stopped that way is not counted as a failure: its
+    /// message stays queued and runs again later. The drain then throws
+    /// <see cref="OperationCanceledException"/>.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">Called from inside a handler or a save, which would wait on itself.</exception>
+    /// <exception cref="OperationCanceledException">The drain was cancelled, or the database was disposed during it.</exception>
     public async Task<int> DrainAsync(int? max = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_asyncRun.Value != null || _chainChanges.Value != null)
             throw new InvalidOperationException("DrainAsync cannot be called from inside a handler or a save.");
 
+        // Closing the database stops a drain's run as it stops the background loop's.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _asyncCts.Token);
         var runs = 0;
         while (max is null || runs < max)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            stopping.Token.ThrowIfCancellationRequested();
             AsyncOutcome outcome;
-            await _asyncRunGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await _asyncRunGate.WaitAsync(stopping.Token).ConfigureAwait(false);
             try
             {
-                outcome = await RunNextAsync(cancellationToken).ConfigureAwait(false);
+                outcome = await RunNextAsync(stopping.Token).ConfigureAwait(false);
             }
             finally
             {

@@ -121,7 +121,12 @@ public interface ILottaConfiguration
     /// Identifies the handler across runs of the program; its queue is named after it. 3 to 40
     /// lower-case letters and digits, with single hyphens between them.
     /// </param>
-    /// <param name="handler">Receives the object, <see cref="TriggerKind.Saved"/>, and the database.</param>
+    /// <param name="handler">
+    /// Receives the object, <see cref="TriggerKind.Saved"/>, the database, and a token that is
+    /// cancelled when the run outlasts <see cref="AsyncHandlerOptions.Timeout"/> (a failure), or
+    /// when the database is disposed or the <see cref="LottaDB.DrainAsync"/> running it is
+    /// cancelled (not a failure: the work stays queued).
+    /// </param>
     /// <param name="priority">Higher runs first. Within one priority, work runs first in, first out.</param>
     /// <param name="latest">
     /// True when only an object's latest state matters: several saves of one object before the

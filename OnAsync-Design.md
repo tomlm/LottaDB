@@ -94,7 +94,7 @@ A message whose object no longer exists is dropped. Deletes are not queued: `On<
 - `config.AsyncHandlers = AsyncHandlerMode.Manual` leaves it stopped; handlers then run only in `DrainAsync`.
 - One handler run at a time per database.
 - A run holds its message with a short lease, renewed while it runs. A run that loses its lease, or outlasts `Timeout`, is cancelled and counts as a failure.
-- A run cancelled because the database is closing is given back at once, with no failure counted.
+- Disposing the database cancels the token of the run in progress, in `Auto` and `Manual` mode alike: the pump's run, or a `DrainAsync`'s (whose handlers get a token linked to both the caller's token and the database's). It waits up to 10 seconds for the run to end before tearing the database down. A run stopped this way, or by cancelling the drain, is given back at once with no failure counted, whatever it threw; `DrainAsync` then throws `OperationCanceledException`.
 - A run that could not get the write lock (`WriteLockUnavailableException`: another process is writing) counts no failure either, so waiting on another process never sets work aside. But it is given back hidden for `RetryDelay`, doubling with each such run of the message up to five minutes, as failures are; given back at once, it would be run again and again while the lock is held.
 - Delivery is at least once.
 

@@ -558,6 +558,44 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
     }
 
     [Fact]
+    public async Task ClosingTheDatabase_CancelsADrainsRun_AndItsWorkStaysQueued()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("long", async (_, _, _, token) =>
+            {
+                started.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled.TrySetResult();
+                    throw;
+                }
+            }, options: new AsyncHandlerOptions { MaxAttempts = 1 });   // a counted failure would be set aside
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        var drain = db.DrainAsync(cancellationToken: ct);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        // Before, a drain's run had only the drain's token, which closing the database did not cancel.
+        db.Dispose();
+
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain);
+        // The queues belong to the catalog, which is still open.
+        var status = await StatusOf(db, "long", ct);
+        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+    }
+
+    [Fact]
     public async Task Requeue_QueuesTheHandlerForEveryStoredObjectOfItsType()
     {
         var ct = TestContext.Current.CancellationToken;
