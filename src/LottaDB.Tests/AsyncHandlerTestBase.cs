@@ -155,6 +155,31 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
     }
 
     [Fact]
+    public async Task SaveMany_OfAnObjectGivenANewKey_QueuesTheHandlerUnderTheNewKey()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("names", (actor, _, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; }, latest: false);
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        seen.Clear();
+
+        // Loaded as alice, written as carol. The object still carries the key it was loaded
+        // under, and the handler was queued for alice, the object that was not saved.
+        var actor = await db.GetAsync<Actor>("alice", ct);
+        actor!.Username = "carol";
+        await db.SaveManyAsync(new[] { actor }, ct);
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["carol"], seen);
+    }
+
+    [Fact]
     public async Task Handler_GetsAnObjectOfAnySize()
     {
         var ct = TestContext.Current.CancellationToken;

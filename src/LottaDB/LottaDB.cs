@@ -2003,6 +2003,9 @@ public partial class LottaDB : IDisposable
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
         var pendingEntities = new List<(object entity, Type type)>();
+        // The key each pending entity is written under, in the same order. Its metadata key may
+        // still be the one it was loaded under, which is not where it is now stored.
+        var pendingEntityKeys = new List<string>();
 
         // One lease covering every batch flush.
         using var writerLease = await AcquireWriterAsync(cancellationToken);
@@ -2043,6 +2046,7 @@ public partial class LottaDB : IDisposable
                 pendingActions.Add(action);
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, entity.GetType()));
+                pendingEntityKeys.Add(key);
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
@@ -2065,10 +2069,11 @@ public partial class LottaDB : IDisposable
                 // RunPendingHandlersAsync empties the list.
                 var saved = pendingEntities.Select(p => p.entity).ToList();
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
-                foreach (var entity in saved)
-                    await EnqueueAsync(entity, AsyncKeyOf(entity), allErrors, cancellationToken);
+                for (var i = 0; i < saved.Count; i++)
+                    await EnqueueAsync(saved[i], pendingEntityKeys[i], allErrors, cancellationToken);
                 pendingActions.Clear();
                 pendingKeys.Clear();
+                pendingEntityKeys.Clear();
             }
         }
         finally
