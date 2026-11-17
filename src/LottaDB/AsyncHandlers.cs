@@ -21,7 +21,8 @@ public sealed class AsyncHandlerOptions
 
     /// <summary>
     /// How long to wait after the first failure before trying again. The wait doubles with each
-    /// further failure, up to five minutes. Default: 2 seconds.
+    /// further failure, up to five minutes. A run that finds the write lock held by another
+    /// process waits the same way, counted separately and not as a failure. Default: 2 seconds.
     /// </summary>
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(2);
 }

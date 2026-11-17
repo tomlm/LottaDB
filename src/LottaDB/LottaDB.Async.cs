@@ -334,6 +334,7 @@ public partial class LottaDB
 
         Exception? failure = null;
         var interrupted = false;
+        var contended = false;
         Interlocked.Increment(ref handler.Running);
         try
         {
@@ -355,7 +356,7 @@ public partial class LottaDB
         }
         catch (WriteLockUnavailableException)
         {
-            interrupted = true;   // another process is writing; no fault of the handler's
+            contended = true;   // another process is writing; no fault of the handler's
         }
         catch (OperationCanceledException) when (runCts.IsCancellationRequested)
         {
@@ -381,6 +382,14 @@ public partial class LottaDB
                 // Given back at once, with no failure counted.
                 await handler.Queue.UpdateMessageAsync(received.MessageId, receipt, (string?)null, TimeSpan.Zero, settle).ConfigureAwait(false);
             }
+            else if (contended)
+            {
+                // No failure counted, so waiting on another process alone never sets the work
+                // aside. But it is hidden for a wait that grows as a failure's does: given back
+                // at once, it would be run again and again for as long as the lock is held.
+                message.Waits++;
+                await handler.Queue.UpdateMessageAsync(received.MessageId, receipt, message.ToText(), RetryWait(registration, message.Waits), settle).ConfigureAwait(false);
+            }
             else if (failure == null)
             {
                 await handler.Queue.DeleteMessageAsync(received.MessageId, receipt, settle).ConfigureAwait(false);
@@ -401,8 +410,7 @@ public partial class LottaDB
                 else
                 {
                     // Kept in place with the failure written into it, hidden for a wait that doubles each time.
-                    var wait = TimeSpan.FromTicks(Math.Min(registration.Options.RetryDelay.Ticks << Math.Min(message.Attempts - 1, 20), MaxRetryDelay.Ticks));
-                    await handler.Queue.UpdateMessageAsync(received.MessageId, receipt, message.ToText(), wait, settle).ConfigureAwait(false);
+                    await handler.Queue.UpdateMessageAsync(received.MessageId, receipt, message.ToText(), RetryWait(registration, message.Attempts), settle).ConfigureAwait(false);
                 }
             }
         }
@@ -412,6 +420,10 @@ public partial class LottaDB
         }
         return AsyncOutcome.Ran;
     }
+
+    /// <summary>How long a message is hidden before its next try: the retry delay, doubled for each try after the first, up to a cap.</summary>
+    private static TimeSpan RetryWait(AsyncRegistration registration, int tries) =>
+        TimeSpan.FromTicks(Math.Min(registration.Options.RetryDelay.Ticks << Math.Min(tries - 1, 20), MaxRetryDelay.Ticks));
 
     /// <summary>Drops the note that <paramref name="message"/> is the newest for its object, if it still is.</summary>
     private void ForgetNewest(AsyncHandler handler, AsyncMessage message)
@@ -428,8 +440,9 @@ public partial class LottaDB
 
     /// <summary>
     /// Runs queued handlers until no work is ready, or until <paramref name="max"/> handler runs
-    /// have finished. Work that is waiting to be retried after a failure is not ready and is left
-    /// for later. Use it in tests, in command-line tools, and with
+    /// have finished. Work that is waiting to be retried, after a failure or after finding the
+    /// write lock held by another process, is not ready and is left for later. Use it in tests,
+    /// in command-line tools, and with
     /// <see cref="AsyncHandlerMode.Manual"/>.
     /// </summary>
     /// <param name="max">The most handler runs to do; null for no limit.</param>

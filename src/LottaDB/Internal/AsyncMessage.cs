@@ -27,6 +27,12 @@ internal sealed class AsyncMessage
     /// <summary>How many runs for this message have failed.</summary>
     public int Attempts { get; set; }
 
+    /// <summary>
+    /// How many runs for this message found another process holding the write lock. Not
+    /// failures: they only make the wait before the next try longer.
+    /// </summary>
+    public int Waits { get; set; }
+
     /// <summary>What the last failure said.</summary>
     public string? LastError { get; set; }
 

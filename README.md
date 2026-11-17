@@ -175,7 +175,7 @@ opts.OnAsync<Note>("summarize", async (note, kind, db, ct) =>
 
 - Every save of a `Note` queues the handler, which is given the object as it is when it runs. Deletes are not delivered.
 - Higher `priority` runs first. With `latest: true`, several saves of one object before the handler gets to it give one run.
-- A failing run is retried with a growing delay, then set aside in a poison queue (`RetryPoisonedAsync`). Queued work survives a restart.
+- A failing run is retried with a growing delay, then set aside in a poison queue (`RetryPoisonedAsync`). A run whose save finds the write lock held by another server is retried with the same growing delay, but is not counted as a failure. Queued work survives a restart.
 - Handlers run by themselves while the database is open. Set `AsyncHandlers = AsyncHandlerMode.Manual` to run them only when you call `db.DrainAsync()`, which is what tests usually want.
 
 Every built-in storage provider supplies the queues. See [OnAsync-Design.md](OnAsync-Design.md) for the behaviour in full.

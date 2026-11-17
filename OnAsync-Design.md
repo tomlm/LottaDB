@@ -93,7 +93,8 @@ A message whose object no longer exists is dropped. Deletes are not queued: `On<
 - `config.AsyncHandlers = AsyncHandlerMode.Manual` leaves it stopped; handlers then run only in `DrainAsync`.
 - One handler run at a time per database.
 - A run holds its message with a short lease, renewed while it runs. A run that loses its lease, or outlasts `Timeout`, is cancelled and counts as a failure.
-- A run cancelled because the database is closing, or that could not get the write lock, is given back with no failure counted.
+- A run cancelled because the database is closing is given back at once, with no failure counted.
+- A run that could not get the write lock (`WriteLockUnavailableException`: another process is writing) counts no failure either, so waiting on another process never sets work aside. But it is given back hidden for `RetryDelay`, doubling with each such run of the message up to five minutes, as failures are; given back at once, it would be run again and again while the lock is held.
 - Delivery is at least once.
 
 ## Operating it
@@ -107,7 +108,7 @@ Task<int> RetryPoisonedAsync(string name, CancellationToken ct = default);
 Task<int> RequeueAsync(string name, CancellationToken ct = default);     // queue the handler for every stored object of its type
 ```
 
-`DrainAsync` cannot be called from inside a handler or a save. Work waiting out a retry delay is not ready and is left for later.
+`DrainAsync` cannot be called from inside a handler or a save. Work waiting out a retry delay, after a failure or after finding the write lock held, is not ready and is left for later.
 
 `RequeueAsync` is how work is redone after a handler changes (a new prompt or model). It reads every object in the database.
 

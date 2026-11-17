@@ -330,6 +330,41 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Equal(1, (await StatusOf(db, "stuck", ct)).Poisoned);
     }
 
+    [Fact]
+    public async Task ARunThatFindsTheWriteLockHeld_WaitsBeforeItIsTriedAgain_AndIsNotCountedAsAFailure()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            // What a handler's own save throws while another process holds the database's write lock.
+            opts.OnAsync<Actor>("blocked", (_, _, _, _) =>
+                ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask,
+                options: new AsyncHandlerOptions { MaxAttempts = 1, RetryDelay = TimeSpan.FromSeconds(1) });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        // Once given back with no wait, the message was run again at once, so a drain with no
+        // limit never returned; the limit here only turns that into a failure instead of a hang.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(20));
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: limit.Token));
+        var status = await StatusOf(db, "blocked", ct);
+        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));   // MaxAttempts is 1: a counted failure would be set aside
+
+        // Run again after the retry delay; the second time the wait is twice as long.
+        await Task.Delay(1500, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: limit.Token));
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: limit.Token));
+        await Task.Delay(2500, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: limit.Token));
+
+        status = await StatusOf(db, "blocked", ct);
+        Assert.Equal((0, 0, 3), (status.Waiting, status.Poisoned, runs));
+    }
+
     // === Loops ===
 
     [Fact]
