@@ -471,7 +471,8 @@ public partial class LottaDB
     /// The token each handler is given is cancelled when <paramref name="cancellationToken"/> is,
     /// or when the database is disposed. A run stopped that way is not counted as a failure: its
     /// message stays queued and runs again later. The drain then throws
-    /// <see cref="OperationCanceledException"/>.
+    /// <see cref="OperationCanceledException"/>, rather than return a count, even when the run
+    /// stopped was the last one <paramref name="max"/> allows.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Called from inside a handler or a save, which would wait on itself.</exception>
     /// <exception cref="OperationCanceledException">The drain was cancelled, or the database was disposed during it.</exception>
@@ -497,6 +498,9 @@ public partial class LottaDB
             {
                 _asyncRunGate.Release();
             }
+            // Here as well as at the top: a run interrupted by the cancellation is no run, even the
+            // last one max allows, and its message is still queued.
+            stopping.Token.ThrowIfCancellationRequested();
             if (outcome == AsyncOutcome.Nothing)
                 break;
             if (outcome == AsyncOutcome.Ran)

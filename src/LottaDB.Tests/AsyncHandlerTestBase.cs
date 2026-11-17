@@ -596,6 +596,32 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
     }
 
     [Fact]
+    public async Task ClosingTheDatabase_DuringTheLastRunADrainAllows_StillThrows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.OnAsync<Actor>("long", async (_, _, _, token) =>
+            {
+                started.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }, options: new AsyncHandlerOptions { MaxAttempts = 1 });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        var drain = db.DrainAsync(1, ct);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        db.Dispose();
+
+        // Before, a drain whose interrupted run was its last returned 1, as if that run had been done.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        var status = await StatusOf(db, "long", ct);
+        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+    }
+
+    [Fact]
     public async Task Requeue_QueuesTheHandlerForEveryStoredObjectOfItsType()
     {
         var ct = TestContext.Current.CancellationToken;
