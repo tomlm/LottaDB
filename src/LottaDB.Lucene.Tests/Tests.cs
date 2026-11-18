@@ -50,6 +50,7 @@ public class Lucene_VectorSearchTests : VectorSearchTestBase { public Lucene_Vec
 public class Lucene_WriteLockTests : WriteLockTestBase { public Lucene_WriteLockTests() : base(Tests.Configure) { } }
 public class Lucene_QueuedRuleTests : QueuedRuleTestBase { public Lucene_QueuedRuleTests() : base(Tests.Configure) { } }
 public class Lucene_MaintainTests : MaintainTestBase { public Lucene_MaintainTests() : base(Tests.Configure) { } }
+public class Lucene_ScheduleTests : ScheduleTestBase { public Lucene_ScheduleTests() : base(Tests.Configure) { } }
 public class Lucene_TimedRuleTests : TimedRuleTestBase { public Lucene_TimedRuleTests() : base(Tests.Configure) { } }
 public class Lucene_QueuedRulePumpTests : QueuedRulePumpTestBase { public Lucene_QueuedRulePumpTests() : base(Tests.Configure) { } }
 
@@ -65,6 +66,7 @@ public class LuceneFileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public 
 public class LuceneFileSystem_RebuildIndexTests : RebuildIndexTestBase { public LuceneFileSystem_RebuildIndexTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_QueuedRuleTests : QueuedRuleTestBase { public LuceneFileSystem_QueuedRuleTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_MaintainTests : MaintainTestBase { public LuceneFileSystem_MaintainTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_ScheduleTests : ScheduleTestBase { public LuceneFileSystem_ScheduleTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_TimedRuleTests : TimedRuleTestBase { public LuceneFileSystem_TimedRuleTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_QueuedRulePumpTests : QueuedRulePumpTestBase { public LuceneFileSystem_QueuedRulePumpTests() : base(Tests.ConfigureFileSystem) { } }
 

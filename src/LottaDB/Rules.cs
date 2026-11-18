@@ -142,6 +142,38 @@ public sealed class RuleSet
     }
 
     /// <summary>
+    /// Start a schedule: work done every so often, for no object.
+    /// <code>
+    /// config.Rules.Every(TimeSpan.FromHours(24)).Then(SyncWithGraph);
+    /// </code>
+    /// The first run is one interval after the schedule is first seen, and each later one is one
+    /// interval after the run before it was started.
+    /// </summary>
+    /// <param name="interval">How long between runs.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The interval is zero or negative.</exception>
+    public ScheduleBuilder Every(TimeSpan interval)
+    {
+        _config.ThrowIfOpened();
+        return new ScheduleBuilder(_config, ScheduleTimes.Interval(interval));
+    }
+
+    /// <summary>
+    /// Start a schedule given as a cron expression: work done at set times, for no object.
+    /// <code>
+    /// config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time"))
+    ///     .Then(NightlyCleanup);   // 02:00 local time, every day
+    /// </code>
+    /// </summary>
+    /// <param name="cron">Five fields (minute, hour, day of month, month, day of week), or six with seconds first.</param>
+    /// <param name="timeZone">The time zone the expression is in; UTC when null.</param>
+    /// <exception cref="ArgumentException">The text is not a cron expression.</exception>
+    public ScheduleBuilder Every(string cron, TimeZoneInfo? timeZone = null)
+    {
+        _config.ThrowIfOpened();
+        return new ScheduleBuilder(_config, ScheduleTimes.Cron(cron, timeZone));
+    }
+
+    /// <summary>
     /// Start a rule for deletes of <typeparamref name="T"/> (and of types derived from it). Give it
     /// an action with <c>.Do(handler)</c>, which runs inside the delete and is given the object as
     /// it was. A rule with no action makes opening the database throw.

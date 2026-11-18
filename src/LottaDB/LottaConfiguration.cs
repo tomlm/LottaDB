@@ -15,6 +15,10 @@ public class LottaConfiguration : ILottaConfiguration
     /// <summary>The named rules (<c>Update</c>, <c>Maintain</c>, <c>Then</c>), in the order they were registered.</summary>
     internal List<QueuedRule> QueuedRules { get; } = new();
     internal List<RuleRegistration> RuleRegistrations { get; } = new();
+    /// <summary>The schedules (<c>Rules.Every(...).Then(...)</c>), in the order they were registered.</summary>
+    internal List<ScheduleSpec> Schedules { get; } = new();
+    /// <summary>How many schedules were started with <c>Every</c> and not yet given their work.</summary>
+    internal int SchedulesWithoutWork { get; set; }
     /// <summary>The types that have a rule whose filter uses <c>Changed(...)</c>: their saves note the version they replace.</summary>
     internal HashSet<Type> ChangedTypes { get; } = new();
 
@@ -116,6 +120,8 @@ public class LottaConfiguration : ILottaConfiguration
     /// <summary>Throws if a rule was started with <c>When</c> or <c>WhenDeleted</c> and given no action.</summary>
     internal void CheckRules()
     {
+        if (SchedulesWithoutWork > 0)
+            throw new InvalidOperationException("A schedule has no work: follow Rules.Every(...) with .Then(handler).");
         if (RuleRegistrations.FirstOrDefault(r => r.Actions == 0) is { } rule)
         {
             var name = rule.ObjectType.Name;
@@ -123,6 +129,22 @@ public class LottaConfiguration : ILottaConfiguration
                 ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler)."
                 : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .Update(handler), .Maintain(projection) or .Then(handler).");
         }
+    }
+
+    /// <summary>
+    /// Registers a schedule, checking its name. Its record is stored like any object, so the
+    /// record's type is registered for storage too.
+    /// </summary>
+    internal void AddSchedule(string name, Func<DateTimeOffset, DateTimeOffset> next, ScheduleHandler handler)
+    {
+        ThrowIfOpened();
+        if (name is null || !Internal.RuleQueueNames.IsValidRuleName(name))
+            throw new ArgumentException(
+                $"'{name}' is not a rule name. Use 3 to 40 lower-case letters and digits, with single hyphens between them (\"nightly-cleanup\").", nameof(name));
+        if (Schedules.Any(s => s.Name == name))
+            throw new ArgumentException($"A schedule '{name}' is already registered. Give one of the two another name.", nameof(name));
+        Schedules.Add(new ScheduleSpec { Id = $"schedule/{name}", Name = name, Next = next, Handler = handler });
+        RegisterIfMissing<RuleSchedule>();
     }
 
     /// <summary>

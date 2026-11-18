@@ -48,6 +48,8 @@ public delegate Task RuleHandler<in T>(T item, RuleContext context, Cancellation
 // config.Rules (RuleSet)
 RuleBuilder<T>        When<T>(Expression<Func<T, bool>>? filter = null);
 DeletedRuleBuilder<T> WhenDeleted<T>(Expression<Func<T, bool>>? filter = null);
+ScheduleBuilder       Every(TimeSpan interval);
+ScheduleBuilder       Every(string cron, TimeZoneInfo? timeZone = null);
 
 // RuleBuilder<T>: each returns the builder, so one rule can have several actions
 RuleBuilder<T> Do(RuleHandler<T> handler);
@@ -65,6 +67,10 @@ MaintainBuilder<T> Maintain<TView>(projection);  // named after the method, or t
 // MaintainBuilder<T>
 MaintainBuilder<T> Queued();
 MaintainBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources);
+
+// ScheduleBuilder: handler is (RuleContext context, CancellationToken ct)
+ScheduleBuilder Then(string name, ScheduleHandler handler);
+ScheduleBuilder Then(ScheduleHandler handler);   // named after the method
 
 // DeletedRuleBuilder<T>
 DeletedRuleBuilder<T> Do(RuleHandler<T> handler);
@@ -236,6 +242,31 @@ config.Rules.When<Session>()
 - **Failures** are retried and set aside like any queued rule.
 - **`BackfillAsync` and `RetryAsync`** run an `After` rule at once, since there is no save to count from. An `At` rule still waits for the object's time.
 
+## Schedules: `Every`
+
+```csharp
+config.Rules.Every(TimeSpan.FromHours(24)).Then(SyncWithGraph);              // schedule "sync-with-graph"
+
+config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time"))
+    .Then(NightlyCleanup);                                                   // 02:00 local time, every day
+
+static async Task NightlyCleanup(RuleContext context, CancellationToken ct) { ... }
+```
+
+A schedule is work done at times, for no object. Its handler is `(RuleContext context, CancellationToken ct)`.
+
+- **Times.** A `TimeSpan`, or a cron expression of five fields (six with seconds first), in a time zone (UTC when none is given). Cron expressions are parsed by the Cronos package.
+- **Names.** Like queued rules: from the method, or given for a lambda, unique among schedules. Status lists a schedule as `schedule/nightly-cleanup`.
+- **One stored record per schedule:** a `RuleSchedule` under the key `RuleSchedule.KeyOf(name)`, with `NextRun`, `LastRun` and `LastError`. It is an ordinary object: `await db.GetAsync<RuleSchedule>(RuleSchedule.KeyOf("nightly-cleanup"))`.
+- **One process runs each time.** A process claims a run by moving `NextRun` on with an ETag-conditional write; the others see the conflict, or the new time, and do nothing.
+- **The first run** is when the schedule's time first comes round after it is first seen, not at once.
+- **Missed times run once.** After downtime the work runs one time, and the next time is counted from then.
+- **A run that fails** is recorded in `LastError` (in the record and in `StatusAsync`) and is not retried: the work runs again at the next time.
+- **`context.IdempotencyKey`** is the same for one scheduled time. `context.Attempt` is always 1.
+- **Running.** With `QueueMode.Auto` a loop runs schedules while the database is open, looking at the records at least every 30 seconds. With `QueueMode.Manual`, `DrainAsync` runs the ones whose time has come, before the queued rules; each counts as a run.
+- **A changed schedule** takes effect when the database opens with it: a stored time later than the new schedule gives is moved up.
+- Schedules need no queue storage.
+
 ## Queues underneath
 
 ### One queue per type
@@ -358,10 +389,11 @@ You see rules, not queues.
 - A `Maintain` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
 - A backfill of a `Maintain` rule skips objects its filter is false for, so it does not clean up after them.
 - Aggregates (many objects feeding one) are not covered by `Maintain`.
+- A schedule's failed run is not retried before its next time.
+- A schedule's handler is run by the process that claims the time; if that process stops mid-run, the time is not run again.
 
 ## Not built yet
 
 See [Rules-Next.md](Rules-Next.md):
 
-- `Every`: schedules.
 - Queued rules for deletes.

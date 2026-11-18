@@ -269,11 +269,16 @@ public partial class LottaDB
     /// </summary>
     internal void StartRules()
     {
-        if (!HasQueuedRules || _config.QueueMode != QueueMode.Auto || _asyncLoop != null)
+        if (_config.QueueMode != QueueMode.Auto)
             return;
-        // Started without the caller's context, so nothing of a save chain leaks into the loop.
+        // Started without the caller's context, so nothing of a save chain leaks into the loops.
         using (ExecutionContext.SuppressFlow())
-            _asyncLoop = Task.Run(() => RuleLoopAsync(_asyncCts.Token));
+        {
+            if (HasQueuedRules && _asyncLoop == null)
+                _asyncLoop = Task.Run(() => RuleLoopAsync(_asyncCts.Token));
+            if (HasSchedules && _scheduleLoop == null)
+                _scheduleLoop = Task.Run(() => ScheduleLoopAsync(_asyncCts.Token));
+        }
     }
 
     /// <summary>
@@ -294,6 +299,10 @@ public partial class LottaDB
         if (_asyncLoop != null)
         {
             try { _asyncLoop.Wait(Left()); } catch { }
+        }
+        if (_scheduleLoop != null)
+        {
+            try { _scheduleLoop.Wait(Left()); } catch { }
         }
         // Every run holds a slot until its message is settled.
         if (_asyncSlots is { } slots)
@@ -1009,7 +1018,10 @@ public partial class LottaDB
 
         // Closing the database stops a drain's runs as it stops the background loop's.
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _asyncCts.Token);
-        var runs = await PumpAsync(max, forever: false, stopping.Token).ConfigureAwait(false);
+        // Schedules whose time has come are run first; each counts as a run.
+        var runs = HasSchedules ? (await RunDueSchedulesAsync(max, stopping.Token).ConfigureAwait(false)).Runs : 0;
+        if (HasQueuedRules && !(max is { } most && runs >= most))
+            runs += await PumpAsync(max - runs, forever: false, stopping.Token).ConfigureAwait(false);
         // A run interrupted by the cancellation is no run, even the last one max allows, and its work is still queued.
         stopping.Token.ThrowIfCancellationRequested();
         return runs;
@@ -1042,6 +1054,11 @@ public partial class LottaDB
             _ruleStates.TryGetValue(rule.Id, out var state);
             rules.Add(new RuleStatus(rule.Id, state == null ? 0 : Volatile.Read(ref state.Running), poisoned.GetValueOrDefault(rule.Id), state?.LastError));
             poisoned.Remove(rule.Id);
+        }
+        foreach (var schedule in _config.Schedules)
+        {
+            _ruleStates.TryGetValue(schedule.Id, out var state);
+            rules.Add(new RuleStatus(schedule.Id, state == null ? 0 : Volatile.Read(ref state.Running), 0, state?.LastError));
         }
         // Work set aside under a name no rule has now: the rule was renamed or removed.
         foreach (var (rule, count) in poisoned)

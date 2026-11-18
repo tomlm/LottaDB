@@ -10,6 +10,20 @@ public abstract class TimedRuleTestBase : LottaTestBase
 {
     protected TimedRuleTestBase(Action<LottaCatalog> config) : base(config) { }
 
+    /// <summary>Drains again and again until <paramref name="done"/> is true, for at most a minute: a delayed rule's time comes when it comes.</summary>
+    private static async Task DrainUntil(LottaDB db, Func<bool> done, CancellationToken ct)
+    {
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            await db.DrainAsync(cancellationToken: ct);
+            if (done())
+                return;
+            Assert.True(waited.Elapsed < TimeSpan.FromMinutes(1), "The delayed work did not run within a minute.");
+            await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+        }
+    }
+
     private static async Task<int> WaitingOf<T>(LottaDB db, CancellationToken ct) =>
         (await db.Rules.StatusAsync(ct)).Types.SingleOrDefault(t => t.Type == typeof(T).FullName)?.Waiting ?? 0;
 
@@ -17,32 +31,34 @@ public abstract class TimedRuleTestBase : LottaTestBase
     public async Task After_RunsTheRuleOnceTheDelayHasPassed_NotBefore()
     {
         var ct = TestContext.Current.CancellationToken;
+        var delay = TimeSpan.FromSeconds(2);
         var ran = new List<string>();
+        var later = new List<(string Content, DateTimeOffset At)>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
             opts.Rules.When<Note>()
                 .Then("now", (note, _, _) => { ran.Add($"now:{note.NoteId}"); return Task.CompletedTask; })
-                .After(TimeSpan.FromSeconds(2))
-                .Then("later", (note, _, _) => { ran.Add($"later:{note.Content}"); return Task.CompletedTask; });
+                .After(delay)
+                .Then("later", (note, _, _) => { later.Add((note.Content, DateTimeOffset.UtcNow)); return Task.CompletedTask; })
+                .After(TimeSpan.FromHours(1))
+                .Then("much-later", (note, _, _) => { ran.Add("much-later"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
+        var saved = DateTimeOffset.UtcNow;
         await db.SaveAsync(new Note { NoteId = "n1", Content = "first" }, ct);
-
-        // The rule before After runs at once; the one after it waits, in a message of its own.
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["now:n1"], ran);
-        Assert.Equal(1, await WaitingOf<Note>(db, ct));
-
         await db.SaveAsync(new Note { NoteId = "n1", Content = "edited" }, ct);
-        await db.DrainAsync(cancellationToken: ct);
-        ran.Clear();
-        await Task.Delay(TimeSpan.FromSeconds(3), ct);
 
-        // Each save started a wait of its own; each run sees the note as it is when its time comes.
-        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["later:edited", "later:edited"], ran);
-        Assert.Equal(0, await WaitingOf<Note>(db, ct));
+        await DrainUntil(db, () => later.Count >= 2, ct);
+
+        // The rule before After ran at once, for each save. The ones after it each had a message of their own.
+        Assert.Equal(["now:n1", "now:n1"], ran);
+        // Each save started a wait of its own, and each run sees the note as it is when its time comes.
+        Assert.Equal(["edited", "edited"], later.Select(run => run.Content));
+        Assert.All(later, run => Assert.True(run.At >= saved + delay, $"ran {run.At - saved} after the save, before the {delay} delay had passed"));
+        // The hour-long waits are still waiting.
+        Assert.Equal(2, await WaitingOf<Note>(db, ct));
     }
 
     [Fact]
@@ -53,17 +69,18 @@ public abstract class TimedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
             opts.Rules.When<Note>(note => note.Domain == "pending")
                 .After(TimeSpan.FromSeconds(1))
                 .Then("remind", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Domain = "pending" }, ct);
-        await db.SaveAsync(new Note { NoteId = "n2", Domain = "pending" }, ct);
         await db.SaveAsync(new Note { NoteId = "n1", Domain = "done" }, ct);
-        await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        await db.SaveAsync(new Note { NoteId = "n2", Domain = "pending" }, ct);
 
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        // n1's wait began first, so by the time n2's has run, n1's has come up and been dropped.
+        await DrainUntil(db, () => ran.Count > 0, ct);
         Assert.Equal(["n2"], ran);
         Assert.Equal(0, await WaitingOf<Note>(db, ct));
     }
@@ -72,13 +89,14 @@ public abstract class TimedRuleTestBase : LottaTestBase
     public async Task At_RunsAtTheTimeTheObjectGives_AndWaitsWhenItNowGivesALaterOne()
     {
         var ct = TestContext.Current.CancellationToken;
-        var ran = new List<string>();
+        var ran = new List<(string Username, DateTimeOffset At)>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
             opts.Rules.When<Actor>()
                 .At(actor => actor.LastSeenAt == default ? null : actor.LastSeenAt)
-                .Then("expire", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+                .Then("expire", (actor, _, _) => { ran.Add((actor.Username, DateTimeOffset.UtcNow)); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // No time: nothing is queued. A time already past: as soon as it can be.
@@ -86,23 +104,20 @@ public abstract class TimedRuleTestBase : LottaTestBase
         Assert.Equal(0, await WaitingOf<Actor>(db, ct));
         await db.SaveAsync(new Actor { Username = "past", LastSeenAt = DateTimeOffset.UtcNow.AddMinutes(-1) }, ct);
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["past"], ran);
+        Assert.Equal(["past"], ran.Select(run => run.Username));
         ran.Clear();
 
-        var start = DateTimeOffset.UtcNow;
-        await db.SaveAsync(new Actor { Username = "alice", LastSeenAt = start.AddSeconds(1) }, ct);
+        var first = DateTimeOffset.UtcNow.AddSeconds(1);
+        var extended = first.AddSeconds(3);
+        await db.SaveAsync(new Actor { Username = "alice", LastSeenAt = first }, ct);
         // Extended before it came up.
-        await db.SaveAsync(new Actor { Username = "alice", LastSeenAt = start.AddSeconds(5) }, ct);
-        await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
+        await db.SaveAsync(new Actor { Username = "alice", LastSeenAt = extended }, ct);
 
-        // The first time has come, but the actor now gives a later one: nothing runs, and the work waits.
-        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
-        Assert.Empty(ran);
-        Assert.Equal(2, await WaitingOf<Actor>(db, ct));
+        await DrainUntil(db, () => ran.Count >= 2, ct);
 
-        await Task.Delay(TimeSpan.FromSeconds(3.5), ct);
-        Assert.True(await db.DrainAsync(cancellationToken: ct) >= 1);
-        Assert.Contains("alice", ran);
+        // The message for the first time came up when that time did, found a later one, and waited for it:
+        // nothing ran before the time the actor gives now.
+        Assert.All(ran, run => Assert.True(run.At >= extended, $"ran {extended - run.At} before the time the actor gives"));
         Assert.Equal(0, await WaitingOf<Actor>(db, ct));
     }
 

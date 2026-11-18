@@ -7,7 +7,7 @@ Status: the design for rules in 6.0, with its reasoning. What is built is descri
 | 1. Per-type queue, `Then`, `Update`, `Changed(...)`, `RuleContext` | Built |
 | 2. `Maintain`, `RefreshWhen`, backfill for projections | Built |
 | 3. `After`, `At` | Built |
-| 4. `Every` | Not built |
+| 4. `Every` | Built |
 
 ## The idea
 
