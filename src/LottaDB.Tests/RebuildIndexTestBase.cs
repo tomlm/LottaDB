@@ -49,9 +49,8 @@ public abstract class RebuildIndexTestBase : LottaTestBase
         // Rebuild only re-indexes from table storage, does not re-run On<T> handlers
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorDisplay = actor?.DisplayName ?? "", Content = note.Content });
             });

@@ -301,8 +301,8 @@ public class LuceneStorageTests
         using var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root)));
         var db = await OpenAsync(catalog, c =>
         {
-            c.AsyncHandlers = AsyncHandlerMode.Manual;
-            c.OnAsync<Actor>("greet", (_, _, _, _) => Task.CompletedTask);
+            c.QueueMode = QueueMode.Manual;
+            c.Rules.When<Actor>().Queue("greet", (_, _, _) => Task.CompletedTask);
         });
         Assert.Empty((await db.SaveAsync(new Actor { Username = "gina", DisplayName = "Gina" }, ct)).Errors);
         await db.UploadBlobAsync("a.txt", "hello", cancellationToken: ct);
@@ -326,8 +326,8 @@ public class LuceneStorageTests
         var ran = new List<string>();
         void Configure(ILottaConfiguration c)
         {
-            c.AsyncHandlers = AsyncHandlerMode.Manual;
-            c.OnAsync<Actor>("greet", (actor, _, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            c.QueueMode = QueueMode.Manual;
+            c.Rules.When<Actor>().Queue("greet", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }
 
         using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))

@@ -350,7 +350,7 @@ public abstract class DatabaseIsolationTestBase : LottaTestBase
         var db1 = await catalog.GetDatabaseAsync("db1", config =>
         {
             config.Store<Actor>();
-            config.On<Actor>((actor, kind, db, _) =>
+            config.Rules.When<Actor>().Do((actor, db, _) =>
             {
                 db1Triggered = true;
                 return Task.CompletedTask;
@@ -359,7 +359,7 @@ public abstract class DatabaseIsolationTestBase : LottaTestBase
         var db2 = await catalog.GetDatabaseAsync("db2", config =>
         {
             config.Store<Actor>();
-            config.On<Actor>((actor, kind, db, _) =>
+            config.Rules.When<Actor>().Do((actor, db, _) =>
             {
                 db2Triggered = true;
                 return Task.CompletedTask;

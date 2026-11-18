@@ -9,15 +9,13 @@ public abstract class CycleDetectionTestBase : LottaTestBase
     {
         return await CreateDbAsync(opts =>
         {
-            opts.On<CycleA>(async (a, kind, db, _) =>
+            opts.Rules.When<CycleA>().Do(async (a, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });
             });
 
-            opts.On<CycleB>(async (b, kind, db, _) =>
+            opts.Rules.When<CycleB>().Do(async (b, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleA { Id = $"ca-{b.Id}", Value = $"from-b-{b.Value}" });
             });
         }, testName: testName, cancellationToken: cancellationToken);
@@ -70,9 +68,8 @@ public abstract class CycleDetectionTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<CycleA>(async (a, kind, db, _) =>
+            opts.Rules.When<CycleA>().Do(async (a, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new CycleB { Id = $"cb-{a.Id}", Value = $"from-a-{a.Value}" });
             });
         }, cancellationToken: ct);
@@ -99,10 +96,9 @@ public abstract class CycleDetectionTestBase : LottaTestBase
 
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<CycleA>(async (a, kind, db, _) =>
+            opts.Rules.When<CycleA>().Do(async (a, db, _) =>
             {
-                if (kind == TriggerKind.Saved)
-                    await db.SaveAsync(new CycleB { Id = inner, Value = "nested" });
+                await db.SaveAsync(new CycleB { Id = inner, Value = "nested" });
             });
         }, cancellationToken: ct);
 

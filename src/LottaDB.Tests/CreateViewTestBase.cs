@@ -9,13 +9,11 @@ public abstract class CreateViewTestBase : LottaTestBase
     {
         return await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) =>
+                await db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
+
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted)
-                {
-                    await db.DeleteAsync<NoteView>($"nv-{note.NoteId}");
-                    return;
-                }
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 if (actor == null) return;
                 await db.SaveAsync(new NoteView
@@ -32,17 +30,20 @@ public abstract class CreateViewTestBase : LottaTestBase
                 });
             });
 
-            opts.On<Actor>(async (actor, kind, db, _) =>
+            opts.Rules.WhenDeleted<Actor>().Do(async (actor, db, _) =>
+            {
+                var affected = db.Search<NoteView>()
+                    .Where(v => v.AuthorUsername == actor.Username).ToList();
+                foreach (var view in affected)
+                    await db.DeleteAsync<NoteView>(view.Id);
+            });
+
+            opts.Rules.When<Actor>().Do(async (actor, db, _) =>
             {
                 var affected = db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();
                 foreach (var view in affected)
                 {
-                    if (kind == TriggerKind.Deleted)
-                    {
-                        await db.DeleteAsync<NoteView>(view.Id);
-                        continue;
-                    }
                     var noteKey = view.NoteId;
                     var note = await db.GetAsync<Note>(noteKey);
                     if (note == null) continue;

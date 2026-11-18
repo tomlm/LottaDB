@@ -194,10 +194,9 @@ public abstract class CrudTestBase : LottaTestBase
         int deleteCount = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, d, cancellationToken) =>
+            opts.Rules.WhenDeleted<Note>().Do(async (note, d, cancellationToken) =>
             {
-                if (kind == TriggerKind.Deleted)
-                    Interlocked.Increment(ref deleteCount);
+                Interlocked.Increment(ref deleteCount);
             });
         }, cancellationToken: ct);
 

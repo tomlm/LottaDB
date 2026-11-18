@@ -1,7 +1,7 @@
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for On&lt;T&gt; handler behavior: creating derived objects, handling deletes,
+/// Tests for inline rules (<c>Rules.When&lt;T&gt;().Do</c>, <c>Rules.WhenDeleted&lt;T&gt;().Do</c>): creating derived objects, handling deletes,
 /// error handling, and accessing the DB from within handlers.
 /// All derived object IDs are prefixed to ensure global uniqueness (e.g. "nv-" for NoteView).
 /// </summary>
@@ -15,9 +15,8 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
@@ -46,9 +45,8 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);
@@ -65,9 +63,8 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);
@@ -84,15 +81,10 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
-            {
-                if (kind == TriggerKind.Deleted)
-                {
-                    await db.DeleteAsync<NoteView>($"nv-{note.NoteId}");
-                    return;
-                }
-                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
-            });
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
+                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content }));
+            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) =>
+                await db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
         }, cancellationToken: ct);
 
         var note = new Note { NoteId = "n4", Content = "Delete me", Published = DateTimeOffset.UtcNow };
@@ -104,33 +96,35 @@ public abstract class BuilderTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task OnHandler_ReceivesTriggerKind_Saved()
+    public async Task OnHandler_ASave_RunsTheSaveRule_NotTheDeleteRule()
     {
         var ct = TestContext.Current.CancellationToken;
-        TriggerKind? received = null;
+        string? received = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) => { received = kind; });
+            opts.Rules.When<Note>().Do(async (note, db, _) => { received = "saved"; });
+            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) => { received = "deleted"; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow }, ct);
-        Assert.Equal(TriggerKind.Saved, received);
+        Assert.Equal("saved", received);
     }
 
     [Fact]
-    public async Task OnHandler_ReceivesTriggerKind_Deleted()
+    public async Task OnHandler_ADelete_RunsTheDeleteRule_NotTheSaveRule()
     {
         var ct = TestContext.Current.CancellationToken;
-        TriggerKind? received = null;
+        string? received = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) => { received = kind; });
+            opts.Rules.When<Note>().Do(async (note, db, _) => { received = "saved"; });
+            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) => { received = "deleted"; });
         }, cancellationToken: ct);
 
         var note = new Note { NoteId = "td1", Published = DateTimeOffset.UtcNow };
         await db.SaveAsync(note, ct);
         await db.DeleteAsync(note, ct);
-        Assert.Equal(TriggerKind.Deleted, received);
+        Assert.Equal("deleted", received);
     }
 
     [Fact]
@@ -139,9 +133,8 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 var actor = await db.GetAsync<Actor>(note.AuthorId);
                 await db.SaveAsync(new NoteView
                 {
@@ -166,7 +159,7 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
                 throw new InvalidOperationException("Handler failed");
             });
@@ -184,7 +177,7 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
                 throw new InvalidOperationException("Handler failed intentionally");
             });
@@ -203,8 +196,8 @@ public abstract class BuilderTestBase : LottaTestBase
         int count = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
-            opts.On<Note>(async (note, kind, db, _) => { Interlocked.Increment(ref count); });
+            opts.Rules.When<Note>().Do(async (note, db, _) => { Interlocked.Increment(ref count); });
+            opts.Rules.When<Note>().Do(async (note, db, _) => { Interlocked.Increment(ref count); });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow }, ct);
@@ -217,9 +210,8 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, db, _) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);

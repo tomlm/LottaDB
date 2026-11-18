@@ -401,21 +401,26 @@ public class FluentConfigTests
         Assert.Single(notes);
     }
 
-    // === On<T> handlers with fluent-configured types ===
+    // === Inline rules with fluent-configured types ===
 
     [Fact]
     public async Task Fluent_OnHandler_FiresOnSave()
     {
         var ct = TestContext.Current.CancellationToken;
         BareActor? captured = null;
-        TriggerKind? capturedKind = null;
+        string? capturedKind = null;
 
         using var db = await CreateFluentDbAsync(opts =>
         {
-            opts.On<BareActor>((actor, kind, _, _) =>
+            opts.Rules.When<BareActor>().Do((actor, _, _) =>
             {
                 captured = actor;
-                capturedKind = kind;
+                capturedKind = "saved";
+                return Task.CompletedTask;
+            });
+            opts.Rules.WhenDeleted<BareActor>().Do((_, _, _) =>
+            {
+                capturedKind = "deleted";
                 return Task.CompletedTask;
             });
         }, ct);
@@ -424,20 +429,25 @@ public class FluentConfigTests
 
         Assert.NotNull(captured);
         Assert.Equal("alice", captured!.Username);
-        Assert.Equal(TriggerKind.Saved, capturedKind);
+        Assert.Equal("saved", capturedKind);
     }
 
     [Fact]
     public async Task Fluent_OnHandler_FiresOnDelete()
     {
         var ct = TestContext.Current.CancellationToken;
-        TriggerKind? capturedKind = null;
+        string? capturedKind = null;
 
         using var db = await CreateFluentDbAsync(opts =>
         {
-            opts.On<BareActor>((_, kind, __, ___) =>
+            opts.Rules.When<BareActor>().Do((_, __, ___) =>
             {
-                capturedKind = kind;
+                capturedKind = "saved";
+                return Task.CompletedTask;
+            });
+            opts.Rules.WhenDeleted<BareActor>().Do((_, __, ___) =>
+            {
+                capturedKind = "deleted";
                 return Task.CompletedTask;
             });
         }, ct);
@@ -445,7 +455,7 @@ public class FluentConfigTests
         await db.SaveAsync(new BareActor { Username = "alice" }, ct);
         await db.DeleteAsync<BareActor>("alice", ct);
 
-        Assert.Equal(TriggerKind.Deleted, capturedKind);
+        Assert.Equal("deleted", capturedKind);
     }
 
     // === Custom composite key ===

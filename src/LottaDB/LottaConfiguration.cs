@@ -13,12 +13,19 @@ public class LottaConfiguration : ILottaConfiguration
     internal List<OnRegistration> OnRegistrations { get; } = new();
     internal BlobUploadHandler? UploadHandler { get; private set; }
     internal List<AsyncRegistration> AsyncRegistrations { get; } = new();
+    internal List<RuleRegistration> RuleRegistrations { get; } = new();
+
+    /// <summary>Creates an empty configuration.</summary>
+    public LottaConfiguration() => Rules = new RuleSet(this);
 
     /// <inheritdoc/>
-    public AsyncHandlerMode AsyncHandlers { get; set; } = AsyncHandlerMode.Auto;
+    public RuleSet Rules { get; }
 
     /// <inheritdoc/>
-    public int AsyncHandlerMaxHops { get; set; } = 16;
+    public QueueMode QueueMode { get; set; } = QueueMode.Auto;
+
+    /// <inheritdoc/>
+    public int MaxQueueHops { get; set; } = 16;
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -55,44 +62,63 @@ public class LottaConfiguration : ILottaConfiguration
         return this;
     }
 
-    /// <summary>
-    /// Registers an asynchronous handler to be invoked when a trigger occurs for entities of the specified type.
-    /// </summary>
-    public ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new()
+    /// <summary>Throws if a rule was started with <c>When</c> or <c>WhenDeleted</c> and given no action.</summary>
+    internal void CheckRules()
     {
-        OnRegistrations.Add(new OnRegistration(typeof(T), handler));
-        return this;
+        if (RuleRegistrations.FirstOrDefault(r => r.Actions == 0) is { } rule)
+        {
+            var name = rule.ObjectType.Name;
+            throw new InvalidOperationException(rule.Deleted
+                ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler)."
+                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler) or .Queue(name, handler).");
+        }
     }
 
-    /// <inheritdoc/>
-    public ILottaConfiguration OnAsync<T>(string name, EntityHandler<T> handler, int priority = 0, bool latest = true, AsyncHandlerOptions? options = null)
+    /// <summary>
+    /// Set once a database has been opened with this configuration: its rules have been read, so
+    /// adding to them or changing them now would do nothing.
+    /// </summary>
+    internal bool Opened { get; set; }
+
+    /// <summary>Throws if a database has already been opened with this configuration.</summary>
+    internal void ThrowIfOpened()
+    {
+        if (Opened)
+            throw new InvalidOperationException(
+                "The database has already been opened with this configuration, so its rules can no longer change. " +
+                "Complete each rule inside the configure callback, or add an inline rule to the open database with db.Rules.When<T>().Do(...).");
+    }
+
+    /// <summary>Registers a queued action of a rule, checking its name. The modifiers set its options afterwards.</summary>
+    internal AsyncRegistration AddQueuedRule<T>(string name, System.Linq.Expressions.Expression<Func<T, bool>>? filterExpression,
+        Func<T, bool>? filter, RuleHandler<T> handler)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfOpened();
         if (name is null || !Internal.AsyncQueueNames.IsValidHandlerName(name))
             throw new ArgumentException(
-                $"'{name}' is not a handler name. Use 3 to 40 lower-case letters and digits, with single hyphens between them (\"describe-mail\").", nameof(name));
+                $"'{name}' is not a queue name. Use 3 to 40 lower-case letters and digits, with single hyphens between them (\"describe-mail\").", nameof(name));
         if (AsyncRegistrations.Any(r => r.Name == name))
-            throw new ArgumentException($"A queued handler named '{name}' is already registered.", nameof(name));
-        options ??= new AsyncHandlerOptions();
-        if (options.MaxAttempts < 1)
-            throw new ArgumentOutOfRangeException(nameof(options), "MaxAttempts must be at least 1.");
-        if (options.Timeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(options), "Timeout must be positive.");
-        if (options.RetryDelay < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(options), "RetryDelay cannot be negative.");
+            throw new ArgumentException($"A queue named '{name}' is already registered.", nameof(name));
 
-        AsyncRegistrations.Add(new AsyncRegistration(
-            name, typeof(T), priority, latest, options,
-            (entity, db, cancellationToken) => handler((T)entity, TriggerKind.Saved, db, cancellationToken)));
-        return this;
+        var registration = new AsyncRegistration(
+            name, typeof(T), new QueueOptions(),
+            (entity, db, cancellationToken) => handler((T)entity, db, cancellationToken),
+            filter == null ? null : entity => filter((T)entity),
+            filterExpression,
+            // Captured while T is known: the objects the index says the filter is true for.
+            filterExpression == null ? null : db => db.Search<T>().Where(filterExpression).ToList());
+        AsyncRegistrations.Add(registration);
+        return registration;
     }
 
     /// <summary>
     /// Set the blob upload handler. Replacement semantics: last one wins.
     /// Call with no arguments to use the default handler (extension-based mime type detection,
     /// text content extraction for known text formats).
-    /// Use <c>On&lt;BlobFile&gt;</c> for additional processing after upload (CSAM scanning, thumbnails, etc.).
+    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c> or <c>.Queue(...)</c> for additional processing after
+    /// upload (CSAM scanning, thumbnails, etc.): uploading saves the blob's record, which fires them.
     /// Automatically registers all BlobFile types for storage.
     /// </summary>
     public ILottaConfiguration OnUpload(BlobUploadHandler? handler = null)
@@ -129,7 +155,23 @@ public class LottaConfiguration : ILottaConfiguration
 
 internal record OnRegistration(Type ObjectType, object Handler);
 
-/// <summary>A queued handler as registered: what it handles, in what order, and how to call it.</summary>
+/// <summary>
+/// A queued action as registered: what it handles, in what order, and how to call it. When
+/// <paramref name="When"/> (the rule's filter, compiled once) is set, only objects it is true for
+/// are queued and run. <paramref name="Filter"/> is the filter as written, and
+/// <paramref name="FindIndexed"/> runs it against the search index, for <c>RequeueAsync</c>; it
+/// throws when the index cannot express the filter.
+/// </summary>
 internal sealed record AsyncRegistration(
-    string Name, Type ObjectType, int Priority, bool Latest, AsyncHandlerOptions Options,
-    Func<object, LottaDB, CancellationToken, Task> Invoke);
+    string Name, Type ObjectType, QueueOptions Options,
+    Func<object, LottaDB, CancellationToken, Task> Invoke,
+    Func<object, bool>? When = null,
+    System.Linq.Expressions.LambdaExpression? Filter = null,
+    Func<LottaDB, System.Collections.IEnumerable>? FindIndexed = null)
+{
+    /// <summary>Higher runs first.</summary>
+    public int Priority => Options.Priority;
+
+    /// <summary>Whether only an object's latest state matters.</summary>
+    public bool Latest => Options.Latest;
+}

@@ -5,18 +5,15 @@ using Azure.Storage.Queues;
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for OnAsync&lt;T&gt;: handlers that are queued by a save and run later, outside it.
+/// Tests for queued rules (<c>When&lt;T&gt;().Queue(...)</c>): work that is queued by a save and run later, outside it.
 /// These run the handlers by hand with <see cref="LottaDB.DrainAsync"/>, so every step is in order.
 /// </summary>
-public abstract class AsyncHandlerTestBase : LottaTestBase
+public abstract class QueuedRuleTestBase : LottaTestBase
 {
-    protected AsyncHandlerTestBase(Action<LottaCatalog> config) : base(config) { }
+    protected QueuedRuleTestBase(Action<LottaCatalog> config) : base(config) { }
 
-    /// <summary>Failing runs are tried again at once, so a drain sees every attempt.</summary>
-    private static AsyncHandlerOptions Quick(int maxAttempts = 5) => new() { MaxAttempts = maxAttempts, RetryDelay = TimeSpan.Zero };
-
-    private static async Task<AsyncHandlerStatus> StatusOf(LottaDB db, string name, CancellationToken ct) =>
-        (await db.GetHandlerStatusAsync(ct)).Single(s => s.Name == name);
+    private static async Task<QueueStatus> StatusOf(LottaDB db, string name, CancellationToken ct) =>
+        (await db.GetQueueStatusAsync(ct)).Single(s => s.Name == name);
 
     // === Order ===
 
@@ -27,9 +24,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Note>("low", (note, _, _, _) => { ran.Add($"low:{note.NoteId}"); return Task.CompletedTask; }, priority: 1, latest: false);
-            opts.OnAsync<Note>("high", (note, _, _, _) => { ran.Add($"high:{note.NoteId}"); return Task.CompletedTask; }, priority: 10, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Queue("low", (note, _, _) => { ran.Add($"low:{note.NoteId}"); return Task.CompletedTask; }).Priority(1).EverySave();
+            opts.Rules.When<Note>().Queue("high", (note, _, _) => { ran.Add($"high:{note.NoteId}"); return Task.CompletedTask; }).Priority(10).EverySave();
         }, cancellationToken: ct);
 
         foreach (var id in new[] { "n1", "n2", "n3" })
@@ -47,9 +44,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Note>("notes", (note, _, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; }, priority: 5, latest: false);
-            opts.OnAsync<Actor>("actors", (actor, _, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; }, priority: 5, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Queue("notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; }).Priority(5).EverySave();
+            opts.Rules.When<Actor>().Queue("actors", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; }).Priority(5).EverySave();
         }, cancellationToken: ct);
 
         // More than a second apart: Azure records when a message was queued to the second.
@@ -72,8 +69,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var seen = new List<int>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (actor, _, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; }, latest: true);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         for (var n = 1; n <= 3; n++)
@@ -97,8 +94,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var seen = new List<int>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (actor, _, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; }, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; }).EverySave();
         }, cancellationToken: ct);
 
         for (var n = 1; n <= 3; n++)
@@ -115,9 +112,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var attempts = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("flaky", (_, _, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask,
-                latest: true, options: Quick());
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask).Retry(5, TimeSpan.Zero);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -138,13 +134,13 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var seen = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.QueueMode = QueueMode.Manual;
             // Registered for the base type: derived types are its business too.
-            opts.OnAsync<BaseEntity>("people", (entity, kind, _, _) =>
+            opts.Rules.When<BaseEntity>().Queue("people", (entity, _, _) =>
             {
-                seen.Add($"{entity.GetType().Name}:{entity.Id}:{entity.Name}:{kind}");
+                seen.Add($"{entity.GetType().Name}:{entity.Id}:{entity.Name}");
                 return Task.CompletedTask;
-            }, latest: false);
+            }).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "e1", Name = "Eve" }, ct);
@@ -153,7 +149,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         await db.ChangeAsync<Person>("p1", p => { p.Name = "Patricia"; return p; }, ct);
         await db.DrainAsync(cancellationToken: ct);
 
-        Assert.Equal(["Employee:e1:Eve:Saved", "Person:p1:Pat:Saved", "Person:p2:Pip:Saved", "Person:p1:Patricia:Saved"], seen);
+        Assert.Equal(["Employee:e1:Eve", "Person:p1:Pat", "Person:p2:Pip", "Person:p1:Patricia"], seen);
     }
 
     [Fact]
@@ -163,8 +159,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var seen = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("names", (actor, _, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; }, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("names", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; }).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -188,9 +184,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var length = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.QueueMode = QueueMode.Manual;
             opts.Store<LargeDocument>();
-            opts.OnAsync<LargeDocument>("big", (document, _, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
+            opts.Rules.When<LargeDocument>().Queue("big", (document, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // Far more than a queue message can hold: the message carries only the key.
@@ -207,8 +203,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Exception? caught = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("writer", async (actor, _, db, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("writer", async (actor, db, token) =>
             {
                 // Someone else changes the object while the handler is working on it.
                 await db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "changed elsewhere"; return a; }, token);
@@ -238,8 +234,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; }, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -259,9 +255,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var paths = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.QueueMode = QueueMode.Manual;
             opts.OnUpload();
-            opts.OnAsync<BlobFile>("files", (file, _, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
+            opts.Rules.When<BlobFile>().Queue("files", (file, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.UploadBlobAsync("docs/hello.txt", "hello", cancellationToken: ct);
@@ -279,8 +275,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var attempts = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("flaky", (_, _, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask, options: Quick());
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask).Retry(5, TimeSpan.Zero);
         }, cancellationToken: ct);
 
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -299,12 +295,12 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("broken", (_, _, _, _) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("broken", (_, _, _) =>
             {
                 runs++;
                 return broken ? throw new InvalidOperationException("the model is down") : Task.CompletedTask;
-            }, options: Quick(maxAttempts: 3));
+            }).Retry(3, TimeSpan.Zero);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -328,9 +324,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("slow-retry", (_, _, _, _) => throw new InvalidOperationException("no"),
-                options: new AsyncHandlerOptions { RetryDelay = TimeSpan.FromMinutes(1) });
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("slow-retry", (_, _, _) => throw new InvalidOperationException("no")).Retry(5, TimeSpan.FromMinutes(1));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -346,14 +341,15 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("stuck", (_, _, _, token) => Task.Delay(Timeout.Infinite, token),
-                options: new AsyncHandlerOptions { MaxAttempts = 1, Timeout = TimeSpan.FromMilliseconds(200) });
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("stuck", (_, _, token) => Task.Delay(Timeout.Infinite, token)).Retry(1, TimeSpan.FromSeconds(2)).Timeout(TimeSpan.FromMilliseconds(200));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
+        var timer = System.Diagnostics.Stopwatch.StartNew();
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(60), $"the run was stopped after {timer.Elapsed}, not its 200 ms timeout");
         Assert.Equal(1, (await StatusOf(db, "stuck", ct)).Poisoned);
     }
 
@@ -364,11 +360,10 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
+            opts.QueueMode = QueueMode.Manual;
             // What a handler's own save throws while another process holds the database's write lock.
-            opts.OnAsync<Actor>("blocked", (_, _, _, _) =>
-                ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask,
-                options: new AsyncHandlerOptions { MaxAttempts = 1, RetryDelay = TimeSpan.FromSeconds(1) });
+            opts.Rules.When<Actor>().Queue("blocked", (_, _, _) =>
+                ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask).Retry(1, TimeSpan.FromSeconds(1));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -400,9 +395,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("increment", (actor, _, db, token) =>
-                db.ChangeAsync<Actor>(actor.Username, a => { a.Counter++; return a; }, token), latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("increment", (actor, db, token) =>
+                db.ChangeAsync<Actor>(actor.Username, a => { a.Counter++; return a; }, token)).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -419,17 +414,17 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("describe", async (actor, _, db, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("describe", async (actor, db, token) =>
             {
                 ran.Add("describe");
                 await db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "described"; return a; }, token);
-            }, priority: 10);
-            opts.OnAsync<Actor>("tag", async (actor, _, db, token) =>
+            }).Priority(10);
+            opts.Rules.When<Actor>().Queue("tag", async (actor, db, token) =>
             {
                 ran.Add($"tag sees {actor.DisplayName}");
                 await db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "tagged"; return a; }, token);
-            }, priority: 1);
+            }).Priority(1);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -450,9 +445,9 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var inline = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.On<Actor>((_, _, _, _) => { inline++; return Task.CompletedTask; });
-            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; }, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Do((_, _, _) => { inline++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -479,19 +474,19 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.AsyncHandlerMaxHops = 1;
-            opts.OnAsync<Note>("first", async (note, _, db, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxQueueHops = 1;
+            opts.Rules.When<Note>().Queue("first", async (note, db, token) =>
             {
                 ran.Add("first");
                 await db.SaveAsync(new Actor { Username = note.NoteId }, token);
-            }, priority: 30);
-            opts.OnAsync<Actor>("second", async (actor, _, db, token) =>
+            }).Priority(30);
+            opts.Rules.When<Actor>().Queue("second", async (actor, db, token) =>
             {
                 ran.Add("second");
                 await db.SaveAsync(new Person { Id = actor.Username }, token);
-            }, priority: 20);
-            opts.OnAsync<Person>("third", (_, _, _, _) => { ran.Add("third"); return Task.CompletedTask; }, priority: 10);
+            }).Priority(20);
+            opts.Rules.When<Person>().Queue("third", (_, _, _) => { ran.Add("third"); return Task.CompletedTask; }).Priority(10);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1" }, ct);
@@ -511,8 +506,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Exception? fromHandler = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("nested", async (_, _, db, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("nested", async (_, db, token) =>
             {
                 try
                 {
@@ -522,7 +517,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
                 {
                     fromHandler = e;
                 }
-            }, latest: false);
+            }).EverySave();
         }, cancellationToken: ct);
 
         foreach (var name in new[] { "a", "b", "c" })
@@ -541,20 +536,20 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("held", (_, _, _, _) => { ran.Add("held"); return Task.CompletedTask; }, priority: 10);
-            opts.OnAsync<Actor>("free", (_, _, _, _) => { ran.Add("free"); return Task.CompletedTask; }, priority: 1);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("held", (_, _, _) => { ran.Add("held"); return Task.CompletedTask; }).Priority(10);
+            opts.Rules.When<Actor>().Queue("free", (_, _, _) => { ran.Add("free"); return Task.CompletedTask; }).Priority(1);
         }, cancellationToken: ct);
 
-        db.PauseHandlers("held");
+        db.PauseQueue("held");
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.True((await StatusOf(db, "held", ct)).Paused);
-        db.ResumeHandlers("held");
+        db.ResumeQueue("held");
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(["free", "held"], ran);
-        Assert.Throws<ArgumentException>(() => db.PauseHandlers("no-such-handler"));
+        Assert.Throws<ArgumentException>(() => db.PauseQueue("no-such-handler"));
     }
 
     [Fact]
@@ -565,8 +560,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("long", async (_, _, _, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try
@@ -578,7 +573,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
                     cancelled.TrySetResult();
                     throw;
                 }
-            }, options: new AsyncHandlerOptions { MaxAttempts = 1 });   // a counted failure would be set aside
+            }).Retry(1, TimeSpan.FromSeconds(2));   // a counted failure would be set aside
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -602,12 +597,12 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("long", async (_, _, _, token) =>
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
-            }, options: new AsyncHandlerOptions { MaxAttempts = 1 });
+            }).Retry(1, TimeSpan.FromSeconds(2));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -621,6 +616,150 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));
     }
 
+    // === Filter ===
+
+    /// <summary>A filter that fails on "boom"; a method, since an expression cannot hold a throw.</summary>
+    private static bool Picky(Note note) => note.Content == "boom" ? throw new InvalidOperationException("bad filter") : true;
+
+    [Fact]
+    public async Task When_ASaveTheFilterIsFalseFor_QueuesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(note => note.Content.Length > 5)
+                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; }).EverySave();
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "short", Content = "hi" }, ct);
+        await db.SaveAsync(new Note { NoteId = "long", Content = "a longer note" }, ct);
+
+        Assert.Equal(1, (await StatusOf(db, "long-notes", ct)).Waiting);   // only the long one was queued
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["long"], ran);
+    }
+
+    [Fact]
+    public async Task When_AnObjectThatNoLongerMatchesByItsRun_IsSkipped_AndNotCountedAsARun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(note => note.Content.Length > 5)
+                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "a longer note" }, ct);   // queued
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "hi" }, ct);              // not queued, and the queued run no longer applies
+
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+        Assert.Empty(ran);
+        var status = await StatusOf(db, "long-notes", ct);
+        Assert.Equal((0, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+    }
+
+    [Fact]
+    public async Task When_AFilterThatThrowsOnSave_QueuesNothing_AndTheSaveStillHappens()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(note => Picky(note))
+                .Queue("picky", (_, _, _) => Task.CompletedTask);
+        }, cancellationToken: ct);
+
+        var result = await db.SaveAsync(new Note { NoteId = "n1", Content = "boom" }, ct);
+
+        Assert.Contains("bad filter", Assert.Single(result.Errors).Message);
+        Assert.NotNull(await db.GetAsync<Note>("n1", ct));
+        Assert.Equal(0, (await StatusOf(db, "picky", ct)).Waiting);
+    }
+
+    [Fact]
+    public async Task When_Requeue_QueuesOnlyTheObjectsTheFilterIsTrueFor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new ConcurrentBag<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(note => note.Content.Length > 5)
+                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "a", Content = "a longer note" }, ct);
+        await db.SaveAsync(new Note { NoteId = "b", Content = "hi" }, ct);
+        await db.SaveAsync(new Note { NoteId = "c", Content = "another long one" }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        ran.Clear();
+
+        Assert.Equal(2, await db.RequeueAsync("long-notes", ct));
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["a", "c"], ran.Order());
+    }
+
+    /// <summary>A queued rule for notes with <paramref name="filter"/>, the notes saved and drained, then a requeue: which notes ran, and how they were found.</summary>
+    private async Task<(int Queued, List<string> Ran, string? Path)> RequeueWithAsync(
+        System.Linq.Expressions.Expression<Func<Note, bool>> filter, Note[] notes, CancellationToken ct, string testName)
+    {
+        var ran = new ConcurrentBag<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(filter).Queue("redo", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+        }, cancellationToken: ct, testName: testName);
+        await db.SaveManyAsync(notes, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        db.ReloadSearcher();
+        ran.Clear();
+
+        var queued = await db.RequeueAsync("redo", ct);
+        await db.DrainAsync(cancellationToken: ct);
+        return (queued, [.. ran.Order()], db.LastRequeuePath);
+    }
+
+    [Fact]
+    public async Task Requeue_WithAFilterTheIndexCanAnswer_UsesTheIndex()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (queued, ran, path) = await RequeueWithAsync(n => n.AuthorId == "alice",
+            [new Note { NoteId = "a1", AuthorId = "alice" }, new Note { NoteId = "b1", AuthorId = "bob" }, new Note { NoteId = "a2", AuthorId = "alice" }],
+            ct, nameof(Requeue_WithAFilterTheIndexCanAnswer_UsesTheIndex));
+
+        Assert.Equal((2, "index"), (queued, path));
+        Assert.Equal(["a1", "a2"], ran);
+    }
+
+    [Fact]
+    public async Task Requeue_WithAFilterComparingTwoFields_ReadsEveryObject()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (queued, ran, path) = await RequeueWithAsync(n => n.AuthorId == n.Domain,
+            [new Note { NoteId = "same", AuthorId = "x", Domain = "x" }, new Note { NoteId = "differ", AuthorId = "x", Domain = "y" }],
+            ct, nameof(Requeue_WithAFilterComparingTwoFields_ReadsEveryObject));
+
+        Assert.Equal((1, "scan"), (queued, path));
+        Assert.Equal(["same"], ran);
+    }
+
+    [Fact]
+    public async Task Requeue_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Content is analyzed: the index matches the word "hello" in any note that has it.
+        var (queued, ran, path) = await RequeueWithAsync(n => n.Content == "hello",
+            [new Note { NoteId = "exact", Content = "hello" }, new Note { NoteId = "longer", Content = "hello world" }, new Note { NoteId = "other", Content = "bye" }],
+            ct, nameof(Requeue_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches));
+
+        Assert.Equal((1, "index"), (queued, path));
+        Assert.Equal(["exact"], ran);
+    }
+
     [Fact]
     public async Task Requeue_QueuesTheHandlerForEveryStoredObjectOfItsType()
     {
@@ -628,8 +767,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var ran = new ConcurrentBag<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("redo", (actor, _, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("redo", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var name in new[] { "a", "b", "c" })
@@ -650,8 +789,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; }, latest: false);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -676,8 +815,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Catalog.QueueServiceClientFactory = () => new FailsOnceQueueServiceClient(inner());
         void Configure(ILottaConfiguration opts)
         {
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; });
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
         // Fails while starting the handlers, the last step of opening.
@@ -687,7 +826,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         var db = await CreateDbAsync(Configure, cancellationToken: ct);
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
         Assert.Empty(saved.Errors);
-        Assert.Single(await db.GetHandlerStatusAsync(ct));
+        Assert.Single(await db.GetQueueStatusAsync(ct));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(1, runs);
     }
@@ -699,14 +838,14 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Task<LottaDB> Open() => Catalog.GetDatabaseAsync("twice", opts =>
         {
             opts.Store<Actor>();
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
         }, ct);
 
         var both = await Task.WhenAll(Open(), Open());
         Assert.Same(both[0], both[1]);
         Assert.Same(both[0], await Open());
-        Assert.Single(await both[0].GetHandlerStatusAsync(ct));
+        Assert.Single(await both[0].GetQueueStatusAsync(ct));
     }
 
     [Fact]
@@ -717,8 +856,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         static void Configure(ILottaConfiguration opts)
         {
             opts.Store<Actor>();
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
         }
         using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var gaveUp = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -742,7 +881,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         Assert.Same(db, await Catalog.GetDatabaseAsync("shared", Configure, ct));
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
         Assert.Empty(saved.Errors);
-        Assert.Single(await db.GetHandlerStatusAsync(ct));
+        Assert.Single(await db.GetQueueStatusAsync(ct));
     }
 
     [Fact]
@@ -754,7 +893,7 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         static void Configure(ILottaConfiguration opts)
         {
             opts.Store<Actor>();
-            opts.OnAsync<Actor>("count", (_, _, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("closing", Configure, ct), ct);
@@ -777,8 +916,8 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         void Configure(ILottaConfiguration opts)
         {
             opts.Store<Actor>();
-            opts.AsyncHandlers = AsyncHandlerMode.Manual;
-            opts.OnAsync<Actor>("count", (_, _, _, _) => { runs++; return Task.CompletedTask; });
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("deleted", Configure, ct), ct);
@@ -862,46 +1001,212 @@ public abstract class AsyncHandlerTestBase : LottaTestBase
         public override QueueClient GetQueueClient(string queueName) =>
             Interlocked.Increment(ref _calls) == 1 ? throw new RequestFailedException(503, "Queue storage is unavailable.") : inner.GetQueueClient(queueName);
 
+        public override AsyncPageable<Azure.Storage.Queues.Models.QueueItem> GetQueuesAsync(
+            Azure.Storage.Queues.Models.QueueTraits traits = default, string? prefix = null, CancellationToken cancellationToken = default) =>
+            inner.GetQueuesAsync(traits, prefix, cancellationToken);
+
         public void Dispose() => (inner as IDisposable)?.Dispose();
     }
 
-    // === Registration ===
+    // === Rules ===
 
-    [Theory]
-    [InlineData("ab")]
-    [InlineData("Describe")]
-    [InlineData("has space")]
-    [InlineData("-lead")]
-    [InlineData("trail-")]
-    [InlineData("double--hyphen")]
-    [InlineData("describe-poison")]
-    [InlineData("a-name-that-is-longer-than-forty-characters-x")]
-    public void AHandlerName_MustBeUsableAsAQueueName(string name)
+    private readonly ConcurrentQueue<string> _namedRuns = new();
+
+    private Task Summarize(Note note, LottaDB db, CancellationToken cancellationToken)
     {
-        var config = new LottaConfiguration();
-        Assert.Throws<ArgumentException>(() => config.OnAsync<Actor>(name, (_, _, _, _) => Task.CompletedTask));
+        _namedRuns.Enqueue($"summarize:{note.NoteId}");
+        return Task.CompletedTask;
+    }
+
+    private sealed class NoteHandlers(ConcurrentQueue<string> runs)
+    {
+        public Task NotifyFollowersAsync(Note note, LottaDB db, CancellationToken cancellationToken)
+        {
+            runs.Enqueue($"notify:{note.NoteId}");
+            return Task.CompletedTask;
+        }
     }
 
     [Fact]
-    public void TwoHandlers_CannotShareAName_AndOptionsAreChecked()
+    public async Task Queue_NamedAfterItsHandlerMethod_RunsFromThatQueue()
     {
-        var config = new LottaConfiguration();
-        config.OnAsync<Actor>("describe-mail", (_, _, _, _) => Task.CompletedTask);
+        var ct = TestContext.Current.CancellationToken;
+        var handlers = new NoteHandlers(_namedRuns);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Queue(Summarize).Queue(handlers.NotifyFollowersAsync);
+        }, cancellationToken: ct);
+        _namedRuns.Clear();
 
-        Assert.Throws<ArgumentException>(() => config.OnAsync<Note>("describe-mail", (_, _, _, _) => Task.CompletedTask));
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            config.OnAsync<Note>("other", (_, _, _, _) => Task.CompletedTask, options: new AsyncHandlerOptions { MaxAttempts = 0 }));
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            config.OnAsync<Note>("other", (_, _, _, _) => Task.CompletedTask, options: new AsyncHandlerOptions { RetryDelay = TimeSpan.FromSeconds(-1) }));
+        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
+
+        var names = (await db.GetQueueStatusAsync(ct)).Select(s => (s.Name, s.Waiting)).ToList();
+        Assert.Equal([("summarize", 1), ("notify-followers", 1)], names);
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["notify:n1", "summarize:n1"], _namedRuns.Order());
+    }
+
+    [Fact]
+    public async Task OneRule_CanBothDoAndQueue_AndTheFilterAppliesToEach()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(n => n.Content.Length > 5)
+                .Do((note, _, _) => { ran.Add($"inline:{note.NoteId}"); return Task.CompletedTask; })
+                .Queue("later", (note, _, _) => { ran.Add($"queued:{note.NoteId}"); return Task.CompletedTask; })
+                .Do((note, _, _) => { ran.Add($"inline2:{note.NoteId}"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "short", Content = "hi" }, ct);
+        await db.SaveAsync(new Note { NoteId = "long", Content = "a longer note" }, ct);
+        Assert.Equal(["inline:long", "inline2:long"], ran);   // inline, in the save, in order
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["inline:long", "inline2:long", "queued:long"], ran);
+    }
+
+    [Fact]
+    public async Task Modifiers_ApplyOnlyToTheQueueTheyFollow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>()
+                .Queue("first", (a, _, _) => { ran.Add($"first:{a.Counter}"); return Task.CompletedTask; })
+                .Queue("second", (a, _, _) => { ran.Add($"second:{a.Counter}"); return Task.CompletedTask; }).Priority(10).EverySave();
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 2 }, ct);
+
+        var statuses = (await db.GetQueueStatusAsync(ct)).ToDictionary(s => s.Name);
+        Assert.Equal((0, true), (statuses["first"].Priority, statuses["first"].Latest));
+        Assert.Equal((10, false), (statuses["second"].Priority, statuses["second"].Latest));
+        // "second" first, as it has the higher priority, once for each save; "first" once, for the latest.
+        Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["second:2", "second:2", "first:2"], ran);
+    }
+
+    [Fact]
+    public async Task Retry_SetsTheAttemptsAndTheDelay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("fails", (_, _, _) => { runs++; throw new InvalidOperationException("no"); }).Retry(2, TimeSpan.FromSeconds(1));
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // the second attempt is a second away
+        Assert.Equal((1, 0), ((await StatusOf(db, "fails", ct)).Waiting, (await StatusOf(db, "fails", ct)).Poisoned));
+        await Task.Delay(1500, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // two attempts allowed: set aside
+        var status = await StatusOf(db, "fails", ct);
+        Assert.Equal((0, 1, 2), (status.Waiting, status.Poisoned, runs));
+    }
+
+    [Fact]
+    public async Task ARuleChangedAfterTheDatabaseOpened_Throws()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        RuleBuilder<Actor>? rule = null;
+        QueuedRuleBuilder<Actor>? queued = null;
+        await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            rule = opts.Rules.When<Actor>();
+            queued = rule.Queue("count", (_, _, _) => Task.CompletedTask);
+        }, cancellationToken: ct);
+
+        // Read when the database opened: a change now would silently do nothing.
+        Assert.Throws<InvalidOperationException>(() => queued!.Priority(5));
+        Assert.Throws<InvalidOperationException>(() => rule!.Do((_, _, _) => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => rule!.Queue("more", (_, _, _) => Task.CompletedTask));
+    }
+
+    // === Orphaned queues ===
+
+    /// <summary>Makes a queue of this database that no rule uses, as a renamed rule leaves behind, holding work for the actors.</summary>
+    private async Task MakeOrphanAsync(LottaDB db, string name, string[] waiting, string[] poisoned, CancellationToken ct)
+    {
+        var queues = Catalog.GetQueueServiceClient()!;
+        var queue = queues.GetQueueClient(Internal.AsyncQueueNames.Queue(Catalog.Name, db.DatabaseId, name));
+        var poison = queues.GetQueueClient(Internal.AsyncQueueNames.Poison(Catalog.Name, db.DatabaseId, name));
+        await queue.CreateIfNotExistsAsync(cancellationToken: ct);
+        await poison.CreateIfNotExistsAsync(cancellationToken: ct);
+        var seq = 0;
+        foreach (var key in waiting)
+            await queue.SendMessageAsync(new Internal.AsyncMessage { Type = typeof(Actor).FullName!, Key = key, Sender = "old", Seq = ++seq }.ToText(), ct);
+        foreach (var key in poisoned)
+            await poison.SendMessageAsync(new Internal.AsyncMessage { Type = typeof(Actor).FullName!, Key = key, Sender = "old", Seq = ++seq, Attempts = 5, LastError = "failed" }.ToText(), ct);
+    }
+
+    [Fact]
+    public async Task AnOrphanedQueue_IsReported_AndItsWorkCanBeMovedToTheRenamedRule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("new-name", (a, _, _) => { ran.Add(a.Username); return Task.CompletedTask; }).EverySave();
+        }, cancellationToken: ct);
+        await db.SaveManyAsync(new[] { new Actor { Username = "alice" }, new Actor { Username = "bob" }, new Actor { Username = "carol" } }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        ran.Clear();
+        await MakeOrphanAsync(db, "old-name", ["alice", "bob"], ["carol"], ct);
+
+        var orphan = Assert.Single(await db.GetQueueStatusAsync(ct), s => s.Orphaned);
+        Assert.Equal(("old-name", 2, 1), (orphan.Name, orphan.Waiting, orphan.Poisoned));
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // never run by itself
+
+        await Assert.ThrowsAsync<ArgumentException>(() => db.MoveQueuedAsync("new-name", "old-name", ct));   // from must be orphaned
+        await Assert.ThrowsAsync<ArgumentException>(() => db.MoveQueuedAsync("old-name", "no-such-rule", ct));
+        Assert.Equal(3, await db.MoveQueuedAsync("old-name", "new-name", ct));
+
+        var statuses = (await db.GetQueueStatusAsync(ct)).ToDictionary(s => s.Name);
+        Assert.Equal((2, 1), (statuses["new-name"].Waiting, statuses["new-name"].Poisoned));
+        Assert.Equal((true, 0, 0), (statuses["old-name"].Orphaned, statuses["old-name"].Waiting, statuses["old-name"].Poisoned));   // left in place, empty
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["alice", "bob"], ran.Order());
+        Assert.Equal(1, await db.RetryPoisonedAsync("new-name", ct));   // set-aside work stayed set aside
+    }
+
+    [Fact]
+    public async Task AnOrphanedQueue_CanBeDeleted_ButARulesQueueCannot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Queue("kept", (_, _, _) => Task.CompletedTask);
+        }, cancellationToken: ct);
+        await MakeOrphanAsync(db, "removed", ["alice"], [], ct);
+        Assert.Contains(await db.GetQueueStatusAsync(ct), s => s.Name == "removed" && s.Orphaned);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => db.DeleteQueueAsync("kept", ct));
+        await db.DeleteQueueAsync("removed", ct);
+
+        var status = Assert.Single(await db.GetQueueStatusAsync(ct));
+        Assert.Equal(("kept", false), (status.Name, status.Orphaned));
     }
 }
 
 /// <summary>
-/// OnAsync&lt;T&gt; with handlers running by themselves in the background, as they do by default.
+/// Queued rules with work running by itself in the background, as it does by default.
 /// </summary>
-public abstract class AsyncHandlerPumpTestBase : LottaTestBase
+public abstract class QueuedRulePumpTestBase : LottaTestBase
 {
-    protected AsyncHandlerPumpTestBase(Action<LottaCatalog> config) : base(config) { }
+    protected QueuedRulePumpTestBase(Action<LottaCatalog> config) : base(config) { }
 
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(20);
 
@@ -911,7 +1216,7 @@ public abstract class AsyncHandlerPumpTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.OnAsync<Actor>("greet", async (actor, _, db, token) =>
+            opts.Rules.When<Actor>().Queue("greet", async (actor, db, token) =>
             {
                 // A save from inside the handler works: the handler is not inside anyone's write.
                 await db.SaveAsync(new Note { NoteId = $"hello-{actor.Username}" }, token);
@@ -930,14 +1235,14 @@ public abstract class AsyncHandlerPumpTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.OnAsync<Actor>("held", (_, _, _, _) => { seen.TrySetResult(); return Task.CompletedTask; }), cancellationToken: ct);
+            opts.Rules.When<Actor>().Queue("held", (_, _, _) => { seen.TrySetResult(); return Task.CompletedTask; }), cancellationToken: ct);
 
-        db.PauseHandlers();
+        db.PauseQueue();
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await Task.Delay(500, ct);
         Assert.False(seen.Task.IsCompleted);
 
-        db.ResumeHandlers();
+        db.ResumeQueue();
         await seen.Task.WaitAsync(Patience, ct);
     }
 
@@ -948,7 +1253,7 @@ public abstract class AsyncHandlerPumpTestBase : LottaTestBase
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.OnAsync<Actor>("long", async (_, _, _, token) =>
+            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try

@@ -7,9 +7,9 @@ using Lotta.Internal;
 
 namespace Lotta;
 
-// Queued handlers (OnAsync<T>): every save queues a small message for each matching handler, and
-// a pump runs the handlers later, outside the write lease, retrying until they succeed.
-// The queue is the only stored state; see OnAsync-Design.md.
+// Queued rules (When<T>().Queue(...)): every save queues a small message for each matching rule,
+// and a pump runs the handlers later, outside the write lease, retrying until they succeed.
+// The queue is the only stored state; see Rules-Design.md.
 public partial class LottaDB
 {
     /// <summary>One registered queued handler and what this database instance knows about it.</summary>
@@ -74,7 +74,7 @@ public partial class LottaDB
         if (_config.AsyncRegistrations.Count == 0 || _config.ReadOnly || _asyncHandlers.Length > 0)
             return;
         var queues = _lottaCatalog.GetQueueServiceClient()
-            ?? throw new NotSupportedException($"OnAsync handlers need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
+            ?? throw new NotSupportedException($"Queued rules (.Queue) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
         var handlers = new List<AsyncHandler>();
         foreach (var registration in _config.AsyncRegistrations)
@@ -98,7 +98,7 @@ public partial class LottaDB
     /// </summary>
     internal void StartAsyncHandlers()
     {
-        if (_asyncHandlers.Length == 0 || _config.AsyncHandlers != AsyncHandlerMode.Auto || _asyncLoop != null)
+        if (_asyncHandlers.Length == 0 || _config.QueueMode != QueueMode.Auto || _asyncLoop != null)
             return;
         // Started without the caller's context, so nothing of a save chain leaks into the loop.
         using (ExecutionContext.SuppressFlow())
@@ -158,6 +158,10 @@ public partial class LottaDB
                 continue;
             try
             {
+                // Not for this object: nothing to queue, run or read back.
+                if (handler.Registration.When is { } when && !when(entity))
+                    continue;
+
                 var message = new AsyncMessage
                 {
                     Type = entity.GetType().FullName ?? "",
@@ -166,10 +170,10 @@ public partial class LottaDB
                     Seq = Interlocked.Increment(ref _asyncSeq),
                     Hop = hop,
                 };
-                if (hop > _config.AsyncHandlerMaxHops)
+                if (hop > _config.MaxQueueHops)
                 {
                     // A chain this long is handlers of several databases feeding one another; stop it where it can be seen.
-                    message.LastError = $"Set aside without running: {hop} queued handlers in a row led to this save, more than AsyncHandlerMaxHops ({_config.AsyncHandlerMaxHops}).";
+                    message.LastError = $"Set aside without running: {hop} queued handlers in a row led to this save, more than MaxQueueHops ({_config.MaxQueueHops}).";
                     await handler.Poison.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
@@ -356,6 +360,7 @@ public partial class LottaDB
         Exception? failure = null;
         var interrupted = false;
         var contended = false;
+        var skipped = false;
         Interlocked.Increment(ref handler.Running);
         try
         {
@@ -365,6 +370,13 @@ public partial class LottaDB
             {
                 run = Task.Run(async () =>
                 {
+                    // The object may have changed since it was queued. Checked here, inside the run,
+                    // so that a filter that throws counts as a failed run.
+                    if (registration.When is { } when && !when(entity))
+                    {
+                        skipped = true;
+                        return;
+                    }
                     _asyncRun.Value = new AsyncRun(this, registration.Name, registration.Priority, message.Hop);
                     await registration.Invoke(entity, this, runCts.Token).ConfigureAwait(false);
                 });
@@ -441,7 +453,8 @@ public partial class LottaDB
         {
             // The hold ran out before this could be recorded. The message is still queued and will be run again.
         }
-        return AsyncOutcome.Ran;
+        // A run skipped by the handler's filter did no work, and is not counted as a run.
+        return skipped && failure == null && !interrupted && !contended ? AsyncOutcome.Settled : AsyncOutcome.Ran;
     }
 
     /// <summary>How long a message is hidden before its next try: the retry delay, doubled for each try after the first, up to a cap.</summary>
@@ -457,7 +470,7 @@ public partial class LottaDB
 
     private AsyncHandler AsyncHandlerNamed(string name) =>
         _asyncHandlers.FirstOrDefault(h => h.Registration.Name == name)
-        ?? throw new ArgumentException($"There is no queued handler named '{name}' in database '{_databaseId}'.", nameof(name));
+        ?? throw new ArgumentException($"There is no queued rule named '{name}' in database '{_databaseId}'.", nameof(name));
 
     // === Public surface ===
 
@@ -466,7 +479,7 @@ public partial class LottaDB
     /// have finished. Work that is waiting to be retried, after a failure or after finding the
     /// write lock held by another process, is not ready and is left for later. Use it in tests,
     /// in command-line tools, and with
-    /// <see cref="AsyncHandlerMode.Manual"/>.
+    /// <see cref="QueueMode.Manual"/>.
     /// </summary>
     /// <param name="max">The most handler runs to do; null for no limit.</param>
     /// <returns>How many handler runs were done, counting failed ones.</returns>
@@ -513,15 +526,15 @@ public partial class LottaDB
     }
 
     /// <summary>
-    /// Stops this process from starting runs of a queued handler, or of all of them. Work keeps
+    /// Stops this process from starting runs from a queue, or from all of them. Work keeps
     /// being queued, and a run already in progress finishes.
     /// </summary>
-    /// <param name="name">The handler; null for all.</param>
-    public void PauseHandlers(string? name = null) => SetPaused(name, true);
+    /// <param name="name">The queue, as named in <c>.Queue</c>; null for all.</param>
+    public void PauseQueue(string? name = null) => SetPaused(name, true);
 
-    /// <summary>Lets a paused handler, or all of them, run again.</summary>
-    /// <param name="name">The handler; null for all.</param>
-    public void ResumeHandlers(string? name = null)
+    /// <summary>Lets a paused queue, or all of them, run again.</summary>
+    /// <param name="name">The queue, as named in <c>.Queue</c>; null for all.</param>
+    public void ResumeQueue(string? name = null)
     {
         SetPaused(name, false);
         if (_asyncSignal.CurrentCount == 0)
@@ -534,23 +547,146 @@ public partial class LottaDB
             handler.Paused = paused;
     }
 
-    /// <summary>Where each queued handler stands: how much is waiting, running and set aside as failed.</summary>
-    public async Task<IReadOnlyList<AsyncHandlerStatus>> GetHandlerStatusAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Where each queue stands: how much is waiting, running and set aside as failed. Also lists,
+    /// as <see cref="QueueStatus.Orphaned"/>, any queue of this database that no rule uses any
+    /// more, left by a rule that was renamed or removed (a queue named after its handler method is
+    /// renamed with it). Their work is never run or deleted by itself: move it with
+    /// <see cref="MoveQueuedAsync"/>, or delete the queue with <see cref="DeleteQueueAsync"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<QueueStatus>> GetQueueStatusAsync(CancellationToken cancellationToken = default)
     {
-        var statuses = new List<AsyncHandlerStatus>();
+        var statuses = new List<QueueStatus>();
         foreach (var handler in _asyncHandlers)
         {
             var waiting = (await handler.Queue.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
             var poisoned = (await handler.Poison.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
-            statuses.Add(new AsyncHandlerStatus(
+            statuses.Add(new QueueStatus(
                 handler.Registration.Name, handler.Registration.Priority, handler.Registration.Latest,
                 waiting, Volatile.Read(ref handler.Running), poisoned, handler.LastError, handler.Paused));
         }
+
+        // Listed when asked rather than at open, so what is shown is never out of date.
+        if (_lottaCatalog.GetQueueServiceClient() is { } queues)
+        {
+            foreach (var (name, queue, poison) in await OrphanedQueuesAsync(queues, cancellationToken).ConfigureAwait(false))
+            {
+                var waiting = queue ? await CountAsync(AsyncQueueNames.Queue(_lottaCatalog.Name, _databaseId, name)).ConfigureAwait(false) : 0;
+                var poisoned = poison ? await CountAsync(AsyncQueueNames.Poison(_lottaCatalog.Name, _databaseId, name)).ConfigureAwait(false) : 0;
+                statuses.Add(new QueueStatus(name, 0, false, waiting, 0, poisoned, null, false, Orphaned: true));
+            }
+        }
         return statuses;
+
+        async Task<int> CountAsync(string queueName) =>
+            (await queues!.GetQueueClient(queueName).GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
     }
 
     /// <summary>
-    /// Puts a handler's failed work back in its queue with a fresh count of attempts.
+    /// Moves the work in an orphaned queue (see <see cref="GetQueueStatusAsync"/>) into the queue of
+    /// a rule: for a rule that was renamed. Work set aside as failed goes to the rule's poison
+    /// queue, still set aside. Each message is sent to the rule's queue before it is deleted from
+    /// the old one, so a crash part way through can run a message twice but never loses one. The
+    /// old queues are left in place, empty, since a program still running the old rule may yet
+    /// queue work there; delete them with <see cref="DeleteQueueAsync"/> once nothing uses the old name.
+    /// </summary>
+    /// <param name="from">The orphaned queue's name. No rule in this configuration may use it.</param>
+    /// <param name="to">The queue of a rule in this configuration.</param>
+    /// <param name="cancellationToken">Stops the move; what has been moved stays moved.</param>
+    /// <returns>How many messages were moved, set-aside ones included.</returns>
+    /// <exception cref="ArgumentException"><paramref name="from"/> is used by a rule, or <paramref name="to"/> is not.</exception>
+    /// <exception cref="InvalidOperationException">The database is read-only.</exception>
+    public async Task<int> MoveQueuedAsync(string from, string to, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var queues = QueuesForChange(from, nameof(from));
+        var target = AsyncHandlerNamed(to);
+        var orphan = (await OrphanedQueuesAsync(queues, cancellationToken).ConfigureAwait(false)).FirstOrDefault(o => o.Name == from);
+
+        var moved = 0;
+        if (orphan.Queue)
+            moved += await MoveAllAsync(queues.GetQueueClient(AsyncQueueNames.Queue(_lottaCatalog.Name, _databaseId, from)), target.Queue).ConfigureAwait(false);
+        if (orphan.Poison)
+            moved += await MoveAllAsync(queues.GetQueueClient(AsyncQueueNames.Poison(_lottaCatalog.Name, _databaseId, from)), target.Poison).ConfigureAwait(false);
+        if (moved > 0 && _asyncSignal.CurrentCount == 0)
+            _asyncSignal.Release();
+        return moved;
+
+        async Task<int> MoveAllAsync(QueueClient source, QueueClient destination)
+        {
+            var count = 0;
+            while (true)
+            {
+                var batch = (await source.ReceiveMessagesAsync(32, TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false)).Value;
+                if (batch.Length == 0)
+                    return count;
+                foreach (var message in batch)
+                {
+                    await destination.SendMessageAsync(message.Body.ToString(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+                    await source.DeleteMessageAsync(message.MessageId, message.PopReceipt, cancellationToken).ConfigureAwait(false);
+                    count++;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Deletes an orphaned queue (see <see cref="GetQueueStatusAsync"/>) and its poison queue,
+    /// with any work still in them: for a rule that was removed. Nothing is deleted by itself,
+    /// because during a rolling deploy a program still running the old rule may be using it.
+    /// </summary>
+    /// <param name="name">The orphaned queue's name. No rule in this configuration may use it.</param>
+    /// <param name="cancellationToken">Cancels the deletion.</param>
+    /// <exception cref="ArgumentException">A rule in this configuration uses the queue.</exception>
+    /// <exception cref="InvalidOperationException">The database is read-only.</exception>
+    public async Task DeleteQueueAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var queues = QueuesForChange(name, nameof(name));
+        await queues.GetQueueClient(AsyncQueueNames.Queue(_lottaCatalog.Name, _databaseId, name)).DeleteIfExistsAsync(cancellationToken).ConfigureAwait(false);
+        await queues.GetQueueClient(AsyncQueueNames.Poison(_lottaCatalog.Name, _databaseId, name)).DeleteIfExistsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The queue storage, once <paramref name="name"/> is checked to be a queue name no rule uses.</summary>
+    private QueueServiceClient QueuesForChange(string name, string parameter)
+    {
+        if (_config.ReadOnly)
+            throw new InvalidOperationException(
+                $"Database '{_databaseId}' was opened read-only (ILottaConfiguration.ReadOnly). Writes are not permitted.");
+        if (name is null || !AsyncQueueNames.IsValidHandlerName(name))
+            throw new ArgumentException($"'{name}' is not a queue name.", parameter);
+        if (_config.AsyncRegistrations.Any(r => r.Name == name))
+            throw new ArgumentException($"The queue '{name}' is used by a rule of database '{_databaseId}', so it is not orphaned.", parameter);
+        return _lottaCatalog.GetQueueServiceClient()
+            ?? throw new NotSupportedException($"{_lottaCatalog.StorageProvider} storage has no queues.");
+    }
+
+    /// <summary>
+    /// This database's queues that no rule in the configuration uses, by name, with whether the
+    /// queue and its poison queue exist. The readable name is the queue's name after the
+    /// database's prefix.
+    /// </summary>
+    private async Task<List<(string Name, bool Queue, bool Poison)>> OrphanedQueuesAsync(QueueServiceClient queues, CancellationToken cancellationToken)
+    {
+        var prefix = AsyncQueueNames.DatabasePrefix(_lottaCatalog.Name, _databaseId);
+        var found = new SortedDictionary<string, (bool Queue, bool Poison)>(StringComparer.Ordinal);
+        await foreach (var queue in queues.GetQueuesAsync(prefix: prefix, cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var name = queue.Name[prefix.Length..];
+            // A rule's name never ends in -poison, so this is the poison queue of the queue named by the rest.
+            var isPoison = name.EndsWith(AsyncQueueNames.PoisonSuffix, StringComparison.Ordinal);
+            if (isPoison)
+                name = name[..^AsyncQueueNames.PoisonSuffix.Length];
+            if (_config.AsyncRegistrations.Any(r => r.Name == name))
+                continue;
+            var seen = found.GetValueOrDefault(name);
+            found[name] = isPoison ? (seen.Queue, true) : (true, seen.Poison);
+        }
+        return [.. found.Select(f => (f.Key, f.Value.Queue, f.Value.Poison))];
+    }
+
+    /// <summary>
+    /// Puts a queue's failed work back in it with a fresh count of attempts.
     /// </summary>
     /// <returns>How many messages were put back.</returns>
     public async Task<int> RetryPoisonedAsync(string name, CancellationToken cancellationToken = default)
@@ -583,18 +719,22 @@ public partial class LottaDB
     }
 
     /// <summary>
-    /// Queues a handler for every stored object of its type, as if each had just been saved. For
-    /// when the handler itself has changed and its work should be done again. This reads every
-    /// object in the database, and the work it queues may take long.
+    /// Queues a rule's work for every stored object of its type that its filter is true for, as if
+    /// each had just been saved. For when the handler itself has changed and its work should be
+    /// done again. This reads every object in the database, and the work it queues may take long.
     /// </summary>
-    /// <returns>How many objects the handler was queued for.</returns>
+    /// <returns>How many objects the work was queued for.</returns>
     public async Task<int> RequeueAsync(string name, CancellationToken cancellationToken = default)
     {
         var handler = AsyncHandlerNamed(name);
         var queued = 0;
-        await foreach (var entity in GetManyAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var entity in RequeueCandidatesAsync(handler.Registration, cancellationToken).ConfigureAwait(false))
         {
             if (entity is null || !handler.Registration.ObjectType.IsInstanceOfType(entity))
+                continue;
+            // Checked on every candidate, whichever way it was found: the index may return more
+            // than the filter is true for (an analyzed field, a stale entry).
+            if (handler.Registration.When is { } when && !when(entity))
                 continue;
             var message = new AsyncMessage
             {
@@ -613,6 +753,45 @@ public partial class LottaDB
         return queued;
     }
 
+    /// <summary>How the last <see cref="RequeueAsync"/> found its objects: "index" or "scan". For tests.</summary>
+    internal string? LastRequeuePath { get; private set; }
+
+    /// <summary>
+    /// The objects a requeue looks at. With a filter, the search index is asked for the objects it
+    /// is true for, which is cheap. If the index cannot express the filter (comparing two fields, a
+    /// method call) or the type is not searchable, every object in the database is read instead.
+    /// The index may lag the newest writes by up to <c>MaxSearchStaleness</c>, but an object saved
+    /// within that window queued the rule itself when it was saved, so missing it here loses nothing.
+    /// </summary>
+    private async IAsyncEnumerable<object?> RequeueCandidatesAsync(AsyncRegistration registration,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        List<object>? indexed = null;
+        if (registration.FindIndexed is { } find)
+        {
+            try
+            {
+                indexed = [.. find(this).Cast<object>()];
+            }
+            catch (Exception e) when (e is not OperationCanceledException and not ObjectDisposedException)
+            {
+                indexed = null;   // not something the index can answer; read everything instead
+            }
+        }
+
+        if (indexed != null)
+        {
+            LastRequeuePath = "index";
+            foreach (var entity in indexed)
+                yield return entity;
+            yield break;
+        }
+
+        LastRequeuePath = "scan";
+        await foreach (var entity in GetManyAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+            yield return entity;
+    }
+
     // === Clean-up ===
 
     /// <summary>Empties every handler's queue and poison queue; part of resetting the database.</summary>
@@ -626,7 +805,7 @@ public partial class LottaDB
         }
     }
 
-    /// <summary>Deletes the database's queues, including those of handlers that are no longer registered.</summary>
+    /// <summary>Deletes the database's queues, including orphaned ones of rules that are no longer registered.</summary>
     private async Task DeleteAsyncQueuesAsync(CancellationToken cancellationToken)
     {
         if (_lottaCatalog.GetQueueServiceClient() is { } queues)

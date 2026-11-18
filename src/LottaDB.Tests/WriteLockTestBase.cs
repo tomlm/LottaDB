@@ -128,7 +128,7 @@ public abstract class WriteLockTestBase : LottaTestBase
 
         // Keep a write in flight so the drain loop actually runs at least one iteration.
         var gate = new TaskCompletionSource();
-        using var handler = db.On<Note>(async (note, kind, database, token) =>
+        using var handler = db.Rules.When<Note>().Do(async (note, database, token) =>
         {
             await gate.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
         });
@@ -282,9 +282,8 @@ public abstract class WriteLockTestBase : LottaTestBase
         var db = await CreateDbAsync(config =>
         {
             config.WriteLockReleaseDelay = 1;
-            config.On<Note>(async (note, kind, database, token) =>
+            config.Rules.When<Note>().Do(async (note, database, token) =>
             {
-                if (kind == TriggerKind.Deleted) return;
                 await database.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
