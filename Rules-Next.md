@@ -143,9 +143,25 @@ config.Rules.Every(TimeSpan.FromHours(24))
 
 ### Failures, one rule at a time
 
-- **If some rules fail,** one retry message is sent naming only those rules, with their attempt counts and last errors, hidden for the usual growing delay. The original message is deleted. The retry runs only its listed rules, after checking their filters again.
-- **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded.
-- **A stale retry is dropped.** If the object is newer than the retry's version, the newer save already queued a full run.
+All retry state lives in the message itself. Example: object `X1` has rules A, B and C, and B fails.
+
+1. Saving `X1` queues `{ key: X1, version: 7 }`: run every matching rule.
+2. The pump reads `X1` once and runs A, B and C. A and C succeed; B throws.
+3. **The message is replaced in place,** in one `UpdateMessage` call that sets new content and a visibility delay:
+
+   ```json
+   { "key": "X1", "version": 7, "rules": ["b"], "attempts": { "b": 1 }, "lastError": { "b": "timeout calling model" } }
+   ```
+
+   It is hidden for B's retry delay. A and C are done and never run again for this version.
+4. When it comes up again, only B runs, after its filter is checked against `X1` as it is then. Success deletes the message. Another failure raises the count and doubles the wait.
+
+Replacing is one storage operation. Sending a new message and deleting the old one would be two, and a crash between them would leave both.
+
+- **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded. It is then removed from the message; when no rules are left, the message is deleted.
+- **A stale retry is dropped.** If `X1` is saved again before B's retry, that save queues `{ key: X1, version: 8 }`, which runs every rule on the new version. When the version 7 retry comes up, `X1` is newer, so it is dropped.
+- **A crash during a run** leaves the message as it was. It becomes visible again when its lease runs out, and every rule in it runs again: at-least-once delivery. A later optimisation could update the message after each successful rule, so a crash repeats only the unfinished ones. That costs one more storage call per rule, so it is not the default.
+- **Poison records are the only other storage.** There are no bookkeeping rows.
 
 ### Rule identity
 
