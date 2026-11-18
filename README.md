@@ -168,6 +168,7 @@ Rules say what to do when objects are saved or deleted. A rule names the type an
 |---|---|---|
 | `.Do(...)` | Quick work | Inside the save |
 | `.Update(...)` | Slow work that changes the object itself (summaries, embeddings) | Later, from a queue |
+| `.Maintain(...)` | Other objects kept in step with this one (views, links) | In the save, or later with `.Queued()` |
 | `.Then(...)` | Side effects outside the database (email, webhooks) | Later, from a queue |
 
 Rules are like database triggers, except that they never roll back the save: an inline rule's exception goes into the save's `ObjectResult.Errors`, a queued rule is retried, and the object stays saved.
@@ -204,6 +205,7 @@ A handler has the shape `Task Handler(T item, RuleContext context, CancellationT
 - **`Changed(a, b, ...)`** in a filter is true when any of the values differs from the version the save replaces. Use it to react to a change rather than a state, and to tell `Update` what its inputs are. It needs no extra storage: an object LottaDB handed out carries the JSON it was loaded with.
 - **`.Do`** runs in the save, after the object is written and indexed, so a search inside the handler already sees the change. What it saves is part of the save's `ObjectResult.Changes`. Rules for a base type also fire for derived types (a `When<BlobFile>` rule fires for an uploaded `BlobPhoto`).
 - **`.Update`** gives the handler a copy of the object. LottaDB writes the copy back if the handler changed it. If the object was saved meanwhile, the result is applied to the newer version when the `Changed(...)` values are still the same, and dropped otherwise. This replaces the hand-written "do the slow work, then `ChangeAsync` and compare" pattern.
+- **`.Maintain`** takes a projection that returns what should exist for the object: `When<Note>().Maintain(note => new NoteView { Id = $"nv-{note.NoteId}", Content = note.Content })`. LottaDB saves what is new or different, deletes what is no longer produced, and deletes it all when the object is deleted. `.RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username)` runs it again when an object it reads changes.
 - **`.Then`** is delivered at least once. Pass `context.IdempotencyKey` to the outside service so it can drop duplicates.
 - **Rule names** are 3 to 40 lower-case letters, digits and single hyphens, unique within a type. `.Update(Summarize)` takes the name from the method (`summarize`); `handlers.NotifyFollowersAsync` gives `notify-followers`.
 - **Failures.** A queued rule that throws is retried by itself, with a wait that doubles each time (`RuleRetryDelay`, 2 s), and set aside after `RuleMaxAttempts` (5) runs. The other rules of the object carry on.

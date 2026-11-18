@@ -12,7 +12,7 @@ public class LottaConfiguration : ILottaConfiguration
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
     internal BlobUploadHandler? UploadHandler { get; private set; }
-    /// <summary>The queued rules (<c>Update</c>, <c>Then</c>), in the order they were registered.</summary>
+    /// <summary>The named rules (<c>Update</c>, <c>Maintain</c>, <c>Then</c>), in the order they were registered.</summary>
     internal List<QueuedRule> QueuedRules { get; } = new();
     internal List<RuleRegistration> RuleRegistrations { get; } = new();
     /// <summary>The types that have a rule whose filter uses <c>Changed(...)</c>: their saves note the version they replace.</summary>
@@ -121,7 +121,7 @@ public class LottaConfiguration : ILottaConfiguration
             var name = rule.ObjectType.Name;
             throw new InvalidOperationException(rule.Deleted
                 ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler)."
-                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .Update(handler) or .Then(handler).");
+                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .Update(handler), .Maintain(projection) or .Then(handler).");
         }
     }
 
@@ -148,6 +148,29 @@ public class LottaConfiguration : ILottaConfiguration
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(handler);
+        AddQueuedRule(verb, name, filter, (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken), project: null);
+    }
+
+    /// <summary>
+    /// Registers a <c>Maintain</c> rule, checking its name. It is kept with the queued rules, by
+    /// the same identity, because it can be run from the queue (a refresh, a backfill, or
+    /// <c>.Queued()</c>); until <c>.Queued()</c> is called it also runs inside the save.
+    /// </summary>
+    /// <param name="project">Produces the objects the rule keeps for one source object.</param>
+    internal QueuedRule AddMaintainRule<T>(string name, Internal.RuleFilter<T> filter, Func<T, RuleContext, CancellationToken, Task<List<object>>> project)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        return AddQueuedRule(RuleVerb.Maintain, name, filter,
+            static (_, _, _) => Task.CompletedTask,   // a Maintain rule is run through Project
+            (entity, context, cancellationToken) => project((T)entity, context, cancellationToken));
+    }
+
+    private QueuedRule AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter,
+        Func<object, RuleContext, CancellationToken, Task> invoke,
+        Func<object, RuleContext, CancellationToken, Task<List<object>>>? project)
+        where T : class, new()
+    {
         ThrowIfOpened();
         if (name is null || !Internal.RuleQueueNames.IsValidRuleName(name))
             throw new ArgumentException(
@@ -159,23 +182,27 @@ public class LottaConfiguration : ILottaConfiguration
         var onSave = filter.OnSave;
         var rest = filter.Rest;
         var restExpression = filter.RestExpression;
-        QueuedRules.Add(new QueuedRule
+        var rule = new QueuedRule
         {
             Id = id,
             Name = name,
             ObjectType = typeof(T),
             Verb = verb,
             Order = QueuedRules.Count,
-            Invoke = (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken),
+            Invoke = invoke,
+            Project = project,
+            Inline = project != null,
             OnSave = onSave == null ? null : entity => onSave((T)entity),
             Rest = rest == null ? null : entity => rest((T)entity),
             // Captured while T is known: the objects the index says the filter is true for.
             FindIndexed = restExpression == null ? null : db => db.Search<T>().Where(restExpression).ToList(),
             Inputs = [.. filter.Inputs.Select(input => (Func<object, object?>)(entity => input((T)entity)))],
             UsesChanged = filter.UsesChanged,
-        });
+        };
+        QueuedRules.Add(rule);
         if (filter.UsesChanged)
             ChangedTypes.Add(typeof(T));
+        return rule;
     }
 
     /// <summary>

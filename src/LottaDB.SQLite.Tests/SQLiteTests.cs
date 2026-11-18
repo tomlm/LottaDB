@@ -45,4 +45,5 @@ public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public 
 public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Tests.Configure) { } }
 public class SQLite_WriteLockTests : WriteLockTestBase { public SQLite_WriteLockTests() : base(Tests.Configure) { } }
 public class SQLite_QueuedRuleTests : QueuedRuleTestBase { public SQLite_QueuedRuleTests() : base(Tests.Configure) { } }
+public class SQLite_MaintainTests : MaintainTestBase { public SQLite_MaintainTests() : base(Tests.Configure) { } }
 public class SQLite_QueuedRulePumpTests : QueuedRulePumpTestBase { public SQLite_QueuedRulePumpTests() : base(Tests.Configure) { } }

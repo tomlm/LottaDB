@@ -54,15 +54,7 @@ internal static partial class RuleQueueNames
     public static string RuleNameFromExpression(string? expression, string verb)
     {
         var useName = $"Name the rule instead: .{verb}(\"rule-name\", handler).";
-        var text = expression?.Trim() ?? "";
-        // Type arguments of a generic method group play no part in the name.
-        string previous;
-        do
-        {
-            previous = text;
-            text = TypeArguments().Replace(text, "");
-        }
-        while (text != previous);
+        var text = WithoutTypeArguments(expression);
         if (!MemberAccess().IsMatch(text))
             throw new ArgumentException(
                 $"A rule is named after its handler method, and '{expression}' is not a method name. {useName}", "handler");
@@ -76,6 +68,44 @@ internal static partial class RuleQueueNames
                 $"The rule name '{name}', made from the handler '{expression}', is not a rule name: it needs 3 to 40 " +
                 $"lower-case letters and digits, with single hyphens between them. {useName}", "handler");
         return name;
+    }
+
+    /// <summary>
+    /// The rule name for <c>.Maintain(projection)</c>. A method is named as for the other verbs
+    /// (<c>ProjectNote</c> gives <c>project-note</c>). A lambda is named after the type it
+    /// produces, in kebab case: <c>NoteView</c>, or a collection of them, gives <c>note-view</c>.
+    /// </summary>
+    /// <param name="expression">The source text of the projection argument.</param>
+    /// <param name="produced">The type the projection returns: the object's type, or a collection of it.</param>
+    /// <exception cref="ArgumentException">The name made is not a valid rule name.</exception>
+    public static string ProjectionName(string? expression, Type produced)
+    {
+        if (MemberAccess().IsMatch(WithoutTypeArguments(expression)))
+            return RuleNameFromExpression(expression, "Maintain");
+
+        var element = produced.GetInterfaces().Append(produced)
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            ?.GetGenericArguments()[0] ?? produced;
+        var name = KebabCase(element.Name);
+        if (!IsValidRuleName(name))
+            throw new ArgumentException(
+                $"The rule name '{name}', made from the type '{element.Name}' the projection produces, is not a rule name: it needs 3 to 40 " +
+                "lower-case letters and digits, with single hyphens between them. Name the rule instead: .Maintain(\"rule-name\", projection).", "projection");
+        return name;
+    }
+
+    /// <summary>The text of a handler argument without the type arguments of a generic method group, which play no part in the name.</summary>
+    private static string WithoutTypeArguments(string? expression)
+    {
+        var text = expression?.Trim() ?? "";
+        string previous;
+        do
+        {
+            previous = text;
+            text = TypeArguments().Replace(text, "");
+        }
+        while (text != previous);
+        return text;
     }
 
     /// <summary>

@@ -109,8 +109,8 @@ public sealed class RuleSet
     /// <summary>
     /// Start a rule for saves of <typeparamref name="T"/> (and of types derived from it). Give it
     /// actions: <c>.Do(handler)</c> runs inside the save; <c>.Update(handler)</c> changes the
-    /// object in the background; <c>.Then(handler)</c> does work outside the database in the
-    /// background. Several actions may follow one <c>When</c>, and several rules may be made for
+    /// object in the background; <c>.Maintain(projection)</c> keeps other objects in step with
+    /// it; <c>.Then(handler)</c> does work outside the database in the background. Several actions may follow one <c>When</c>, and several rules may be made for
     /// one type. A rule with no action makes opening the database throw
     /// <see cref="InvalidOperationException"/>.
     /// </summary>
@@ -121,7 +121,8 @@ public sealed class RuleSet
     /// than a state. For <c>.Do</c> it is checked before the handler. For a queued action it is
     /// checked when the object is saved (false: nothing is queued) and again, without its
     /// <c>Changed</c> parts, on the object as it is when the run comes up (false: the rule is
-    /// skipped, and not counted as a run). If it throws on a save, the error is in the save's
+    /// skipped, and not counted as a run). For <c>.Maintain</c> it says which objects have a
+    /// projection: false deletes what the object produced. If it throws on a save, the error is in the save's
     /// <see cref="ObjectResult.Errors"/> and the save still happens; if it throws when a queued run
     /// comes up, that counts as a failed run. It is an expression, taken apart and compiled once
     /// here. <see cref="LiveRuleSet.BackfillAsync"/> asks the search index for the objects it is
@@ -238,6 +239,7 @@ public sealed class LiveRuleSet
 /// A rule for saves of <typeparamref name="T"/> (and of types derived from it), made by
 /// <see cref="RuleSet.When{T}"/>. Give it one or more actions: <see cref="Do"/> to act inside the
 /// save, <see cref="Update(RuleHandler{T}, string?)"/> to change the object in the background,
+/// <c>Maintain</c> to keep other objects in step with it,
 /// <see cref="Then(RuleHandler{T}, string?)"/> for work outside the database. A rule with no
 /// action makes opening the database throw. Rules must be complete before the database opens;
 /// adding to or changing one afterwards throws.
@@ -358,6 +360,173 @@ public sealed class RuleBuilder<T> where T : class, new()
     public RuleBuilder<T> Update(RuleHandler<T> handler,
         [CallerArgumentExpression(nameof(handler))] string? handlerExpression = null)
         => Update(RuleQueueNames.RuleNameFromExpression(handlerExpression, nameof(Update)), handler);
+
+    /// <summary>
+    /// Keep other objects in step with this one: a view, a set of links, anything that can be
+    /// made from the object. The projection returns what should exist for the object; LottaDB
+    /// saves what is new or different, deletes what the object no longer produces, and deletes
+    /// all of it when the object is deleted.
+    /// <para>
+    /// It runs inside the save, like <see cref="Do"/>, unless <see cref="MaintainBuilder{T}.Queued"/>
+    /// moves it to the background. The rule's filter says which objects have a projection at all:
+    /// when it becomes false for an object, what the object produced is deleted.
+    /// </para>
+    /// <para>
+    /// A produced object is stored under its own <c>[Key]</c>, which the projection must set and
+    /// keep the same from run to run. It belongs to the one object it was produced from: two
+    /// objects, or two rules, producing the same key is an error. A projection cannot produce
+    /// objects of the type it is for.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TView">The type produced. Returning a collection of objects keeps each of them.</typeparam>
+    /// <param name="name">
+    /// Identifies the rule across runs of the program, together with <typeparamref name="T"/>:
+    /// <c>Note/note-view</c>. 3 to 40 lower-case letters and digits, with single hyphens between
+    /// them, unique among the rules for the type. What a rule produced is found again by this
+    /// name, so renaming a rule hands its objects to the new name the next time each source runs.
+    /// </param>
+    /// <param name="projection">Makes the object to keep for one source object; null for none.</param>
+    /// <exception cref="ArgumentException">The name is not a valid rule name, or is already used for the type.</exception>
+    /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
+    public MaintainBuilder<T> Maintain<TView>(string name, Func<T, TView?> projection) where TView : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return AddMaintain(name, (item, _, _) => Task.FromResult(RuleActions.Produced(projection(item))));
+    }
+
+    /// <summary>
+    /// Keep other objects in step with this one, as <see cref="Maintain{TView}(string, Func{T, TView})"/>,
+    /// with the rule named after the projection: a method gives its name (<c>ProjectNote</c> gives
+    /// <c>project-note</c>), and a lambda gives the type it produces (<c>NoteView</c> gives
+    /// <c>note-view</c>).
+    /// </summary>
+    /// <param name="projection">Makes the object to keep for one source object; null for none.</param>
+    /// <param name="projectionExpression">Filled in by the compiler with the source text of <paramref name="projection"/>.</param>
+    /// <exception cref="ArgumentException">The name made is not a valid rule name, or is already used for the type: name the rule with the other overload.</exception>
+    public MaintainBuilder<T> Maintain<TView>(Func<T, TView?> projection,
+        [CallerArgumentExpression(nameof(projection))] string? projectionExpression = null) where TView : class, new()
+        => Maintain(RuleQueueNames.ProjectionName(projectionExpression, typeof(TView)), projection);
+
+    /// <summary>Keep several objects in step with this one, as <see cref="Maintain{TView}(string, Func{T, TView})"/>: one for each the projection returns.</summary>
+    /// <param name="name">Identifies the rule, with <typeparamref name="T"/>: <c>Note/links</c>.</param>
+    /// <param name="projection">Makes the objects to keep for one source object; empty for none.</param>
+    public MaintainBuilder<T> Maintain<TView>(string name, Func<T, IEnumerable<TView>> projection) where TView : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return AddMaintain(name, (item, _, _) => Task.FromResult(RuleActions.Produced(projection(item))));
+    }
+
+    /// <summary>Keep several objects in step with this one, with the rule named after the projection; see <see cref="Maintain{TView}(Func{T, TView}, string?)"/>.</summary>
+    /// <param name="projection">Makes the objects to keep for one source object; empty for none.</param>
+    /// <param name="projectionExpression">Filled in by the compiler with the source text of <paramref name="projection"/>.</param>
+    public MaintainBuilder<T> Maintain<TView>(Func<T, IEnumerable<TView>> projection,
+        [CallerArgumentExpression(nameof(projection))] string? projectionExpression = null) where TView : class, new()
+        => Maintain(RuleQueueNames.ProjectionName(projectionExpression, typeof(TView)), projection);
+
+    /// <summary>
+    /// Keep an object in step with this one, as <see cref="Maintain{TView}(string, Func{T, TView})"/>,
+    /// with a projection that reads other objects through <see cref="RuleContext.Db"/>. Say which
+    /// changes to those objects should run it again with <see cref="MaintainBuilder{T}.RefreshWhen"/>.
+    /// </summary>
+    /// <param name="name">Identifies the rule, with <typeparamref name="T"/>: <c>Note/note-view</c>.</param>
+    /// <param name="projection">Makes the object to keep for one source object; null for none.</param>
+    public MaintainBuilder<T> Maintain<TView>(string name, Func<T, RuleContext, CancellationToken, Task<TView?>> projection) where TView : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return AddMaintain(name, async (item, context, cancellationToken) =>
+            RuleActions.Produced(await projection(item, context, cancellationToken).ConfigureAwait(false)));
+    }
+
+    /// <summary>Keep an object in step with this one, with a projection that reads other objects and the rule named after it; see <see cref="Maintain{TView}(Func{T, TView}, string?)"/>.</summary>
+    /// <param name="projection">Makes the object to keep for one source object; null for none.</param>
+    /// <param name="projectionExpression">Filled in by the compiler with the source text of <paramref name="projection"/>.</param>
+    public MaintainBuilder<T> Maintain<TView>(Func<T, RuleContext, CancellationToken, Task<TView?>> projection,
+        [CallerArgumentExpression(nameof(projection))] string? projectionExpression = null) where TView : class, new()
+        => Maintain(RuleQueueNames.ProjectionName(projectionExpression, typeof(TView)), projection);
+
+    /// <summary>Keep several objects in step with this one, with a projection that reads other objects; see <see cref="Maintain{TView}(string, Func{T, RuleContext, CancellationToken, Task{TView}})"/>.</summary>
+    /// <param name="name">Identifies the rule, with <typeparamref name="T"/>: <c>Note/links</c>.</param>
+    /// <param name="projection">Makes the objects to keep for one source object; empty for none.</param>
+    public MaintainBuilder<T> Maintain<TView>(string name, Func<T, RuleContext, CancellationToken, Task<IEnumerable<TView>>> projection) where TView : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return AddMaintain(name, async (item, context, cancellationToken) =>
+            RuleActions.Produced(await projection(item, context, cancellationToken).ConfigureAwait(false)));
+    }
+
+    /// <summary>Keep several objects in step with this one, with a projection that reads other objects and the rule named after it; see <see cref="Maintain{TView}(Func{T, TView}, string?)"/>.</summary>
+    /// <param name="projection">Makes the objects to keep for one source object; empty for none.</param>
+    /// <param name="projectionExpression">Filled in by the compiler with the source text of <paramref name="projection"/>.</param>
+    public MaintainBuilder<T> Maintain<TView>(Func<T, RuleContext, CancellationToken, Task<IEnumerable<TView>>> projection,
+        [CallerArgumentExpression(nameof(projection))] string? projectionExpression = null) where TView : class, new()
+        => Maintain(RuleQueueNames.ProjectionName(projectionExpression, typeof(TView)), projection);
+
+    private MaintainBuilder<T> AddMaintain(string name, Func<T, RuleContext, CancellationToken, Task<List<object>>> project)
+    {
+        var rule = _config.AddMaintainRule(name, _filter, project);
+        // In every save and delete of the object: the projection when it runs inline, and the
+        // clean-up when the object is deleted.
+        _config.OnRegistrations.Add(new OnRegistration(typeof(T),
+            (EntityHandler<T>)((entity, kind, db, cancellationToken) => db.MaintainInSaveAsync(rule, entity, kind, cancellationToken))));
+        _rule.Actions++;
+        return new MaintainBuilder<T>(_config, rule);
+    }
+}
+
+/// <summary>
+/// A <c>Maintain</c> rule, as <see cref="RuleBuilder{T}.Maintain{TView}(string, Func{T, TView})"/>
+/// returns it: say whether it runs in the background, and which other objects it depends on.
+/// </summary>
+/// <typeparam name="T">The object type the rule is for.</typeparam>
+public sealed class MaintainBuilder<T> where T : class, new()
+{
+    private readonly LottaConfiguration _config;
+    private readonly QueuedRule _rule;
+
+    internal MaintainBuilder(LottaConfiguration config, QueuedRule rule)
+    {
+        _config = config;
+        _rule = rule;
+    }
+
+    /// <summary>
+    /// Run the projection in the background rather than inside the save: for a projection that is
+    /// slow, or that produces many objects. It is then queued, retried and set aside like
+    /// <see cref="RuleBuilder{T}.Then(string, RuleHandler{T})"/>, and what it keeps lags the
+    /// object until its run comes up. Deleting the object still deletes what it produced at once.
+    /// </summary>
+    public MaintainBuilder<T> Queued()
+    {
+        _config.ThrowIfOpened();
+        _rule.Inline = false;
+        return this;
+    }
+
+    /// <summary>
+    /// Run the projection again when an object it reads changes. Every save or delete of a
+    /// <typeparamref name="TOther"/> asks which <typeparamref name="T"/> objects depend on it,
+    /// and queues the rule for each:
+    /// <code>
+    /// config.Rules.When&lt;Note&gt;()
+    ///     .Maintain(ProjectNoteView)
+    ///     .RefreshWhen&lt;Actor&gt;(actor =&gt; note =&gt; note.AuthorId == actor.Username);
+    /// </code>
+    /// The objects are found through the search index when it can express the condition
+    /// (<c>[Queryable]</c> properties compared with values of the other object), and by reading
+    /// every object when it cannot. The refresh always runs in the background, also for a rule
+    /// that otherwise runs inside the save.
+    /// </summary>
+    /// <typeparam name="TOther">The type the projection reads.</typeparam>
+    /// <param name="sources">Given the object that changed, a condition that is true for the objects whose projection reads it.</param>
+    public MaintainBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources) where TOther : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        _config.ThrowIfOpened();
+        var rule = _rule;
+        _config.OnRegistrations.Add(new OnRegistration(typeof(TOther),
+            (EntityHandler<TOther>)((other, _, db, cancellationToken) => db.RefreshSourcesAsync(rule, sources(other), cancellationToken))));
+        return this;
+    }
 }
 
 /// <summary>
@@ -498,6 +667,9 @@ internal enum RuleVerb
     /// <summary>Changes the object itself.</summary>
     Update = 0,
 
+    /// <summary>Keeps other objects in step with the object.</summary>
+    Maintain = 1,
+
     /// <summary>Does work outside the database.</summary>
     Then = 2,
 }
@@ -542,6 +714,15 @@ internal sealed class QueuedRule
 
     /// <summary>Whether the filter uses <c>Changed(...)</c>.</summary>
     public bool UsesChanged { get; init; }
+
+    /// <summary>For a <c>Maintain</c> rule: the objects it keeps for one source object. Null for the other verbs.</summary>
+    public Func<object, RuleContext, CancellationToken, Task<List<object>>>? Project { get; init; }
+
+    /// <summary>
+    /// For a <c>Maintain</c> rule: whether it runs inside the save (the default) rather than from
+    /// the queue (<c>.Queued()</c>). Either way a refresh or a backfill runs it from the queue.
+    /// </summary>
+    public bool Inline { get; set; }
 }
 
 /// <summary>A rule made by <c>When</c> or <c>WhenDeleted</c>, counted so a rule with no action is caught at open.</summary>
@@ -564,6 +745,14 @@ internal static class RuleActions
             kind == trigger && (filter?.Invoke(entity) ?? true)
                 ? handler(entity, new RuleContext(db, rule: "", ruleId: "", attempt: 1, entity, etag: null), cancellationToken)
                 : Task.CompletedTask;
+
+    /// <summary>What a projection returned, as the objects to keep: none for null, each element of a collection, or the one object.</summary>
+    public static List<object> Produced(object? result) => result switch
+    {
+        null => [],
+        System.Collections.IEnumerable many => [.. many.OfType<object>()],   // which leaves out nulls
+        _ => [result],
+    };
 
     /// <summary>The filter of a rule for deletes, compiled. A delete has no earlier version to compare with, so it cannot use <c>Changed</c>.</summary>
     public static Func<T, bool>? DeletedFilter<T>(Expression<Func<T, bool>>? filter) where T : class

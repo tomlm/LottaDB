@@ -8,7 +8,7 @@ using Lotta.Internal;
 
 namespace Lotta;
 
-// Queued rules (When<T>().Update(...), .Then(...)): a save sends one small message to the queue of
+// Queued rules (When<T>().Update(...), .Then(...), and .Maintain(...) when it runs from the queue): a save sends one small message to the queue of
 // the object's type, listing the rules the save matched, and a pump runs them later, outside the
 // write lease, retrying each rule until it succeeds. The queues are the only stored state; see
 // Rules-Next.md.
@@ -180,7 +180,7 @@ public partial class LottaDB
         if (!HasQueuedRules || _typeQueues.Length > 0)
             return;
         var queues = _lottaCatalog.GetQueueServiceClient()
-            ?? throw new NotSupportedException($"Queued rules (.Update, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
+            ?? throw new NotSupportedException($"Rules that run from a queue (.Update, .Maintain, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
         var names = new List<string>();
         var prefix = RuleQueueNames.DatabasePrefix(_lottaCatalog.Name, _databaseId);
@@ -235,7 +235,7 @@ public partial class LottaDB
         if (_queueByType.TryGetValue(type, out var known))
             return known;
         var queues = _lottaCatalog.GetQueueServiceClient()
-            ?? throw new NotSupportedException($"Queued rules (.Update, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
+            ?? throw new NotSupportedException($"Rules that run from a queue (.Update, .Maintain, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
         var name = RuleQueueNames.Queue(_lottaCatalog.Name, _databaseId, type);
         var queue = queues.GetQueueClient(name);
@@ -329,10 +329,15 @@ public partial class LottaDB
         {
             if (own != null && (rule.Id == own.RuleId || own.Remaining.Contains(rule.Id)))
                 continue;
+            // A Maintain rule that runs inside the save has just run.
+            if (rule.Inline)
+                continue;
             try
             {
-                // Not for this save: nothing to queue, run or read back.
-                if (rule.OnSave is { } onSave && !onSave(entity))
+                // Not for this save: nothing to queue, run or read back. Except that a Maintain
+                // rule which is no longer for the object at all has what it produced to delete.
+                if (rule.OnSave is { } onSave && !onSave(entity)
+                    && !(rule.Verb == RuleVerb.Maintain && rule.Rest is { } rest && !rest(entity)))
                     continue;
             }
             catch (Exception e)
@@ -693,7 +698,7 @@ public partial class LottaDB
 
     /// <summary>
     /// Reads the object once and runs the message's rules on it in phase order (<c>Update</c>
-    /// rules, then <c>Then</c> rules), noting in <paramref name="state"/> how each went. A rule
+    /// rules, then <c>Maintain</c>, then <c>Then</c>), noting in <paramref name="state"/> how each went. A rule
     /// that fails does not stop the others.
     /// </summary>
     /// <param name="token">Cancelled when the run must stop: closing, a cancelled drain, or the hold on the message was lost.</param>
@@ -752,7 +757,8 @@ public partial class LottaDB
                 state.Runs++;
                 counted = true;
                 // The object may have changed since it was queued; Changed(...) is taken to be true.
-                if (rule.Rest is { } rest && !rest(entity))
+                // (A Maintain rule runs all the same: it then deletes what the object produced.)
+                if (rule.Verb != RuleVerb.Maintain && rule.Rest is { } rest && !rest(entity))
                 {
                     state.Runs--;   // not for this object any more: skipped, which is no run
                     state.Pending.Remove(rule.Id);
@@ -766,6 +772,8 @@ public partial class LottaDB
                     var attempt = message.AttemptsOf(rule.Id) + 1;
                     if (rule.Verb == RuleVerb.Update)
                         await RunUpdateAsync(rule, entity, attempt, message.ETag, run, ruleCts.Token).ConfigureAwait(false);
+                    else if (rule.Verb == RuleVerb.Maintain)
+                        await RunMaintainAsync(rule, entity, attempt, message.ETag, ruleCts.Token).ConfigureAwait(false);
                     else
                         await rule.Invoke(entity, new RuleContext(this, rule.Name, rule.Id, attempt, entity, message.ETag), ruleCts.Token).ConfigureAwait(false);
                 }
@@ -817,7 +825,7 @@ public partial class LottaDB
         var type = original.GetType();
         var key = AsyncKeyOf(original);
         var originalJson = original.GetJson() ?? JsonSerializer.Serialize(original, type);
-        var copy = CopyOf(originalJson, type, key, original.GetETag());
+        var copy = CopyOf(originalJson, type, key, original.GetETag(), original.GetSource());
 
         await rule.Invoke(copy, new RuleContext(this, rule.Name, rule.Id, attempt, copy, etag), cancellationToken).ConfigureAwait(false);
 
@@ -867,7 +875,7 @@ public partial class LottaDB
                     merged.Remove(name);
             }
             var latestJson = latest.GetJson() ?? JsonSerializer.Serialize(latest, type);
-            var result = CopyOf(merged.ToJsonString(), type, key, latest.GetETag());
+            var result = CopyOf(merged.ToJsonString(), type, key, latest.GetETag(), latest.GetSource());
             // As loaded, so the save sees what it replaces.
             result.SetJson(latestJson);
             try
@@ -885,7 +893,7 @@ public partial class LottaDB
     }
 
     /// <summary>An object made from JSON, with what an object loaded from the database carries.</summary>
-    private object CopyOf(string json, Type type, string key, string? etag)
+    private object CopyOf(string json, Type type, string key, string? etag, string? source)
     {
         var copy = JsonSerializer.Deserialize(json, type)
             ?? throw new InvalidOperationException($"'{key}' could not be copied: its stored form is empty.");
@@ -894,6 +902,7 @@ public partial class LottaDB
         if (etag != null)
             copy.SetETag(etag);
         copy.SetSchema(type.Name);
+        copy.SetSource(source);   // an object a Maintain rule produced stays that rule's
         if (copy is BlobFile blob)
             blob.Database = this;
         return copy;
@@ -1069,14 +1078,20 @@ public partial class LottaDB
             // than the filter is true for (an analyzed field, a stale entry).
             if (queued.Rest is { } rest && !rest(entity))
                 continue;
-            var queue = await TypeQueueAsync(entity.GetType(), cancellationToken).ConfigureAwait(false);
-            var message = new RuleMessage { Key = AsyncKeyOf(entity), ETag = entity.GetETag(), Rules = [id] };
-            await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+            await QueueRuleAsync(entity, id, hop: 0, cancellationToken).ConfigureAwait(false);
             count++;
         }
         if (count > 0)
             Signal();
         return count;
+    }
+
+    /// <summary>Queues one rule for one stored object, in the queue of the object's type. The caller wakes the loop.</summary>
+    private async Task QueueRuleAsync(object entity, string ruleId, int hop, CancellationToken cancellationToken)
+    {
+        var queue = await TypeQueueAsync(entity.GetType(), cancellationToken).ConfigureAwait(false);
+        var message = new RuleMessage { Key = AsyncKeyOf(entity), ETag = entity.GetETag(), Rules = [ruleId], Hop = hop };
+        await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

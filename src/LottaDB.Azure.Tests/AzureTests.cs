@@ -46,4 +46,5 @@ public class Azure_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public A
 public class Azure_VectorSearchTests : VectorSearchTestBase { public Azure_VectorSearchTests() : base(Tests.Configure) { } }
 public class Azure_WriteLockTests : WriteLockTestBase { public Azure_WriteLockTests() : base(Tests.Configure) { } }
 public class Azure_QueuedRuleTests : QueuedRuleTestBase { public Azure_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Azure_MaintainTests : MaintainTestBase { public Azure_MaintainTests() : base(Tests.Configure) { } }
 public class Azure_QueuedRulePumpTests : QueuedRulePumpTestBase { public Azure_QueuedRulePumpTests() : base(Tests.Configure) { } }

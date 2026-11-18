@@ -57,6 +57,7 @@ LottaDB instance
 └── Rules
     ├── .Do runs inline after every save (When) or delete (WhenDeleted)
     ├── .Update and .Then run later, from a queue per type, with retries per rule
+    ├── .Maintain keeps views in step: saves what an object produces, deletes what it no longer does
     ├── Full DB access (save, delete, query, search)
     ├── Cycle detection via AsyncLocal
     └── Changes aggregate into root ObjectResult

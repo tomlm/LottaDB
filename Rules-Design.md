@@ -12,7 +12,7 @@ A rule is **event, condition, action**:
 | --- | --- |
 | Event | `When<T>` (saved) or `WhenDeleted<T>` (deleted) |
 | Condition | An optional expression filter: `When<Note>(n => n.IsPublished)` |
-| Action | A verb: `Do`, `Update`, `Then` |
+| Action | A verb: `Do`, `Update`, `Maintain`, `Then` |
 
 The verb says what kind of work it is. LottaDB owns the queues, the pump, retries and status.
 
@@ -20,6 +20,7 @@ The verb says what kind of work it is. LottaDB owns the queues, the pump, retrie
 | --- | --- | --- | --- |
 | `Do` | Quick work | Inside the save, under the write lease | Reported in the save's `ObjectResult.Errors` |
 | `Update` | Slow work that changes the object itself | Later, outside the write lease | Retried with back-off, then set aside |
+| `Maintain` | Other objects kept in step with this one | Inside the save, or later with `.Queued()` | In the save's `Errors`, or retried when queued |
 | `Then` | Side effects outside the database | Later, outside the write lease | Retried with back-off, then set aside |
 
 ```csharp
@@ -27,6 +28,7 @@ using static Lotta.Rule;
 
 config.Rules.When<Note>().Do(UpdateFeedView);                                 // in the save
 config.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);           // rule "Note/summarize"
+config.Rules.When<Note>().Maintain(note => new NoteView { Id = $"nv-{note.NoteId}", Content = note.Content });   // rule "Note/note-view"
 config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished)
       .Then("notify", async (note, context, ct) =>
           await mail.SendAsync(note, idempotencyKey: context.IdempotencyKey, ct));
@@ -53,6 +55,14 @@ RuleBuilder<T> Update(string name, RuleHandler<T> handler);
 RuleBuilder<T> Update(RuleHandler<T> handler);   // named after the method
 RuleBuilder<T> Then(string name, RuleHandler<T> handler);
 RuleBuilder<T> Then(RuleHandler<T> handler);     // named after the method
+
+// Maintain: projection is (item) or (item, context, ct), returning TView?, IEnumerable<TView> or a Task of either
+MaintainBuilder<T> Maintain<TView>(string name, projection);
+MaintainBuilder<T> Maintain<TView>(projection);  // named after the method, or the type a lambda produces
+
+// MaintainBuilder<T>
+MaintainBuilder<T> Queued();
+MaintainBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources);
 
 // DeletedRuleBuilder<T>
 DeletedRuleBuilder<T> Do(RuleHandler<T> handler);
@@ -83,12 +93,13 @@ The item carries its key and ETag like any object LottaDB hands out: `item.GetKe
 
 ### Rule names
 
-A retry names the rule to run again, so every queued rule (`Update`, `Then`) needs a name that stays the same across builds.
+A retry names the rule to run again, so every rule that can run from a queue (`Update`, `Maintain`, `Then`) needs a name that stays the same across builds.
 
 - **Identity is the type and the name:** `Note/summarize`. Names are unique within a type, whatever the verb.
 - **A name** is 3 to 40 lower-case letters and digits, with single hyphens between them.
 - **The default comes from the method:** `.Update(Summarize)` is `summarize`, `handlers.NotifyFollowersAsync` is `notify-followers`, `Handle<Note>` is `handle`. It is taken from the source text of the argument (`[CallerArgumentExpression]`).
 - **A lambda must be named:** `.Then("notify", async (note, context, ct) => ...)`. Without a name it throws `ArgumentException` when the rule is registered.
+- **A `Maintain` lambda is named after the type it produces:** `NoteView`, or a collection of them, gives `note-view`. Two lambdas producing one type for one source type must be named.
 - **Inline `Do` has no name.**
 
 ### Filters
@@ -99,6 +110,7 @@ The filter says which objects the rule is for. Without one, every object of the 
 | --- | --- |
 | `Do` | Before the handler, in the save |
 | `Update`, `Then` | In the save: false queues nothing. Again when the rule runs, on the object as it is then: false skips the rule, which is not counted as a run |
+| `Maintain` | The same moments, but false (apart from its `Changed(...)` parts) deletes what the object produced |
 
 - **Quick and pure:** it runs inside the save, under the write lease, so it should look only at the object.
 - **When it throws** in a save, the error goes into the save's `Errors` and the save still happens. When a queued rule comes up, it counts as a failed run.
@@ -149,6 +161,48 @@ The write-back is conditional on the ETag the copy was made from. If someone els
 
 "The properties the handler set" are the top-level properties that differ between the original and the copy.
 
+### `Maintain`: keep other objects in step
+
+```csharp
+// One view per note, built with a read of another object
+config.Rules.When<Note>()
+    .Maintain(ProjectNoteView)                                             // rule "Note/project-note-view"
+    .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username);
+
+// Several objects per note, in the background
+config.Rules.When<Note>()
+    .Maintain(note => note.Mentions.Select(m => new Link { Id = $"{note.NoteId}->{m}", From = note.NoteId, To = m }))
+    .Queued();                                                             // rule "Note/link"
+
+static async Task<NoteView?> ProjectNoteView(Note note, RuleContext context, CancellationToken ct)
+{
+    var author = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
+    return author == null ? null : new NoteView { Id = $"nv-{note.NoteId}", AuthorDisplay = author.DisplayName, Content = note.Content };
+}
+```
+
+The projection returns what should exist for the object: one object, a collection, or null for nothing. It may be synchronous `(item)` or asynchronous `(item, context, ct)`.
+
+- **Each run compares.** LottaDB finds what the object produced before, saves what is new or different, and deletes what is no longer produced. An object that is the same is not written again.
+- **Inside the save by default.** What it saves and deletes is in the save's `Changes`; what it throws is in `Errors`. `.Queued()` runs it from the queue instead, with retries like `Then`.
+- **Deleting the object deletes what it produced,** inside the delete, also for a `.Queued()` rule.
+- **The filter says which objects have a projection.** When it becomes false for an object, what the object produced is deleted. A filter that is false only in its `Changed(...)` part skips the run and deletes nothing.
+- **You choose the keys.** A produced object is stored under its own `[Key]`, which the projection sets and keeps the same from run to run.
+- **One owner per object.** Producing a key that another object or another rule owns is an error. An object saved by hand, or left by a rule that no longer exists, is taken over.
+- **A projection cannot produce objects of the type it is for.**
+- **Produced objects are ordinary objects:** their own rules run when they are saved and deleted.
+
+**Ownership** is a `_source` value stored and indexed beside each produced object, next to `_type` and the ETag, not in the object's JSON: the rule and the key of the object it was produced from, `Note/note-view n42`. Nothing is added to the source object. Loading a produced object and saving it keeps the value; `RebuildSearchIndex` restores it in the index.
+
+**`RefreshWhen<TOther>(other => item => ...)`** runs the projection again when an object it reads changes.
+
+- Every save or delete of a `TOther` evaluates the condition and queues the rule for each object it is true for.
+- The objects are found through the search index when it can express the condition (`[Queryable]` properties compared with values), and by reading every object when it cannot.
+- **A refresh always runs from the queue,** also for a rule that otherwise runs inside the save: one actor can have thousands of notes.
+- A run from the queue takes the object's lock and reads it again before projecting, so a refresh never overwrites the result of a newer save.
+
+**`db.Rules.BackfillAsync(rule)`** runs a projection again for every stored object its filter is true for, for example after its code changes.
+
 ### `Then`: side effects outside the database
 
 - Delivered **at least once**: retried with back-off, then set aside.
@@ -161,7 +215,7 @@ The write-back is conditional on the ETag the copy was made from. If someone els
 - A save sends **one message** to the queue of the object's **concrete type**, listing the rules the save matched: `{ "key": "n1", "etag": "e7", "rules": ["Note/summarize", "Note/notify"] }`.
 - Saving a `BlobPhoto` uses the `BlobPhoto` queue and lists rules for `BlobPhoto` and for its base types.
 - The message never holds the object. The object is read when the rules run.
-- A save that matches no queued rule sends nothing.
+- A save that matches no queued rule sends nothing. A `Maintain` rule that runs inside the save is not in the message.
 - The queues are the only stored state. There are no rows per rule or per object.
 
 ### A run
@@ -169,7 +223,8 @@ The write-back is conditional on the ETag the copy was made from. If someone els
 The pump takes a message, reads the object once, and runs the listed rules one after another:
 
 1. **`Update` rules,** in the order registered.
-2. **`Then` rules,** in the order registered.
+2. **`Maintain` rules,** so what they produce is made from the updated object.
+3. **`Then` rules,** in the order registered.
 
 - **A rule's own save does not queue it again.** When a rule saves the object its run is for (an `Update` write-back, or a handler calling `SaveAsync`), that save queues neither the rule itself nor the rules the run has yet to do. Rules that already ran are queued if the save matches them.
 - **Later rules see the saved object.** After such a save, the run reads the object again before the next rule.
@@ -255,13 +310,14 @@ You see rules, not queues.
 ## Storage
 
 - `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)` takes a queue factory. Every built-in `Use…()` provider passes one.
-- A queued rule on a catalog with no queue storage throws `NotSupportedException` when the database is opened, before anything is created.
+- An `Update`, `Maintain` or `Then` rule on a catalog with no queue storage throws `NotSupportedException` when the database is opened, before anything is created.
 - **Queue names** are `l{catalog hash}{database hash}-{type}-{hash}` and `…-poison`: `note-view-k3x9aa`. The type's full name, the catalog and the database are in each queue's metadata.
 - A type's queue is made the first time work is queued for the type. Opening the database finds the queues left by earlier runs.
 - **FileSystem** needs `Iciclecreek.Azure.Storage.FileSystem` 2.1.0 or later.
 - **Lucene:** each queue is a Lucene `Directory` of its own (`queues/{queue}`) with a file per message. `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`), since a message's file name is about 100 characters; a factory of your own should do the same.
 - `ResetDatabaseAsync` empties the database's queues. `DeleteDatabaseAsync` and deleting the catalog delete them.
 - `RebuildSearchIndex` queues nothing.
+- **`_source`** is one extra column on objects a `Maintain` rule produced, and one indexed field in their index documents. No other object has it.
 
 ## Known limits
 
@@ -270,12 +326,15 @@ You see rules, not queues.
 - The set-aside count per rule is taken from the first 32 records of each poison queue.
 - Queues made by another process after this one opened the database are not run here until it is reopened.
 - "Two runs for the same object never overlap" holds within one process.
+- **`Maintain` assumes one writing process.** What an object produced, and the objects a refresh is for, are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
+- A `Maintain` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
+- A backfill of a `Maintain` rule skips objects its filter is false for, so it does not clean up after them.
+- Aggregates (many objects feeding one) are not covered by `Maintain`.
 
 ## Not built yet
 
 See [Rules-Next.md](Rules-Next.md):
 
-- `Maintain`, `RefreshWhen`: projections.
 - `After`, `At`: delayed actions.
 - `Every`: schedules.
 - Queued rules for deletes.

@@ -26,6 +26,12 @@ internal static class StorageFields
     /// <summary>The schema name. POCO = type name, POJO = JsonSchema name.</summary>
     public const string Schema = "Schema";
 
+    /// <summary>
+    /// On an object a <c>Maintain</c> rule produced: the rule and the key of the object it was
+    /// produced from, <c>Note/note-view n42</c>. Absent on every other object.
+    /// </summary>
+    public const string Source = "_source";
+
     // ── Lucene fields ──
 
     /// <summary>Composite free-text search field built from all analyzed string properties.</summary>

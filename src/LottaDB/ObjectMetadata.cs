@@ -33,6 +33,12 @@ public class ObjectMetadata
 
     /// <summary><see cref="PreviousJson"/> as an object, made the first time a rule asks.</summary>
     internal object? Previous { get; set; }
+
+    /// <summary>
+    /// On an object a <c>Maintain</c> rule produced: the rule and the key of the object it was
+    /// produced from (<c>Note/note-view n42</c>). Stored beside the object, not in it.
+    /// </summary>
+    internal string? Source { get; set; }
 }
 
 /// <summary>
@@ -118,6 +124,18 @@ public static class ObjectExtensions
     {
         return _table.TryGetValue(obj, out var meta) ? meta.Schema : null;
     }
+
+    /// <summary>Marks an object as produced by a <c>Maintain</c> rule from one source object; null for none.</summary>
+    internal static void SetSource(this object obj, string? source)
+    {
+        if (source == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).Source = source;
+    }
+
+    /// <summary>The rule and source object that produced this object (<c>Note/note-view n42</c>); null when no rule did.</summary>
+    internal static string? GetSource(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.Source : null;
 
     /// <summary>
     /// Notes, for the length of a save, the JSON of the version the save replaces (null for a new

@@ -525,7 +525,7 @@ public partial class LottaDB : IDisposable
                 var etag = entity.GetETag()
                     ?? throw new InvalidOperationException(
                         $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
-                Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
+                Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name, entity.GetSource());
                 return document;
             });
             return Task.CompletedTask;
@@ -612,7 +612,8 @@ public partial class LottaDB : IDisposable
             : rebuildTypeName;
         var rebuildSchema = tableEntity.TryGetValue(Internal.StorageFields.Schema, out var schemaObj) && schemaObj is string schemaStr
             ? schemaStr : schemaFallback;
-        Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema);
+        var producedFrom = tableEntity.TryGetValue(Internal.StorageFields.Source, out var sourceObj) ? sourceObj as string : null;
+        Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema, producedFrom);
         return document;
     }
 
@@ -846,7 +847,8 @@ public partial class LottaDB : IDisposable
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
 
-            await RunHandlersAsync(entity, TriggerKind.Deleted, errors, cancellationToken);
+            // By the object's own type, so rules for the types it derives from run too, as in a save.
+            await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Deleted, errors, cancellationToken);
 
             if (isRoot)
             {
@@ -995,7 +997,7 @@ public partial class LottaDB : IDisposable
                 var errors = _chainErrors.Value ??= new List<Exception>();
                 changes.Add(change);
 
-                await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
+                await RunHandlersAsync(mutated, mutated.GetType(), TriggerKind.Saved, errors, cancellationToken);
                 await EnqueueAsync(mutated, key, errors, cancellationToken);
                 ForgetPrevious(mutated);
 
@@ -2259,17 +2261,6 @@ public partial class LottaDB : IDisposable
     }
 
     // === Inline handler engine (built-in index handlers and rules' .Do actions) ===
-
-    /// <summary>
-    /// Runs the handlers for <typeparamref name="T"/>: the built-in index handlers first, then the
-    /// rules, so a rule's search already sees the change. Does not walk base types.
-    /// </summary>
-    private async Task RunHandlersAsync<T>(T entity, TriggerKind kind,
-        List<Exception> errors, CancellationToken cancellationToken) where T : class, new()
-    {
-        await RunTypeHandlersAsync(entity, kind, builtIn: true, errors, cancellationToken);
-        await RunTypeHandlersAsync(entity, kind, builtIn: false, errors, cancellationToken);
-    }
 
     /// <summary>Runs the built-in handlers, or the rules, registered for exactly <typeparamref name="T"/>.</summary>
     private async Task RunTypeHandlersAsync<T>(T entity, TriggerKind kind, bool builtIn,

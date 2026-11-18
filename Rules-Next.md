@@ -5,7 +5,7 @@ Status: the design for rules in 6.0, with its reasoning. What is built is descri
 | Build step | State |
 | --- | --- |
 | 1. Per-type queue, `Then`, `Update`, `Changed(...)`, `RuleContext` | Built |
-| 2. `Maintain`, `RefreshWhen`, backfill for projections | Not built |
+| 2. `Maintain`, `RefreshWhen`, backfill for projections | Built |
 | 3. `After`, `At` | Not built |
 | 4. `Every` | Not built |
 
@@ -138,13 +138,14 @@ config.Rules.When<Note>()
 
 - **Inline by default, even when the projection reads other objects.** A `GetAsync` is a single table read, and inline is what makes views readable the moment the save returns, as with today's hand-written views. `.Queued()` runs the projection in the background; use it for projections that make many reads or do slow work.
 - **You choose the keys.** Projected objects use their own `[Key]`, set by the projection, so a view can be read by a key you know (`nv-{noteId}`).
-- **LottaDB records ownership.** Each projected object is stamped with its source, for example `(Note, n42)`, in an indexed `_source` field.
+- **LottaDB records ownership.** Each projected object is stamped with the rule and its source, for example `Note/note-view n42`, in a `_source` field stored and indexed beside the object, not in it.
+- **The filter is the projection's scope.** When it becomes false for an object, what the object produced is deleted.
 - **Each run diffs.** One index query finds what the source produced last time. LottaDB saves what is new or changed and deletes what is no longer produced. A note that stops mentioning someone loses that `Link`.
 - **Deleting the source deletes everything it owns.** No snapshot of the deleted object is needed; the ownership field is enough.
 - **One owner per object.** Producing a key that another source owns is an error.
 - **Dependencies.** `.RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username)` says: when an actor changes, rerun the projection for the notes the expression matches. The expression becomes an index query. A refresh always runs queued, even when the projection runs inline: one actor can have thousands of notes, and that work does not belong inside the actor's save.
 - **One writing instance.** Diffs, `RefreshWhen` and `Backfill` find objects through the search index. Within one process the index includes every write as it happens. With several processes writing one database, each one's index catches up with the others' writes only within `MaxSearchStaleness`, so a diff could miss objects or a refresh could miss sources. The first version assumes a single writing instance, as Symplist runs; keeping ownership in the table instead would lift that limit.
-- **Rebuild.** `db.Rules.Backfill(...)` reruns a projection over every source, for example after its code changes.
+- **Rebuild.** `db.Rules.BackfillAsync(...)` reruns a projection over every source, for example after its code changes.
 - **Not covered: aggregates.** "Notes per author" is many sources feeding one object, which needs concurrent updates to combine. That is a different pattern, left for later.
 
 Today (`src/LottaDB.Tests/CreateViewTestBase.cs`, `CascadingViewTestBase.cs`) the same `NoteView` takes two handlers:
