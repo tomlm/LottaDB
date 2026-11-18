@@ -1,6 +1,6 @@
 # Rules: inline and queued
 
-Status: implemented for every built-in storage provider: Memory, SQLite, FileSystem, Lucene and Azure (see *Storage*). Replaced `On<T>` and `OnAsync<T>` in 6.0.
+Status: implemented for every built-in storage provider: Memory, SQLite, FileSystem, Lucene and Azure (see *Storage*). Replaced `On<T>` and `OnAsync<T>` in 6.0. A proposal for what comes next (verbs for kinds of deferred work, queues per type, schedules) is in [Rules-Next.md](Rules-Next.md).
 
 ## Summary
 

@@ -1,0 +1,223 @@
+# Rules: what comes next (proposal)
+
+Status: proposal for discussion. Nothing here is built. It extends the rules grammar of 6.0 (`config.Rules.When<T>(filter).Do(...)`, `WhenDeleted<T>`, `db.Rules`), which is described in [Rules-Design.md](Rules-Design.md).
+
+## The idea
+
+In 6.0 a queued rule is `.Queue(name, handler)`: a handler, a queue of its own, and settings for retries, priority and latest-only. That still makes you think in queues.
+
+This proposal replaces `.Queue` with a few verbs, one for each kind of deferred work. You say what the work is; LottaDB owns the queues, the pump, retries, poison handling and status.
+
+| Verb | Kind of work | Example |
+| --- | --- | --- |
+| `Do` | Quick work inside the save (unchanged from 6.0) | Update a counter field |
+| `Update` | Slow work that changes the object itself | Embeddings, summaries, classification |
+| `Maintain` | Other objects kept in sync with this one (projections) | Mention links, a `NoteView` joined to `Actor` |
+| `Then` | Side effects outside the database | Email, webhooks, Graph writes |
+
+Timing is separate from the verb:
+
+- `.After(TimeSpan)`: some time after the event.
+- `.At(item => DateTimeOffset)`: at a time taken from the object.
+- `Rules.Every(...)`: on a schedule, with no object.
+
+## Model
+
+A rule is **event, condition, action**, the model active databases use:
+
+| Part | API |
+| --- | --- |
+| Event | `When<T>` (saved) or `WhenDeleted<T>` (deleted) |
+| Condition | The expression filter: `When<Note>(n => n.NeedsEmbedding)` |
+| Action | `Do`, `Update`, `Maintain`, `Then` |
+| Timing | `After`, `At` (optional) |
+
+They are called rules, not triggers, because they never roll back the save: a rule that fails is retried or reported, and the object stays saved.
+
+## The verbs
+
+### `Update`: change the object in the background
+
+```csharp
+config.Rules.When<Note>(n => n.NeedsEmbedding)
+    .Update(async (note, ct) =>
+    {
+        note.Vector = await embedder.EmbedAsync(note.Content, ct);
+        note.NeedsEmbedding = false;
+    });
+```
+
+- **Runs on a copy, outside the write lock.** The slow part never blocks other writes.
+- **Writes back only if the object is unchanged.** LottaDB remembers the object's ETag when the run starts, and writes the result only if the ETag still matches. If someone saved the object meanwhile, the result is dropped, because that save queued a fresh run on the new version.
+- **Its own write never triggers it again.**
+- **No conflict loop.** The function runs once per run; it is not called again on a write conflict, unlike a `ChangeAsync` lambda.
+
+Today the same work takes a handler that calls `ChangeAsync` and compares fields by hand to avoid writing a stale result. `Update` does that for you.
+
+### `Maintain`: keep other objects in sync (projections)
+
+```csharp
+// One view per note (return null for none)
+config.Rules.When<Note>()
+    .Maintain(async (note, db, ct) =>
+    {
+        var author = await db.GetAsync<Actor>(note.AuthorId, ct);
+        return author == null ? null : new NoteView { Id = $"nv-{note.NoteId}", AuthorDisplay = author.DisplayName, Content = note.Content };
+    })
+    .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username);
+
+// Many objects per note
+config.Rules.When<Note>()
+    .Maintain(note => note.Mentions.Select(m => new Link { Id = $"{note.NoteId}->{m}", From = note.NoteId, To = m }))
+    .Queued();
+```
+
+- **Inline by default.** Views can be read the moment the save returns, as with today's hand-written views. `.Queued()` runs the projection in the background instead.
+- **You choose the keys.** Projected objects use their own `[Key]`, set by the projection, so a view can be read by a key you know (`nv-{noteId}`).
+- **LottaDB records ownership.** Each projected object is stamped with its source, for example `(Note, n42)`, in an indexed `_source` field.
+- **Each run diffs.** One index query finds what the source produced last time. LottaDB saves what is new or changed and deletes what is no longer produced. A note that stops mentioning someone loses that `Link`.
+- **Deleting the source deletes everything it owns.** No snapshot of the deleted object is needed; the ownership field is enough.
+- **One owner per object.** Producing a key that another source owns is an error.
+- **Dependencies.** `.RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username)` says: when an actor changes, rerun the projection for the notes the expression matches. The expression becomes an index query.
+- **Rebuild.** `db.Rules.Backfill(...)` reruns a projection over every source, for example after its code changes.
+- **Not covered: aggregates.** "Notes per author" is many sources feeding one object, which needs concurrent updates to combine. That is a different pattern, left for later.
+
+Today (`src/LottaDB.Tests/CreateViewTestBase.cs`, `CascadingViewTestBase.cs`) the same `NoteView` takes two handlers:
+
+- one on `Note`, with a hand-written delete branch;
+- one on `Actor`, which searches for the affected views and builds each `NoteView` a second time.
+
+Nothing removes objects a source stops producing, and nothing rebuilds views after the code changes.
+
+### `Then`: side effects outside the database
+
+```csharp
+config.Rules.When<Note>(n => n.IsPublished)
+    .Then(NotifyFollowers);
+
+static async Task NotifyFollowers(Note note, RuleContext context, CancellationToken ct)
+    => await mail.SendAsync(..., idempotencyKey: context.IdempotencyKey, ct);
+```
+
+- Delivered **at least once**, and retried with back-off; then poisoned.
+- Given an **idempotency key**, `(type, key, version)`, the same on every retry, so an external service can drop duplicates.
+
+### `Do`: inline, unchanged
+
+`Do` stays as in 6.0: quick work inside the save, no name, no queue.
+
+## Timing
+
+```csharp
+config.Rules.When<Invite>(i => !i.Accepted)
+    .After(TimeSpan.FromDays(3))
+    .Then(SendReminder);                     // accepted in the meantime: nothing is sent
+
+config.Rules.When<Session>()
+    .At(s => s.ExpiresAt)
+    .Then(async (s, context, ct) => await context.Db.DeleteAsync(s, ct));
+
+config.Rules.Every(TimeSpan.FromHours(24))
+    .Then(SyncWithGraph);
+```
+
+- **`After` and `At`** delay the action. The condition is checked again when it fires, on the object as it is then.
+- **`Every`** runs on a schedule, with no object.
+  - Each schedule has one table row holding its next run time.
+  - A process claims a run with an ETag-conditional update of that row, so exactly one process runs it. Every provider supports ETags on tables.
+  - After downtime, a missed schedule runs once, not once per missed tick. Its next time is then set from now.
+
+## Queues underneath
+
+### One queue per type
+
+- A save sends one message, `(type, key, version)`, to that type's queue.
+- The pump reads the object once and runs every matching queued rule for it.
+- Compared with 6.0's queue per rule: one message and one read per save instead of one per rule, and adding or renaming a rule does not create or orphan a queue.
+
+### A run, in phases
+
+1. **`Update` rules.** If one writes back, the run stops here. Its write queued a new message, so the later phases run on the updated object, not a stale one. That new message records which `Update` wrote it, so that rule skips it.
+2. **Queued `Maintain` rules.**
+3. **`Then` rules.**
+
+### Failures, one rule at a time
+
+- **If some rules fail,** one retry message is sent naming only those rules, with their attempt counts and last errors, hidden for the usual growing delay. The original message is deleted. The retry runs only its listed rules, after checking their filters again.
+- **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded.
+- **A stale retry is dropped.** If the object is newer than the retry's version, the newer save already queued a full run.
+
+### Rule identity
+
+A retry names rules, so every queued rule needs a name that stays the same across builds and deploys.
+
+- **Identity is `(type, name)`,** for example `Note/summarize`. Names only have to be unique within a type.
+- **The default comes from the method group:** `.Update(Summarize)` is named `summarize`, using the `[CallerArgumentExpression]` helper 6.0 already has.
+- **A lambda must be named:** `.Then("notify", async (note, context, ct) => ...)`. An unnamed lambda throws at startup.
+- **Inline `Do` needs no name.**
+- **Ruled out:** identity from position ("the second rule on `Note`") or from a hash of the code. Both change silently when code is edited or reordered, and a waiting retry would run the wrong rule.
+
+**Safety valve for renames and removals.** A retry that names a rule that no longer exists reruns all of the type's queued rules for that object. Rules must be safe to run twice anyway, so a rename or removal costs at most one extra run per waiting retry, never lost or misrouted work. Poison records with unknown names show in status as orphaned.
+
+### No priority; concurrency instead
+
+- With one queue per type, priority cannot mean what it does in 6.0, where a high-priority rule jumps ahead of other objects' work.
+- Instead, a per-database `MaxConcurrency` processes several objects at once, so slow work stops blocking fast work.
+- Two runs for the same object never overlap.
+- Priority can come back if a real need appears. So can `.Isolated()`, giving one slow rule a queue of its own.
+
+## No public raw queues
+
+Work that is not "an object changed" is modelled as an object:
+
+```csharp
+config.Rules.When<SyncJob>(j => j.State == JobState.Pending)
+    .Update(RunSyncJob);
+
+await db.SaveAsync(new SyncJob { Folder = "Inbox" });
+```
+
+The job is queryable and durable like any other object, and its progress is visible in its own fields. The cost is a table write per job on top of the queue message. Raw queues (`db.Queues`) are left out unless very high volumes of short-lived messages need them.
+
+## Operating it
+
+You see rules, not queues:
+
+| Method | What it does |
+| --- | --- |
+| `db.Rules.Status()` | Each rule: pending, running, failed, poisoned, last error; orphaned poison records |
+| `db.Rules.Retry(rule)` | Retry a rule's poisoned work |
+| `db.Rules.Backfill(rule)` | Run a rule over every object it matches now, found through the index (as `RequeueAsync` does in 6.0) |
+| `db.DrainAsync()` | Run what is due now (manual mode, tests) |
+
+## Indexing
+
+Search indexing stays inline, as in 6.0, so a search inside a rule already sees the change that triggered it. Embedding generation is the one part that may move to a queue later: text is searchable at once, and vectors follow.
+
+## Build order
+
+Each step is usable on its own:
+
+1. Per-type queue, with `Then` and `Update`.
+2. `Maintain`, `RefreshWhen` and `Backfill`.
+3. `After` and `At`.
+4. `Every`.
+
+From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ordering stay. `.Queue`, its modifiers, and the queue-level operations (`PauseQueue`, `MoveQueuedAsync`, `DeleteQueueAsync`) are replaced.
+
+## Hard parts
+
+- **At least once, everywhere.** Every verb can run twice, so `Update` and `Maintain` are safe to repeat by design, and `Then` gets an idempotency key.
+- **The `Update` guard.** The ETag check, and stopping a run after a write so later phases see the new object.
+- **Projection diffs.** The cost of each diff on objects that produce many views.
+- **Concurrency.** Two runs for the same object must not overlap.
+- **Scope.** This is not a workflow engine. A multi-step process is a chain of objects and rules, not new verbs.
+
+## Open questions
+
+- How does a `Then` handler get its idempotency key? The examples pass a `RuleContext` (`context.IdempotencyKey`, `context.Db`) in place of `db`; the alternative is keeping 6.0's `(item, db, ct)` and reading the key from a method on `db`.
+- Should `Update` see the database at all? The examples give it `(item, ct)` only, so it can change just its own object; giving it `db` lets it read other objects, at the cost of a less obvious contract.
+- Does `Update` hand the function a copy and write it back, or does the function return the changes?
+- Does `Maintain` run inline under the write lock when the projection reads other objects (`GetAsync` on `Actor`), or should reading projections default to `.Queued()`?
+- How does `Every` take a cron expression as well as a `TimeSpan`, and in which time zone?
+- What does `Status()` return for a type queue with many rules: one row per rule, or per rule and per type?
