@@ -47,29 +47,58 @@ A rule is **event, condition, action**, the model active databases use:
 | Part | API |
 | --- | --- |
 | Event | `When<T>` (saved) or `WhenDeleted<T>` (deleted) |
-| Condition | The expression filter: `When<Note>(n => n.NeedsEmbedding)` |
+| Condition | The expression filter: `When<Note>(n => Changed(n.Content))` |
 | Action | `Do`, `Update`, `Maintain`, `Then` |
 | Timing | `After`, `At` (optional) |
 
 They are called rules, not triggers, because they never roll back the save: a rule that fails is retried or reported, and the object stays saved.
+
+### Changes, not just states
+
+A plain filter is true for every save while its condition holds. `When<Note>(n => n.IsPublished).Then(NotifyFollowers)` would email followers again each time a published note is edited. To react to a change, a filter uses `Changed(...)`:
+
+```csharp
+using static Lotta.Rule;
+
+// Fires in the save where IsPublished turns true, not on later edits
+config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).Then(NotifyFollowers);
+
+// Runs only when its inputs change; this also tells Update what its inputs are
+config.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);
+config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).Update(Classify);
+```
+
+- **Meaning:** "any of these values differs in this save from the version that was loaded".
+- **No extra storage.** An object LottaDB hands out already carries the JSON it was loaded with (`ObjectMetadata`), so a save has both the old and the new version in hand. Nothing is stored per rule or per object.
+- **Checked on save, before queuing.** A save that changes none of a rule's `Changed(...)` values queues nothing for that rule.
+- **A new object** counts as changed.
+- **An object saved without having been loaded,** for example `new Note { NoteId = "n1", ... }` for a key that already exists, has no loaded version. If the type has rules that use `Changed`, LottaDB reads the stored version first, for that save only. Otherwise an edge-triggered `Then` could fire twice.
+- **Works with every verb,** including inline `Do`, since it needs nothing beyond the save itself.
+- **A marker, not a function.** `Changed` only means something inside a rule filter; called anywhere else, it throws.
+- **Backfill** cannot evaluate `Changed` through the index, so it treats it as true and queries the rest of the filter.
 
 ## The verbs
 
 ### `Update`: change the object in the background
 
 ```csharp
-config.Rules.When<Note>(n => n.NeedsEmbedding)
+config.Rules.When<Note>(n => Changed(n.Content))
     .Update(async (note, context, ct) =>
     {
         note.Vector = await embedder.EmbedAsync(note.Content, ct);
-        note.NeedsEmbedding = false;
     });
 ```
 
 - **You edit a copy.** The function changes the copy it is given; it returns nothing. LottaDB compares the copy with the original afterwards, and writes only if something changed.
 - **Runs outside the write lock.** The slow part never blocks other writes.
-- **Writes back only if the object is unchanged.** The copy carries the original's ETag (`note.GetETag()`), and the write-back is conditional on it. If someone saved the object meanwhile, the result is dropped, because that save queued a fresh run on the new version.
-- **Its own write never triggers it again.**
+- **Writes back safely.** The copy carries the original's ETag (`note.GetETag()`). At write-back LottaDB reads the object again:
+  - **Same ETag:** nobody saved it meanwhile; the copy is written.
+  - **Different ETag, inputs unchanged, outputs untouched:** someone saved the object without changing the `Changed(...)` values, here `Content`, and without touching the fields the function set, here `Vector`. The result is still valid, so only those fields are applied to the newer version, with a conditional write. On another conflict this step repeats, without calling the function again.
+  - **Inputs changed:** the result is stale and is dropped. The newer save queued a run that sees the new content.
+  - **Outputs changed by someone else,** say a user edited the field by hand: the result is dropped, and the user's edit wins.
+  - **No `Changed(...)` in the filter:** LottaDB does not know the inputs, so any save in the meantime drops the result.
+- **Frequent saves don't starve it.** Saves that don't touch the inputs no longer throw the work away.
+- **Its own write doesn't trigger it again.** The write changes the outputs, not the inputs, so `Changed(n.Content)` is false. Two `Update` rules can't ping-pong for the same reason, and a nondeterministic summary isn't regenerated because some other field changed.
 - **May read other objects** through `context.Db`, for example a list of categories while classifying. It writes only its own object; keeping other objects in sync is `Maintain`'s job.
 - **No conflict loop.** The function runs once per run; it is not called again on a write conflict, unlike a `ChangeAsync` lambda.
 
@@ -77,7 +106,7 @@ config.Rules.When<Note>(n => n.NeedsEmbedding)
 | --- | --- | --- |
 | Function | Synchronous | `async`: model calls, HTTP |
 | Runs | Under the write lease | Outside any lock |
-| On a conflict | Calls your function again on the new version | Drops the result; the newer save queued a fresh run |
+| On a conflict | Calls your function again on the new version | Applies the result to the newer version if its inputs are unchanged; otherwise drops it |
 | Gets | The object | A copy of the object, and `RuleContext` |
 
 Today the same work takes a handler that calls `ChangeAsync` and compares fields by hand to avoid writing a stale result. `Update` does that for you.
@@ -106,7 +135,8 @@ config.Rules.When<Note>()
 - **Each run diffs.** One index query finds what the source produced last time. LottaDB saves what is new or changed and deletes what is no longer produced. A note that stops mentioning someone loses that `Link`.
 - **Deleting the source deletes everything it owns.** No snapshot of the deleted object is needed; the ownership field is enough.
 - **One owner per object.** Producing a key that another source owns is an error.
-- **Dependencies.** `.RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username)` says: when an actor changes, rerun the projection for the notes the expression matches. The expression becomes an index query.
+- **Dependencies.** `.RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username)` says: when an actor changes, rerun the projection for the notes the expression matches. The expression becomes an index query. A refresh always runs queued, even when the projection runs inline: one actor can have thousands of notes, and that work does not belong inside the actor's save.
+- **One writing instance.** Diffs, `RefreshWhen` and `Backfill` find objects through the search index. Within one process the index includes every write as it happens. With several processes writing one database, each one's index catches up with the others' writes only within `MaxSearchStaleness`, so a diff could miss objects or a refresh could miss sources. The first version assumes a single writing instance, as Symplist runs; keeping ownership in the table instead would lift that limit.
 - **Rebuild.** `db.Rules.Backfill(...)` reruns a projection over every source, for example after its code changes.
 - **Not covered: aggregates.** "Notes per author" is many sources feeding one object, which needs concurrent updates to combine. That is a different pattern, left for later.
 
@@ -137,7 +167,7 @@ static async Task NotifyFollowers(Note note, RuleContext context, CancellationTo
 ## Timing
 
 ```csharp
-config.Rules.When<Invite>(i => !i.Accepted)
+config.Rules.When<Invite>(i => Changed(i.SentAt) && !i.Accepted)
     .After(TimeSpan.FromDays(3))
     .Then(SendReminder);                     // accepted in the meantime: nothing is sent
 
@@ -153,6 +183,8 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 ```
 
 - **`After` and `At`** delay the action. The condition is checked again when it fires, on the object as it is then.
+  - Queues can hide a message for at most 7 days (Azure's limit). A longer delay is chained: the message is hidden for 7 days, comes up, sees its time has not arrived, and is hidden again.
+  - `After` is usually edge-triggered: `When<Invite>(i => Changed(i.SentAt) && !i.Accepted).After(TimeSpan.FromDays(3))`. Without `Changed`, every save of an unaccepted invite would schedule another reminder.
 - **`Every`** runs on a schedule, with no object.
   - It takes a `TimeSpan`, or a cron expression with a time zone (UTC when none is given). Cron expressions are parsed by a small library such as Cronos, a new package dependency.
   - A schedule's handler gets no item: `(RuleContext context, CancellationToken ct)`.
@@ -164,8 +196,9 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 
 ### One queue per type
 
-- A save sends one message, `(type, key, ETag)`, to that type's queue.
-- The pump reads the object once and runs every matching queued rule for it.
+- A save sends one message to the queue of the object's **concrete type**: saving a `BlobPhoto` uses the `BlobPhoto` queue, and runs the rules for `BlobPhoto` and for its base types, such as `BlobFile`.
+- The message lists the rules that matched at save time: `{ key, etag, rules: ["summarize", "notify"] }`. It has to, because `Changed(...)` cannot be checked again later, once the old values are gone.
+- The pump reads the object once and runs the listed rules, after checking the rest of each filter against the object as it is then.
 - Compared with 6.0's queue per rule: one message and one read per save instead of one per rule, and adding or renaming a rule does not create or orphan a queue.
 
 ### A run, in phases
@@ -178,7 +211,7 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 
 All retry state lives in the message itself. Example: object `X1` has rules A, B and C, and B fails.
 
-1. Saving `X1` queues `{ key: X1, etag: "e7" }`: run every matching rule.
+1. Saving `X1` queues `{ key: X1, etag: "e7", rules: ["a", "b", "c"] }`.
 2. The pump reads `X1` once and runs A, B and C. A and C succeed; B throws.
 3. **The message is replaced in place,** in one `UpdateMessage` call that sets new content and a visibility delay:
 
@@ -192,9 +225,9 @@ All retry state lives in the message itself. Example: object `X1` has rules A, B
 Replacing is one storage operation. Sending a new message and deleting the old one would be two, and a crash between them would leave both.
 
 - **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded. It is then removed from the message; when no rules are left, the message is deleted.
-- **A stale retry is dropped.** If `X1` is saved again before B's retry, that save queues `{ key: X1, etag: "e8" }`, which runs every rule on the new version. When the `e7` retry comes up, `X1`'s ETag no longer matches, so it is dropped. ETags are opaque, so this is a test for equality, not for which is newer: any difference means a save happened, and that save queued a full run.
+- **A stale message still runs.** Suppose `e7` changed `Content` and queued `summarize`, then `e8` changed only the tags and queued nothing for `summarize`. Dropping the `e7` message would lose the summary. So a message whose ETag no longer matches the object is not dropped: its listed rules run on the object as it is now. `Update`'s write-back check keeps that safe, and a rule listed by two messages may run twice, which rules must tolerate anyway. ETags are opaque, so only equality is checked.
 - **A crash during a run** leaves the message as it was. It becomes visible again when its lease runs out, and every rule in it runs again: at-least-once delivery. A later optimisation could update the message after each successful rule, so a crash repeats only the unfinished ones. That costs one more storage call per rule, so it is not the default.
-- **Poison records are the only other storage.** There are no bookkeeping rows.
+- **Poison records are the only other storage.** There are no bookkeeping rows, per rule or per object.
 
 ### Rule identity
 
@@ -230,7 +263,7 @@ The job is queryable and durable like any other object, and its progress is visi
 
 ## Operating it
 
-You see rules, not queues. Waiting work is counted per type, not per rule: a fresh message means "every matching rule", so splitting it by rule would mean reading each message.
+You see rules, not queues. Waiting work is counted per type, not per rule: each message lists its rules, so splitting the count by rule would mean reading every message.
 
 | Method | What it does |
 | --- | --- |
@@ -257,7 +290,8 @@ From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ord
 ## Hard parts
 
 - **At least once, everywhere.** Every verb can run twice, so `Update` and `Maintain` are safe to repeat by design, and `Then` gets an idempotency key.
-- **The `Update` guard.** The ETag check, and stopping a run after a write so later phases see the new object.
+- **The `Update` guard.** The ETag check, applying a result to a newer version when its inputs are unchanged, and stopping a run after a write so later phases see the new object.
+- **`Changed` on unloaded objects.** The extra read when an object is saved without having been loaded, only for types with `Changed` rules.
 - **Projection diffs.** The cost of each diff on objects that produce many views.
 - **Concurrency.** Two runs for the same object must not overlap.
 - **Scope.** This is not a workflow engine. A multi-step process is a chain of objects and rules, not new verbs.
@@ -270,4 +304,8 @@ From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ord
 - **`Maintain`:** inline by default even when it reads other objects; `.Queued()` for heavy projections.
 - **`Every`:** `TimeSpan` and cron with a time zone (UTC by default) in the first version.
 - **`Status()`:** per rule (running, poisoned, last error), plus approximate waiting counts per type.
-- **Messages carry the ETag,** compared for equality only.
+- **Messages carry the ETag,** compared for equality only, and the rules that matched at save time. A stale message runs its rules on the current object rather than being dropped.
+- **`Changed(...)` in filters** for edge-triggering and for declaring `Update`'s inputs: compared with the loaded version at save time, no per-rule or per-object state.
+- **Queues per concrete type,** running rules for the type and its base types.
+- **`RefreshWhen` always queued.** Projections assume one writing instance for now.
+- **Delays beyond 7 days are chained.**
