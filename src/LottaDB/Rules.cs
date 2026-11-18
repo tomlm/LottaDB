@@ -607,12 +607,39 @@ public sealed class MaintainBuilder<T> where T : class, new()
     /// <typeparam name="TOther">The type the projection reads.</typeparam>
     /// <param name="sources">Given the object that changed, a condition that is true for the objects whose projection reads it.</param>
     public MaintainBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources) where TOther : class, new()
+        => RefreshWhen(null, sources);
+
+    /// <summary>
+    /// Run the projection again when an object it reads changes in a way that matters to it, as
+    /// <see cref="RefreshWhen{TOther}(Func{TOther, Expression{Func{T, bool}}})"/> but only for the
+    /// saves <paramref name="when"/> is true for. Name what the projection reads with
+    /// <see cref="Rule.Changed"/>, so that other saves of the object queue nothing:
+    /// <code>
+    /// config.Rules.When&lt;Note&gt;()
+    ///     .Maintain(ProjectNoteView)
+    ///     .RefreshWhen&lt;Actor&gt;(actor =&gt; Changed(actor.DisplayName),
+    ///                         actor =&gt; note =&gt; note.AuthorId == actor.Username);
+    /// </code>
+    /// A delete of the other object always refreshes, whatever <paramref name="when"/> says.
+    /// </summary>
+    /// <typeparam name="TOther">The type the projection reads.</typeparam>
+    /// <param name="when">Which saves of the other object refresh; null for all. It runs inside that object's save, like a rule's filter.</param>
+    /// <param name="sources">Given the object that changed, a condition that is true for the objects whose projection reads it.</param>
+    /// <exception cref="ArgumentException"><paramref name="when"/> uses <c>Changed</c> in a way that cannot be evaluated.</exception>
+    public MaintainBuilder<T> RefreshWhen<TOther>(Expression<Func<TOther, bool>>? when, Func<TOther, Expression<Func<T, bool>>> sources) where TOther : class, new()
     {
         ArgumentNullException.ThrowIfNull(sources);
         _config.ThrowIfOpened();
         var rule = _rule;
+        var filter = RuleFilter.Parse(when);
+        if (filter.UsesChanged)
+            _config.ChangedTypes.Add(typeof(TOther));
+        var matters = filter.OnSave;
         _config.OnRegistrations.Add(new OnRegistration(typeof(TOther),
-            (EntityHandler<TOther>)((other, _, db, cancellationToken) => db.RefreshSourcesAsync(rule, sources(other), cancellationToken))));
+            (EntityHandler<TOther>)((other, kind, db, cancellationToken) =>
+                kind == TriggerKind.Deleted || matters == null || matters(other)
+                    ? db.RefreshSourcesAsync(rule, sources(other), cancellationToken)
+                    : Task.CompletedTask)));
         return this;
     }
 }

@@ -142,28 +142,21 @@ public partial class LottaDB
 
     /// <summary>
     /// The objects marked as produced from one source by one rule, by key: one query of the search
-    /// index, which this process's own writes are always visible in.
+    /// index, through the index writer the caller's write lease holds. That reader sees every
+    /// write up to now, committed or not, by this process and (since the lease is the only one)
+    /// by any other, and it costs no commit.
     /// </summary>
     private Dictionary<string, object> OwnedBy(string stamp)
     {
         var owned = new Dictionary<string, object>(StringComparer.Ordinal);
-        if (!IndexAvailable())
-            return owned;
-        MaybeReloadSearcher();
-        var searcher = Searchers.Acquire();
-        try
+        using var reader = DirectoryReader.Open(RequireWriter(), applyAllDeletes: true);
+        var searcher = new IndexSearcher(reader);
+        var hits = searcher.Search(new TermQuery(new Term(StorageFields.Source, stamp)), Math.Max(1, reader.MaxDoc));
+        foreach (var hit in hits.ScoreDocs)
         {
-            var hits = searcher.Search(new TermQuery(new Term(StorageFields.Source, stamp)), int.MaxValue);
-            foreach (var hit in hits.ScoreDocs)
-            {
-                var document = searcher.Doc(hit.Doc);
-                if (document.Get(StorageFields.Key) is { } key)
-                    owned[key] = EntityMapper.FromLuceneDocument(document, this);
-            }
-        }
-        finally
-        {
-            Searchers.Release(searcher);
+            var document = searcher.Doc(hit.Doc);
+            if (document.Get(StorageFields.Key) is { } key)
+                owned[key] = EntityMapper.FromLuceneDocument(document, this);
         }
         return owned;
     }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+using static Lotta.Rule;
 
 namespace Lotta.Tests;
 
@@ -375,6 +375,69 @@ public abstract class MaintainTestBase : LottaTestBase
         Assert.Equal("scan", db.LastRefreshPath);
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal("Alice Liddell", (await db.GetAsync<NoteView>("nv-n1", ct))!.AuthorDisplay);
+    }
+
+    [Fact]
+    public async Task RefreshWhen_WithACondition_RefreshesOnlyForTheSavesItIsTrueFor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>()
+                .Maintain(ProjectWithAuthor)
+                .RefreshWhen<Actor>(actor => Changed(actor.DisplayName), actor => note => note.AuthorId == actor.Username);
+        }, cancellationToken: ct);
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice" }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+
+        // A save that leaves the name alone queues nothing, loaded first or not.
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice", Counter = 7 }, ct);
+        await db.ChangeAsync<Actor>("alice", actor => { actor.Counter = 8; }, ct);
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+
+        await db.ChangeAsync<Actor>("alice", actor => { actor.DisplayName = "Alice Liddell"; }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal("Alice Liddell", (await db.GetAsync<NoteView>("nv-n1", ct))!.AuthorDisplay);
+
+        // A delete always refreshes.
+        await db.DeleteAsync<Actor>("alice", ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Null(await db.GetAsync<NoteView>("nv-n1", ct));
+    }
+
+    // === Inputs ===
+
+    [Fact]
+    public async Task Maintain_WithChangedInTheFilter_RunsTheProjectionOnlyWhenThoseValuesChange()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var projected = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>(note => Changed(note.Content) && note.Domain != "private")
+                .Maintain(note => { projected++; return ProjectView(note); });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
+        Assert.Equal(1, projected);
+
+        // Saved as it was, and saved with something the projection does not read: not projected again.
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "one", AuthorId = "alice" }, ct);
+        Assert.Equal(1, projected);
+        Assert.Equal("one", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "two", AuthorId = "alice" }, ct);
+        Assert.Equal(2, projected);
+        Assert.Equal("two", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+
+        // The rest of the filter is still the rule's scope: false deletes what was produced.
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "two", AuthorId = "alice", Domain = "private" }, ct);
+        Assert.Equal(2, projected);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n1", ct));
     }
 
     // === Backfill ===

@@ -67,6 +67,7 @@ MaintainBuilder<T> Maintain<TView>(projection);  // named after the method, or t
 // MaintainBuilder<T>
 MaintainBuilder<T> Queued();
 MaintainBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources);
+MaintainBuilder<T> RefreshWhen<TOther>(Expression<Func<TOther, bool>>? when, Func<TOther, Expression<Func<T, bool>>> sources);
 
 // ScheduleBuilder: handler is (RuleContext context, CancellationToken ct)
 ScheduleBuilder Then(string name, ScheduleHandler handler);
@@ -195,6 +196,7 @@ The projection returns what should exist for the object: one object, a collectio
 - **Inside the save by default.** What it saves and deletes is in the save's `Changes`; what it throws is in `Errors`. `.Queued()` runs it from the queue instead, with retries like `Then`.
 - **Deleting the object deletes what it produced,** inside the delete, also for a `.Queued()` rule.
 - **The filter says which objects have a projection.** When it becomes false for an object, what the object produced is deleted. A filter that is false only in its `Changed(...)` part skips the run and deletes nothing.
+- **Name the projection's inputs with `Changed(...)`** to skip it on saves that leave them alone: `When<Note>(n => Changed(n.Content, n.AuthorId)).Maintain(...)`. Without it, the projection runs on every save of the object.
 - **You choose the keys.** A produced object is stored under its own `[Key]`, which the projection sets and keeps the same from run to run.
 - **One owner per object.** Producing a key that another object or another rule owns is an error. An object saved by hand, or left by a rule that no longer exists, is taken over.
 - **A projection cannot produce objects of the type it is for.**
@@ -205,6 +207,7 @@ The projection returns what should exist for the object: one object, a collectio
 **`RefreshWhen<TOther>(other => item => ...)`** runs the projection again when an object it reads changes.
 
 - Every save or delete of a `TOther` evaluates the condition and queues the rule for each object it is true for.
+- **Say which saves matter** with a first argument: `.RefreshWhen<Actor>(actor => Changed(actor.DisplayName), actor => note => note.AuthorId == actor.Username)`. A save that leaves the name alone then queues nothing. A delete always refreshes.
 - The objects are found through the search index when it can express the condition (`[Queryable]` properties compared with values), and by reading every object when it cannot.
 - **A refresh always runs from the queue,** also for a rule that otherwise runs inside the save: one actor can have thousands of notes.
 - A run from the queue takes the object's lock and reads it again before projecting, so a refresh never overwrites the result of a newer save.
@@ -385,7 +388,8 @@ You see rules, not queues.
 - The set-aside count per rule is taken from the first 32 records of each poison queue.
 - Queues made by another process after this one opened the database are not run here until it is reopened.
 - "Two runs for the same object never overlap" holds within one process.
-- **`Maintain` assumes one writing process.** What an object produced, and the objects a refresh is for, are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
+- **`RefreshWhen` assumes one writing process.** The objects a refresh is for are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
+- **`Maintain` is slow for bulk saves.** Each run looks up what the object produced through the index writer, and saves produced objects one at a time. Measured on SQLite: about 13 objects a second, each producing two others.
 - A `Maintain` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
 - A backfill of a `Maintain` rule skips objects its filter is false for, so it does not clean up after them.
 - Aggregates (many objects feeding one) are not covered by `Maintain`.
