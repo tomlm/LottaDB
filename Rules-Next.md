@@ -21,6 +21,25 @@ Timing is separate from the verb:
 - `.At(item => DateTimeOffset)`: at a time taken from the object.
 - `Rules.Every(...)`: on a schedule, with no object.
 
+## Handlers
+
+Every verb takes the same handler shape:
+
+```csharp
+public delegate Task RuleHandler<in T>(T item, RuleContext context, CancellationToken cancellationToken);
+```
+
+| `RuleContext` member | What it is |
+| --- | --- |
+| `Db` | The database the rule runs on |
+| `Rule` | The rule's name, e.g. `summarize` |
+| `Attempt` | 1 on the first run, 2 on the first retry, and so on (always 1 for `Do`) |
+| `IdempotencyKey` | Built from the type, key, ETag and rule name; the same on every retry |
+
+The item carries its key and ETag like any object LottaDB hands out: `item.GetKey()` and `item.GetETag()`. So the context does not repeat them.
+
+This replaces 6.0's `(item, db, ct)` for `Do` as well, so there is one delegate type for every verb.
+
 ## Model
 
 A rule is **event, condition, action**, the model active databases use:
@@ -40,17 +59,26 @@ They are called rules, not triggers, because they never roll back the save: a ru
 
 ```csharp
 config.Rules.When<Note>(n => n.NeedsEmbedding)
-    .Update(async (note, ct) =>
+    .Update(async (note, context, ct) =>
     {
         note.Vector = await embedder.EmbedAsync(note.Content, ct);
         note.NeedsEmbedding = false;
     });
 ```
 
-- **Runs on a copy, outside the write lock.** The slow part never blocks other writes.
-- **Writes back only if the object is unchanged.** LottaDB remembers the object's ETag when the run starts, and writes the result only if the ETag still matches. If someone saved the object meanwhile, the result is dropped, because that save queued a fresh run on the new version.
+- **You edit a copy.** The function changes the copy it is given; it returns nothing. LottaDB compares the copy with the original afterwards, and writes only if something changed.
+- **Runs outside the write lock.** The slow part never blocks other writes.
+- **Writes back only if the object is unchanged.** The copy carries the original's ETag (`note.GetETag()`), and the write-back is conditional on it. If someone saved the object meanwhile, the result is dropped, because that save queued a fresh run on the new version.
 - **Its own write never triggers it again.**
+- **May read other objects** through `context.Db`, for example a list of categories while classifying. It writes only its own object; keeping other objects in sync is `Maintain`'s job.
 - **No conflict loop.** The function runs once per run; it is not called again on a write conflict, unlike a `ChangeAsync` lambda.
+
+| | `ChangeAsync` | `Update` |
+| --- | --- | --- |
+| Function | Synchronous | `async`: model calls, HTTP |
+| Runs | Under the write lease | Outside any lock |
+| On a conflict | Calls your function again on the new version | Drops the result; the newer save queued a fresh run |
+| Gets | The object | A copy of the object, and `RuleContext` |
 
 Today the same work takes a handler that calls `ChangeAsync` and compares fields by hand to avoid writing a stale result. `Update` does that for you.
 
@@ -59,9 +87,9 @@ Today the same work takes a handler that calls `ChangeAsync` and compares fields
 ```csharp
 // One view per note (return null for none)
 config.Rules.When<Note>()
-    .Maintain(async (note, db, ct) =>
+    .Maintain(async (note, context, ct) =>
     {
-        var author = await db.GetAsync<Actor>(note.AuthorId, ct);
+        var author = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
         return author == null ? null : new NoteView { Id = $"nv-{note.NoteId}", AuthorDisplay = author.DisplayName, Content = note.Content };
     })
     .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username);
@@ -72,7 +100,7 @@ config.Rules.When<Note>()
     .Queued();
 ```
 
-- **Inline by default.** Views can be read the moment the save returns, as with today's hand-written views. `.Queued()` runs the projection in the background instead.
+- **Inline by default, even when the projection reads other objects.** A `GetAsync` is a single table read, and inline is what makes views readable the moment the save returns, as with today's hand-written views. `.Queued()` runs the projection in the background; use it for projections that make many reads or do slow work.
 - **You choose the keys.** Projected objects use their own `[Key]`, set by the projection, so a view can be read by a key you know (`nv-{noteId}`).
 - **LottaDB records ownership.** Each projected object is stamped with its source, for example `(Note, n42)`, in an indexed `_source` field.
 - **Each run diffs.** One index query finds what the source produced last time. LottaDB saves what is new or changed and deletes what is no longer produced. A note that stops mentioning someone loses that `Link`.
@@ -100,11 +128,11 @@ static async Task NotifyFollowers(Note note, RuleContext context, CancellationTo
 ```
 
 - Delivered **at least once**, and retried with back-off; then poisoned.
-- Given an **idempotency key**, `(type, key, version)`, the same on every retry, so an external service can drop duplicates.
+- Given `context.IdempotencyKey`, built from the type, key, ETag and rule name. It is the same on every retry, so an external service can drop duplicates.
 
-### `Do`: inline, unchanged
+### `Do`: inline
 
-`Do` stays as in 6.0: quick work inside the save, no name, no queue.
+`Do` works as in 6.0: quick work inside the save, no name, no queue. Its handler takes `RuleContext` like the other verbs.
 
 ## Timing
 
@@ -119,10 +147,15 @@ config.Rules.When<Session>()
 
 config.Rules.Every(TimeSpan.FromHours(24))
     .Then(SyncWithGraph);
+
+config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time"))
+    .Then(NightlyCleanup);                   // 02:00 local time, every day
 ```
 
 - **`After` and `At`** delay the action. The condition is checked again when it fires, on the object as it is then.
 - **`Every`** runs on a schedule, with no object.
+  - It takes a `TimeSpan`, or a cron expression with a time zone (UTC when none is given). Cron expressions are parsed by a small library such as Cronos, a new package dependency.
+  - A schedule's handler gets no item: `(RuleContext context, CancellationToken ct)`.
   - Each schedule has one table row holding its next run time.
   - A process claims a run with an ETag-conditional update of that row, so exactly one process runs it. Every provider supports ETags on tables.
   - After downtime, a missed schedule runs once, not once per missed tick. Its next time is then set from now.
@@ -131,7 +164,7 @@ config.Rules.Every(TimeSpan.FromHours(24))
 
 ### One queue per type
 
-- A save sends one message, `(type, key, version)`, to that type's queue.
+- A save sends one message, `(type, key, ETag)`, to that type's queue.
 - The pump reads the object once and runs every matching queued rule for it.
 - Compared with 6.0's queue per rule: one message and one read per save instead of one per rule, and adding or renaming a rule does not create or orphan a queue.
 
@@ -145,21 +178,21 @@ config.Rules.Every(TimeSpan.FromHours(24))
 
 All retry state lives in the message itself. Example: object `X1` has rules A, B and C, and B fails.
 
-1. Saving `X1` queues `{ key: X1, version: 7 }`: run every matching rule.
+1. Saving `X1` queues `{ key: X1, etag: "e7" }`: run every matching rule.
 2. The pump reads `X1` once and runs A, B and C. A and C succeed; B throws.
 3. **The message is replaced in place,** in one `UpdateMessage` call that sets new content and a visibility delay:
 
    ```json
-   { "key": "X1", "version": 7, "rules": ["b"], "attempts": { "b": 1 }, "lastError": { "b": "timeout calling model" } }
+   { "key": "X1", "etag": "e7", "rules": ["b"], "attempts": { "b": 1 }, "lastError": { "b": "timeout calling model" } }
    ```
 
-   It is hidden for B's retry delay. A and C are done and never run again for this version.
+   It is hidden for B's retry delay. A and C are done and never run again for this ETag.
 4. When it comes up again, only B runs, after its filter is checked against `X1` as it is then. Success deletes the message. Another failure raises the count and doubles the wait.
 
 Replacing is one storage operation. Sending a new message and deleting the old one would be two, and a crash between them would leave both.
 
 - **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded. It is then removed from the message; when no rules are left, the message is deleted.
-- **A stale retry is dropped.** If `X1` is saved again before B's retry, that save queues `{ key: X1, version: 8 }`, which runs every rule on the new version. When the version 7 retry comes up, `X1` is newer, so it is dropped.
+- **A stale retry is dropped.** If `X1` is saved again before B's retry, that save queues `{ key: X1, etag: "e8" }`, which runs every rule on the new version. When the `e7` retry comes up, `X1`'s ETag no longer matches, so it is dropped. ETags are opaque, so this is a test for equality, not for which is newer: any difference means a save happened, and that save queued a full run.
 - **A crash during a run** leaves the message as it was. It becomes visible again when its lease runs out, and every rule in it runs again: at-least-once delivery. A later optimisation could update the message after each successful rule, so a crash repeats only the unfinished ones. That costs one more storage call per rule, so it is not the default.
 - **Poison records are the only other storage.** There are no bookkeeping rows.
 
@@ -197,11 +230,11 @@ The job is queryable and durable like any other object, and its progress is visi
 
 ## Operating it
 
-You see rules, not queues:
+You see rules, not queues. Waiting work is counted per type, not per rule: a fresh message means "every matching rule", so splitting it by rule would mean reading each message.
 
 | Method | What it does |
 | --- | --- |
-| `db.Rules.Status()` | Each rule: pending, running, failed, poisoned, last error; orphaned poison records |
+| `db.Rules.Status()` | Per rule: runs in progress, poisoned count, last error. Per type: messages waiting (approximate). Orphaned poison records. |
 | `db.Rules.Retry(rule)` | Retry a rule's poisoned work |
 | `db.Rules.Backfill(rule)` | Run a rule over every object it matches now, found through the index (as `RequeueAsync` does in 6.0) |
 | `db.DrainAsync()` | Run what is due now (manual mode, tests) |
@@ -229,11 +262,12 @@ From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ord
 - **Concurrency.** Two runs for the same object must not overlap.
 - **Scope.** This is not a workflow engine. A multi-step process is a chain of objects and rules, not new verbs.
 
-## Open questions
+## Decided
 
-- How does a `Then` handler get its idempotency key? The examples pass a `RuleContext` (`context.IdempotencyKey`, `context.Db`) in place of `db`; the alternative is keeping 6.0's `(item, db, ct)` and reading the key from a method on `db`.
-- Should `Update` see the database at all? The examples give it `(item, ct)` only, so it can change just its own object; giving it `db` lets it read other objects, at the cost of a less obvious contract.
-- Does `Update` hand the function a copy and write it back, or does the function return the changes?
-- Does `Maintain` run inline under the write lock when the projection reads other objects (`GetAsync` on `Actor`), or should reading projections default to `.Queued()`?
-- How does `Every` take a cron expression as well as a `TimeSpan`, and in which time zone?
-- What does `Status()` return for a type queue with many rules: one row per rule, or per rule and per type?
+- **Handler shape:** `(item, RuleContext context, ct)` for every verb, including `Do`.
+- **`RuleContext`:** `Db`, `Rule`, `Attempt`, `IdempotencyKey`. Key and ETag come from the item (`GetKey()`, `GetETag()`), the names the existing API uses.
+- **`Update`:** edits a copy; written only if changed, conditional on the copy's ETag; may read other objects through `context.Db`.
+- **`Maintain`:** inline by default even when it reads other objects; `.Queued()` for heavy projections.
+- **`Every`:** `TimeSpan` and cron with a time zone (UTC by default) in the first version.
+- **`Status()`:** per rule (running, poisoned, last error), plus approximate waiting counts per type.
+- **Messages carry the ETag,** compared for equality only.
