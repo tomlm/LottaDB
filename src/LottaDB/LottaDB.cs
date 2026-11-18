@@ -760,6 +760,8 @@ public partial class LottaDB : IDisposable
                 var meta = GetMeta(entity.GetType());
                 // For rules that ask Changed(...): what this save replaces.
                 await NotePreviousAsync(entity, key, jsonBefore, cancellationToken);
+                // For Maintain rules: what the object produces now, so this write records it.
+                await PrepareMaintainAsync(entity, key, known: null, cancellationToken);
 
                 var existingETag = entity.GetETag();
                 if (existingETag != null)
@@ -838,6 +840,8 @@ public partial class LottaDB : IDisposable
         using var writerLease = await AcquireWriterAsync(cancellationToken);
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
+            // For Maintain rules: what the object produced, which goes with it.
+            await NoteProducedAsync(entity, key, cancellationToken);
             await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
 
             var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
@@ -975,6 +979,14 @@ public partial class LottaDB : IDisposable
             using var keyLock = await AcquireLockAsync(key, cancellationToken);
             {
                 string newETag;
+                // What is kept beside the object stays with it when the change returns a new one.
+                if (!ReferenceEquals(mutated, current))
+                    mutated!.SetSource(current.GetSource());
+                // For rules that ask Changed(...): what this change replaces.
+                if (TracksChanges(mutated!.GetType()))
+                    mutated.SetPrevious(jsonBefore);
+                // For Maintain rules: what the object produces now, so this write records it.
+                await PrepareMaintainAsync(mutated, key, current.GetProduced() ?? ObjectMetadata.NothingProduced, cancellationToken);
                 try
                 {
                     newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
@@ -2056,6 +2068,8 @@ public partial class LottaDB : IDisposable
                         meta.SetKey(entity, key);
                     // For rules that ask Changed(...): what this save replaces.
                     await NotePreviousAsync(entity, key, entity.GetJson(), cancellationToken);
+                    // For Maintain rules: what the object produces now, so this write records it.
+                    await PrepareMaintainAsync(entity, key, known: null, cancellationToken);
                     action = _tableAdapter.CreateUpsertAction(key, entity, meta);
                     entity.SetSchema(entity.GetType().Name);
                 }
@@ -2136,8 +2150,18 @@ public partial class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
     {
-        return await DeleteManyAsyncCore(entities.Select(e => GetDeleteTruple(e))
-            .ToAsyncEnumerable(), cancellationToken);
+        return await DeleteManyAsyncCore(Items(), cancellationToken);
+
+        async IAsyncEnumerable<(object?, Type?, string)> Items()
+        {
+            foreach (var entity in entities)
+            {
+                var item = GetDeleteTruple(entity);
+                // For Maintain rules: what the object produced, which goes with it.
+                await NoteProducedAsync(entity, item.Item3, cancellationToken);
+                yield return item;
+            }
+        }
     }
 
     /// <summary>
@@ -2305,11 +2329,13 @@ public partial class LottaDB : IDisposable
     /// built-in index handlers of every type in the hierarchy and then for the rules, so no rule
     /// runs before the index is written.
     /// </summary>
+    /// <param name="builtInOnly">True to write the index and run no rule: for a row written again with its object unchanged.</param>
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
-        List<Exception> errors, CancellationToken cancellationToken)
+        List<Exception> errors, CancellationToken cancellationToken, bool builtInOnly = false)
     {
         await WalkAsync(builtIn: true);
-        await WalkAsync(builtIn: false);
+        if (!builtInOnly)
+            await WalkAsync(builtIn: false);
 
         async Task WalkAsync(bool builtIn)
         {

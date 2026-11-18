@@ -216,6 +216,73 @@ public abstract class MaintainTestBase : LottaTestBase
         var error = Assert.Single(result.Errors);
         Assert.Contains("belongs to 'Note/note-view n1'", error.Message);
         Assert.Equal("n1", (await db.GetAsync<NoteView>("shared", ct))!.NoteId);
+
+        // The second note never owned it, so deleting that note leaves it alone.
+        await db.DeleteAsync<Note>("n2", ct);
+        Assert.Equal("n1", (await db.GetAsync<NoteView>("shared", ct))!.NoteId);
+        await db.DeleteAsync<Note>("n1", ct);
+        Assert.Null(await db.GetAsync<NoteView>("shared", ct));
+    }
+
+    [Fact]
+    public async Task TheSource_ListsWhatItProduced_BesideTheObjectNotInIt_HoweverItIsSavedNext()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+        }, cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Tags = ["a", "b"] }, ct);
+
+        var stored = await db.GetAsync<Note>("n1", ct);
+        Assert.Equal(["n1#a", "n1#b"], stored!.GetProduced()!["Note/tags"]);
+        Assert.DoesNotContain("produced", stored.GetJson()!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("n1#a", stored.GetJson()!);
+
+        // Loaded through the search index, which does not hold the list: the save finds it in the row.
+        var found = db.Search<Note>().Where(note => note.AuthorId == "alice").ToList().Single();
+        found.Tags = ["b", "c"];
+        Assert.Empty((await db.SaveAsync(found, ct)).Errors);
+        Assert.Equal(["b", "c"], await EntriesOf(db, "n1", ct));
+
+        // Changed in place, and saved in a batch as a new object.
+        await db.ChangeAsync<Note>("n1", note => { note.Tags = ["c"]; }, ct);
+        Assert.Equal(["c"], await EntriesOf(db, "n1", ct));
+        await db.SaveManyAsync([new Note { NoteId = "n1", Tags = ["d"] }, new Note { NoteId = "n2", Tags = ["x", "y"] }], ct);
+        Assert.Equal(["d"], await EntriesOf(db, "n1", ct));
+        Assert.Equal(["x", "y"], await EntriesOf(db, "n2", ct));
+
+        // An object with no rule that produces from it has no list.
+        Assert.Empty((await db.GetAsync<FeedEntry>("n1#d", ct))!.GetProduced()!);
+    }
+
+    [Fact]
+    public async Task Queued_ARunThatChangesWhatIsProduced_RecordsItOnTheSource_AndSearchStillGivesItsETag()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Maintain("tags", ProjectTags).Queued();
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Tags = ["a"] }, ct);
+        Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
+
+        // The run wrote the note's row again; an object from the index still saves without a conflict.
+        var found = db.Search<Note>().Where(note => note.AuthorId == "alice").ToList().Single();
+        found.Tags = [];
+        Assert.Empty((await db.SaveAsync(found, ct)).Errors);
+        // The save itself ran no projection, and kept the list for the run that follows.
+        Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Empty(await EntriesOf(db, "n1", ct));
+        Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
+        // Recording it queued nothing.
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
 
     [Fact]

@@ -39,6 +39,20 @@ public class ObjectMetadata
     /// produced from (<c>Note/note-view n42</c>). Stored beside the object, not in it.
     /// </summary>
     internal string? Source { get; set; }
+
+    /// <summary>
+    /// On an object that <c>Maintain</c> rules produce other objects from: the keys of those
+    /// objects, per rule, as its stored row lists them. Null when not known (the object was not
+    /// read from its row); <see cref="NothingProduced"/> when the row lists none. Never changed
+    /// in place.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string[]>? Produced { get; set; }
+
+    /// <summary>During a save: what the object's <c>Maintain</c> rules are to write once its row is written, per rule.</summary>
+    internal Dictionary<string, LottaDB.PendingViews>? PendingMaintain { get; set; }
+
+    /// <summary>The row lists nothing produced.</summary>
+    internal static readonly IReadOnlyDictionary<string, string[]> NothingProduced = new Dictionary<string, string[]>();
 }
 
 /// <summary>
@@ -136,6 +150,28 @@ public static class ObjectExtensions
     /// <summary>The rule and source object that produced this object (<c>Note/note-view n42</c>); null when no rule did.</summary>
     internal static string? GetSource(this object obj) =>
         _table.TryGetValue(obj, out var meta) ? meta.Source : null;
+
+    /// <summary>Notes the keys of the objects made from this one, per rule, as its row lists them (or is about to).</summary>
+    internal static void SetProduced(this object obj, IReadOnlyDictionary<string, string[]>? produced)
+    {
+        if (produced == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).Produced = produced;
+    }
+
+    /// <summary>The keys of the objects made from this one, per rule; null when not known.</summary>
+    internal static IReadOnlyDictionary<string, string[]>? GetProduced(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.Produced : null;
+
+    internal static void SetPendingMaintain(this object obj, Dictionary<string, LottaDB.PendingViews>? pending)
+    {
+        if (pending == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).PendingMaintain = pending;
+    }
+
+    internal static Dictionary<string, LottaDB.PendingViews>? GetPendingMaintain(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.PendingMaintain : null;
 
     /// <summary>
     /// Notes, for the length of a save, the JSON of the version the save replaces (null for a new

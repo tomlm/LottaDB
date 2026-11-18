@@ -202,7 +202,23 @@ The projection returns what should exist for the object: one object, a collectio
 - **A projection cannot produce objects of the type it is for.**
 - **Produced objects are ordinary objects:** their own rules run when they are saved and deleted.
 
-**Ownership** is a `_source` value stored and indexed beside each produced object, next to `_type` and the ETag, not in the object's JSON: the rule and the key of the object it was produced from, `Note/note-view n42`. Nothing is added to the source object. Loading a produced object and saving it keeps the value; `RebuildSearchIndex` restores it in the index.
+**Ownership** is recorded on both sides, beside the objects (next to `_type` and the ETag), never in their JSON:
+
+| Where | What | Example |
+| --- | --- | --- |
+| The source's row | `_produced`: the keys it produced, per rule | `{"Note/tags": ["n1#a", "n1#b"]}` |
+| Each produced object's row | `_source`: the rule and the source's key | `Note/tags n1` |
+
+A run needs no search:
+
+1. The keys the projection returns are compared with the keys the source's row lists.
+2. Those rows are read by key, to skip the ones that are already the same and to check that nobody else owns them.
+3. New and changed objects are saved in a batch. Keys that are listed and no longer produced are deleted, if they are still this source's.
+
+- **In a save,** the projection runs before the source's row is written, so the one write records the new list. An object saved without having been loaded is read first, to learn what it listed.
+- **Every write of a source keeps its list:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, an `Update` rule's write-back, and saves of objects loaded through the search index.
+- **A run from the queue** that changes which keys are produced writes the source's row again to record it. The object is unchanged, no rule runs and nothing is queued, but the source gets a new ETag.
+- **A delete** removes the keys the deleted row listed.
 
 **`RefreshWhen<TOther>(other => item => ...)`** runs the projection again when an object it reads changes.
 
@@ -379,7 +395,7 @@ You see rules, not queues.
 - **Lucene:** each queue is a Lucene `Directory` of its own (`queues/{queue}`) with a file per message. `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`), since a message's file name is about 100 characters; a factory of your own should do the same.
 - `ResetDatabaseAsync` empties the database's queues. `DeleteDatabaseAsync` and deleting the catalog delete them.
 - `RebuildSearchIndex` queues nothing.
-- **`_source`** is one extra column on objects a `Maintain` rule produced, and one indexed field in their index documents. No other object has it.
+- **`_source`** is one extra column on objects a `Maintain` rule produced (also kept in their index documents). **`_produced`** is one extra column on objects that have produced something, split across `_produced2`, ... past 63 KB. No other object has either.
 
 ## Known limits
 
@@ -389,7 +405,8 @@ You see rules, not queues.
 - Queues made by another process after this one opened the database are not run here until it is reopened.
 - "Two runs for the same object never overlap" holds within one process.
 - **`RefreshWhen` assumes one writing process.** The objects a refresh is for are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
-- **`Maintain` is slow for bulk saves.** Each run looks up what the object produced through the index writer, and saves produced objects one at a time. Measured on SQLite: about 13 objects a second, each producing two others.
+- **`Maintain` writes one source's objects at a time.** In a `SaveManyAsync` of many sources, each source's produced objects are a batch of their own. Measured on SQLite with sources producing two objects each: 150 to 300 sources a second, against about 360 for hand-written code that batches across sources.
+- A queue run that changes which keys a source produces gives the source a new ETag, so a copy loaded before it gets a `ConcurrencyException` on its next conditional save.
 - A `Maintain` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
 - A backfill of a `Maintain` rule skips objects its filter is false for, so it does not clean up after them.
 - Aggregates (many objects feeding one) are not covered by `Maintain`.

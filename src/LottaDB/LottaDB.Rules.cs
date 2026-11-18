@@ -898,7 +898,7 @@ public partial class LottaDB
         var type = original.GetType();
         var key = AsyncKeyOf(original);
         var originalJson = original.GetJson() ?? JsonSerializer.Serialize(original, type);
-        var copy = CopyOf(originalJson, type, key, original.GetETag(), original.GetSource());
+        var copy = CopyOf(originalJson, type, key, original.GetETag(), original);
 
         await rule.Invoke(copy, new RuleContext(this, rule.Name, rule.Id, attempt, copy, etag), cancellationToken).ConfigureAwait(false);
 
@@ -948,7 +948,7 @@ public partial class LottaDB
                     merged.Remove(name);
             }
             var latestJson = latest.GetJson() ?? JsonSerializer.Serialize(latest, type);
-            var result = CopyOf(merged.ToJsonString(), type, key, latest.GetETag(), latest.GetSource());
+            var result = CopyOf(merged.ToJsonString(), type, key, latest.GetETag(), latest);
             // As loaded, so the save sees what it replaces.
             result.SetJson(latestJson);
             try
@@ -966,7 +966,8 @@ public partial class LottaDB
     }
 
     /// <summary>An object made from JSON, with what an object loaded from the database carries.</summary>
-    private object CopyOf(string json, Type type, string key, string? etag, string? source)
+    /// <param name="like">The loaded object the copy stands in for: what is kept beside it is kept beside the copy.</param>
+    private object CopyOf(string json, Type type, string key, string? etag, object like)
     {
         var copy = JsonSerializer.Deserialize(json, type)
             ?? throw new InvalidOperationException($"'{key}' could not be copied: its stored form is empty.");
@@ -975,7 +976,8 @@ public partial class LottaDB
         if (etag != null)
             copy.SetETag(etag);
         copy.SetSchema(type.Name);
-        copy.SetSource(source);   // an object a Maintain rule produced stays that rule's
+        copy.SetSource(like.GetSource());       // an object a Maintain rule produced stays that rule's
+        copy.SetProduced(like.GetProduced());   // and what was produced from it stays listed
         if (copy is BlobFile blob)
             blob.Database = this;
         return copy;

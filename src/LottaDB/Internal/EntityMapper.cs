@@ -24,6 +24,8 @@ internal static class EntityMapper
         entity[StorageFields.Schema] = obj.GetType().Name;
         if (obj.GetSource() is { } source)
             entity[StorageFields.Source] = source;
+        if (obj.GetProduced() is { Count: > 0 } produced)
+            SetProduced(entity, produced);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
         obj.SetJson(Encoding.UTF8.GetString(bytes));
@@ -69,6 +71,28 @@ internal static class EntityMapper
         return entity;
     }
 
+    /// <summary>Writes the keys an object's rules produced as JSON, in as many columns as its length takes.</summary>
+    private static void SetProduced(TableEntity entity, IReadOnlyDictionary<string, string[]> produced)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(produced);
+        var column = 1;
+        for (var offset = 0; offset < bytes.Length; offset += TableEntityExtensions.MaxPropertySize, column++)
+        {
+            var length = Math.Min(TableEntityExtensions.MaxPropertySize, bytes.Length - offset);
+            entity[column == 1 ? StorageFields.Produced : $"{StorageFields.Produced}{column}"] = bytes.AsSpan(offset, length).ToArray();
+        }
+    }
+
+    /// <summary>The keys a row lists as produced from its object, per rule; <see cref="ObjectMetadata.NothingProduced"/> when it lists none.</summary>
+    private static IReadOnlyDictionary<string, string[]> GetProduced(TableEntity entity)
+    {
+        if (!entity.TryGetValue(StorageFields.Produced, out var first) || first is not byte[] bytes)
+            return ObjectMetadata.NothingProduced;
+        for (var column = 2; entity.TryGetValue($"{StorageFields.Produced}{column}", out var more) && more is byte[] chunk; column++)
+            bytes = [.. bytes, .. chunk];
+        return JsonSerializer.Deserialize<Dictionary<string, string[]>>(bytes) ?? ObjectMetadata.NothingProduced;
+    }
+
     // ── From Table Storage ──
 
     /// <summary>
@@ -107,6 +131,8 @@ internal static class EntityMapper
                 obj.SetSchema(schema ?? concreteType.Name);
                 if (entity.TryGetValue(StorageFields.Source, out var source) && source is string producedFrom)
                     obj.SetSource(producedFrom);
+                // Read from its row, so what it produced is known, even when that is nothing.
+                obj.SetProduced(GetProduced(entity));
             }
             return obj;
         }
