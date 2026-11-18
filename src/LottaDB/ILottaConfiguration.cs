@@ -95,7 +95,7 @@ public interface ILottaConfiguration
     /// The database's rules: what to do when objects are saved or deleted. Start one with
     /// <see cref="RuleSet.When{T}"/> or <see cref="RuleSet.WhenDeleted{T}"/>.
     /// <code>
-    /// config.Rules.When&lt;Note&gt;(n =&gt; n.IsPublished).Do(UpdateFeedView).Queue("notify-followers", Notify);
+    /// config.Rules.When&lt;Note&gt;(n =&gt; n.IsPublished).Do(UpdateFeedView).Then(NotifyFollowers);
     /// </code>
     /// </summary>
     RuleSet Rules { get; }
@@ -113,9 +113,34 @@ public interface ILottaConfiguration
     public int MaxQueueHops { get; set; }
 
     /// <summary>
+    /// How many objects the database's queued rules are run for at once. The rules of one object
+    /// always run one after another, and two runs for the same object never overlap. Default: 4.
+    /// </summary>
+    public int MaxConcurrency { get; set; }
+
+    /// <summary>
+    /// How many times a queued rule is run for an object before it is set aside as failed, to be
+    /// looked at with <c>db.Rules.StatusAsync()</c> and run again with <c>db.Rules.RetryAsync(rule)</c>.
+    /// Default: 5.
+    /// </summary>
+    public int RuleMaxAttempts { get; set; }
+
+    /// <summary>
+    /// How long a queued rule that failed waits before its second run. The wait doubles with each
+    /// further failure, up to five minutes. Default: 2 seconds.
+    /// </summary>
+    public TimeSpan RuleRetryDelay { get; set; }
+
+    /// <summary>
+    /// How long one run of a queued rule may take before its token is cancelled and the run is
+    /// counted as failed. Default: 5 minutes.
+    /// </summary>
+    public TimeSpan RuleTimeout { get; set; }
+
+    /// <summary>
     /// Set the blob upload handler (replacement semantics: last one wins).
     /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
-    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c> or <c>.Queue(...)</c> for additional post-upload
+    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.Update(...)</c> or <c>.Then(...)</c> for additional post-upload
     /// processing (CSAM scanning, thumbnails, etc.): uploading saves the blob's record, which fires them.
     /// </summary>
     /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>

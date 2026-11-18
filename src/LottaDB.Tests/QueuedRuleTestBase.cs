@@ -1,101 +1,126 @@
 using System.Collections.Concurrent;
 using Azure;
 using Azure.Storage.Queues;
+using Lotta.Internal;
+using static Lotta.Rule;
 
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for queued rules (<c>When&lt;T&gt;().Queue(...)</c>): work that is queued by a save and run later, outside it.
-/// These run the handlers by hand with <see cref="LottaDB.DrainAsync"/>, so every step is in order.
+/// Tests for queued rules (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>): work that is queued by a
+/// save and run later, outside it. These run the rules by hand with <see cref="LottaDB.DrainAsync"/>,
+/// so every step is in order.
 /// </summary>
 public abstract class QueuedRuleTestBase : LottaTestBase
 {
     protected QueuedRuleTestBase(Action<LottaCatalog> config) : base(config) { }
 
-    private static async Task<QueueStatus> StatusOf(LottaDB db, string name, CancellationToken ct) =>
-        (await db.GetQueueStatusAsync(ct)).Single(s => s.Name == name);
+    /// <summary>Where a rule stands: the messages waiting for its type, and its own set-aside work and last error.</summary>
+    /// <param name="rule">The rule's identity: <c>Actor/count</c>.</param>
+    private static async Task<(int Waiting, int Poisoned, string? LastError)> StatusOf<T>(LottaDB db, string rule, CancellationToken ct)
+    {
+        var status = await db.Rules.StatusAsync(ct);
+        var own = status.Rules.Single(r => r.Rule == rule);
+        return (status.Types.SingleOrDefault(t => t.Type == typeof(T).FullName)?.Waiting ?? 0, own.Poisoned, own.LastError);
+    }
+
+    /// <summary>How many messages wait in a type's queue; 0 when nothing was ever queued for the type.</summary>
+    private static async Task<int> WaitingOf<T>(LottaDB db, CancellationToken ct) =>
+        (await db.Rules.StatusAsync(ct)).Types.SingleOrDefault(t => t.Type == typeof(T).FullName)?.Waiting ?? 0;
+
+    /// <summary>The queue of a type in a database, and the queue its failed work is set aside in.</summary>
+    private (QueueClient Queue, QueueClient Poison) QueuesOf<T>(string databaseId)
+    {
+        var queues = Catalog.GetQueueServiceClient()!;
+        var name = RuleQueueNames.Queue(Catalog.Name, databaseId, typeof(T));
+        return (queues.GetQueueClient(name), queues.GetQueueClient(RuleQueueNames.Poison(name)));
+    }
+
+    /// <summary>Runs work as someone outside the rule would: not as part of the run it is called from.</summary>
+    private static Task Elsewhere(Func<Task> work)
+    {
+        using (ExecutionContext.SuppressFlow())
+            return Task.Run(work);
+    }
 
     // === Order ===
 
     [Fact]
-    public async Task HigherPriority_DrainsFirst_AndEachHandlerIsFirstInFirstOut()
+    public async Task ASave_RunsNothingItself_AndItsObjectsAreTakenFirstInFirstOut()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Queue("low", (note, _, _) => { ran.Add($"low:{note.NoteId}"); return Task.CompletedTask; }).Priority(1).EverySave();
-            opts.Rules.When<Note>().Queue("high", (note, _, _) => { ran.Add($"high:{note.NoteId}"); return Task.CompletedTask; }).Priority(10).EverySave();
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Note>().Then("first", (note, _, _) => { ran.Add($"first:{note.NoteId}"); return Task.CompletedTask; });
+            opts.Rules.When<Note>().Then("second", (note, _, _) => { ran.Add($"second:{note.NoteId}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var id in new[] { "n1", "n2", "n3" })
             await db.SaveAsync(new Note { NoteId = id, Content = id }, ct);
         Assert.Empty(ran);   // nothing runs inside the save
+        Assert.Equal(3, await WaitingOf<Note>(db, ct));   // one message a save, whatever number of rules it matched
 
         Assert.Equal(6, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["high:n1", "high:n2", "high:n3", "low:n1", "low:n2", "low:n3"], ran);
+        Assert.Equal(["first:n1", "second:n1", "first:n2", "second:n2", "first:n3", "second:n3"], ran);
     }
 
     [Fact]
-    public async Task EqualPriority_TakesTheOldestWorkAcrossHandlers()
+    public async Task RulesOfOneObject_RunInPhaseOrder_UpdateBeforeThen()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Queue("notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; }).Priority(5).EverySave();
-            opts.Rules.When<Actor>().Queue("actors", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; }).Priority(5).EverySave();
+            // Registered the other way round: the phase decides, not the order of registration.
+            opts.Rules.When<Actor>()
+                .Then("notify", (actor, _, _) => { ran.Add($"notify sees {actor.DisplayName}"); return Task.CompletedTask; })
+                .Update("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
-        // More than a second apart: Azure records when a message was queued to the second.
-        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
-        await Task.Delay(1100, ct);
-        await db.SaveAsync(new Actor { Username = "alice" }, ct);
-        await Task.Delay(1100, ct);
-        await db.SaveAsync(new Note { NoteId = "n2" }, ct);
-
-        await db.DrainAsync(cancellationToken: ct);
-        Assert.Equal(["n1", "alice", "n2"], ran);
-    }
-
-    // === Latest ===
-
-    [Fact]
-    public async Task Latest_SeveralSavesOfOneObject_GiveOneRun_OnTheObjectAsItIsThen()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var seen = new List<int>();
-        var db = await CreateDbAsync(opts =>
-        {
-            opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; });
-        }, cancellationToken: ct);
-
-        for (var n = 1; n <= 3; n++)
-            await db.SaveAsync(new Actor { Username = "alice", Counter = n }, ct);
-        await db.SaveAsync(new Actor { Username = "bob", Counter = 7 }, ct);
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
 
         Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal([3, 7], seen);
-        Assert.Equal(0, (await StatusOf(db, "count", ct)).Waiting);
-
-        // A save after the run is new work.
-        await db.SaveAsync(new Actor { Username = "alice", Counter = 4 }, ct);
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal([3, 7, 4], seen);
+        Assert.Equal(["describe", "notify sees #1"], ran);
+        // The update's write queued neither itself nor the rule that was still to come.
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
 
     [Fact]
-    public async Task NotLatest_EverySaveGivesARun_EachOnTheCurrentObject()
+    public async Task TypeQueues_AreTakenInTurn_SoNoTypeWaitsForAnotherToEmpty()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Note>().Then("notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().Then("actors", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        foreach (var id in new[] { "n1", "n2", "n3" })
+            await db.SaveAsync(new Note { NoteId = id }, ct);
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        Assert.Equal(4, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["n1", "n2", "n3"], ran.Where(id => id != "alice"));
+        Assert.True(ran.IndexOf("alice") <= 1, $"the actor ran at {ran.IndexOf("alice")}, after the notes: {string.Join(", ", ran)}");
+    }
+
+    [Fact]
+    public async Task EverySaveGivesARun_EachOnTheObjectAsItIsThen()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new List<int>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; }).EverySave();
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Actor>().Then("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         for (var n = 1; n <= 3; n++)
@@ -103,26 +128,12 @@ public abstract class QueuedRuleTestBase : LottaTestBase
 
         Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal([3, 3, 3], seen);
-    }
+        Assert.Equal(0, await WaitingOf<Actor>(db, ct));
 
-    [Fact]
-    public async Task Latest_ASupersededMessageIsCoveredByTheNewerOnesRetries()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var attempts = 0;
-        var db = await CreateDbAsync(opts =>
-        {
-            opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask).Retry(5, TimeSpan.Zero);
-        }, cancellationToken: ct);
-
-        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
-        await db.SaveAsync(new Actor { Username = "alice", Counter = 2 }, ct);
-
-        // The first message is dropped; the second fails twice and then succeeds.
-        Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
-        var status = await StatusOf(db, "flaky", ct);
-        Assert.Equal((0, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+        // A save after the run is new work.
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 4 }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal([3, 3, 3, 4], seen);
     }
 
     // === What the handler is given ===
@@ -135,32 +146,40 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
             // Registered for the base type: derived types are its business too.
-            opts.Rules.When<BaseEntity>().Queue("people", (entity, _, _) =>
+            opts.Rules.When<BaseEntity>().Then("people", (entity, _, _) =>
             {
                 seen.Add($"{entity.GetType().Name}:{entity.Id}:{entity.Name}");
                 return Task.CompletedTask;
-            }).EverySave();
+            });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "e1", Name = "Eve" }, ct);
         await db.SaveManyAsync(new[] { new Person { Id = "p1", Name = "Pat" }, new Person { Id = "p2", Name = "Pip" } }, ct);
+
+        // One queue for each concrete type, though the rule is for their base.
+        var types = (await db.Rules.StatusAsync(ct)).Types.Select(t => (t.Type, t.Waiting)).ToList();
+        Assert.Equal([(typeof(Employee).FullName!, 1), (typeof(Person).FullName!, 2)], types);
+
         await db.DrainAsync(cancellationToken: ct);
+        Assert.Equal(["Employee:e1:Eve", "Person:p1:Pat", "Person:p2:Pip"], seen.Order());
+
         await db.ChangeAsync<Person>("p1", p => { p.Name = "Patricia"; return p; }, ct);
         await db.DrainAsync(cancellationToken: ct);
-
-        Assert.Equal(["Employee:e1:Eve", "Person:p1:Pat", "Person:p2:Pip", "Person:p1:Patricia"], seen);
+        Assert.Equal("Person:p1:Patricia", seen[^1]);
+        Assert.Equal(4, seen.Count);
     }
 
     [Fact]
-    public async Task SaveMany_OfAnObjectGivenANewKey_QueuesTheHandlerUnderTheNewKey()
+    public async Task SaveMany_OfAnObjectGivenANewKey_QueuesTheRuleUnderTheNewKey()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("names", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; }).EverySave();
+            opts.Rules.When<Actor>().Then("names", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -168,7 +187,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         seen.Clear();
 
         // Loaded as alice, written as carol. The object still carries the key it was loaded
-        // under, and the handler was queued for alice, the object that was not saved.
+        // under, and the rule must be queued for carol, the object that was saved.
         var actor = await db.GetAsync<Actor>("alice", ct);
         actor!.Username = "carol";
         await db.SaveManyAsync(new[] { actor }, ct);
@@ -186,7 +205,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Store<LargeDocument>();
-            opts.Rules.When<LargeDocument>().Queue("big", (document, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
+            opts.Rules.When<LargeDocument>().Then("big", (document, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // Far more than a queue message can hold: the message carries only the key.
@@ -201,17 +220,20 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     {
         var ct = TestContext.Current.CancellationToken;
         Exception? caught = null;
+        var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("writer", async (actor, db, token) =>
+            opts.Rules.When<Actor>().Then("writer", async (actor, context, token) =>
             {
+                if (++runs > 1)
+                    return;   // the run queued by the change from elsewhere
                 // Someone else changes the object while the handler is working on it.
-                await db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "changed elsewhere"; return a; }, token);
+                await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "changed elsewhere"; return a; }, token));
                 actor.Counter = 99;
                 try
                 {
-                    await db.SaveAsync(actor, token);
+                    await context.Db.SaveAsync(actor, token);
                 }
                 catch (Exception e)
                 {
@@ -235,7 +257,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -245,11 +268,11 @@ public abstract class QueuedRuleTestBase : LottaTestBase
 
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // bob only
         Assert.Equal(1, runs);
-        Assert.Equal(0, (await StatusOf(db, "count", ct)).Waiting);
+        Assert.Equal(0, await WaitingOf<Actor>(db, ct));
     }
 
     [Fact]
-    public async Task AnUploadedBlob_QueuesHandlersForItsRecord()
+    public async Task AnUploadedBlob_QueuesRulesForItsRecord()
     {
         var ct = TestContext.Current.CancellationToken;
         var paths = new List<string>();
@@ -257,13 +280,344 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.OnUpload();
-            opts.Rules.When<BlobFile>().Queue("files", (file, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
+            opts.Rules.When<BlobFile>().Then("files", (file, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.UploadBlobAsync("docs/hello.txt", "hello", cancellationToken: ct);
 
         await db.DrainAsync(cancellationToken: ct);
         Assert.Equal(["docs/hello.txt"], paths);
+    }
+
+    // === Then ===
+
+    [Fact]
+    public async Task Then_IsToldItsRule_TheAttempt_AndAKeyThatIsTheSameOnEveryRetry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<(string Rule, int Attempt, string Key, LottaDB Db)>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Actor>().Then("notify", (_, context, _) =>
+            {
+                seen.Add((context.Rule, context.Attempt, context.IdempotencyKey, context.Db));
+                return seen.Count < 3 ? throw new InvalidOperationException("the mail server is down") : Task.CompletedTask;
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
+
+        Assert.Equal([("notify", 1), ("notify", 2), ("notify", 3)], seen.Select(s => (s.Rule, s.Attempt)));
+        Assert.All(seen, s => Assert.Same(db, s.Db));
+        // The same for every try of one save's work, so the mail server can drop the duplicates.
+        var key = Assert.Single(seen.Select(s => s.Key).Distinct());
+        Assert.Equal(32, key.Length);
+
+        // Another save is other work.
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 2 }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(1, seen[^1].Attempt);
+        Assert.NotEqual(key, seen[^1].Key);
+    }
+
+    // === Update ===
+
+    [Fact]
+    public async Task Update_GivesTheHandlerACopyToEdit_AndWritesItBackOnlyIfItChanged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Update("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+
+        var alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal("#1", alice!.DisplayName);
+        // The rule's own write does not queue the rule again.
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+
+        // A later save does; the handler then leaves the object as it finds it, and nothing is written.
+        alice.AvatarUrl = "alice.png";
+        await db.SaveAsync(alice, ct);
+        var etag = alice.GetETag();
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        var after = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(etag, after!.GetETag());
+        Assert.Equal(("#1", "alice.png"), (after!.DisplayName, after.AvatarUrl));
+    }
+
+    [Fact]
+    public async Task Update_ThatFails_LeavesTheObjectAsItWas_ForTheRulesAfterIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleMaxAttempts = 1;
+            opts.Rules.When<Actor>()
+                .Update("describe", (actor, _, _) =>
+                {
+                    actor.DisplayName = "half done";   // on its copy
+                    throw new InvalidOperationException("the model is down");
+                })
+                .Then("notify", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
+
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["Alice"], seen);
+        Assert.Equal("Alice", (await db.GetAsync<Actor>("alice", ct))!.DisplayName);
+        Assert.Equal(1, (await StatusOf<Actor>(db, "Actor/describe", ct)).Poisoned);
+    }
+
+    [Fact]
+    public async Task UpdateRules_FollowOneAnother_EachRunningWhenItsInputsChange()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>(a => Changed(a.Counter))
+                .Update("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
+            opts.Rules.When<Actor>(a => Changed(a.DisplayName))
+                .Update("avatar", (actor, _, _) => { ran.Add("avatar"); actor.AvatarUrl = $"{actor.DisplayName}.png"; return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        // A new object: everything about it is a change, so one message lists both rules.
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        var alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(("#1", "#1.png"), (alice!.DisplayName, alice.AvatarUrl));
+
+        // Only the counter changes: "describe" is queued, and its write, which changes the name, queues "avatar".
+        ran.Clear();
+        alice.Counter = 2;
+        await db.SaveAsync(alice, ct);
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["describe", "avatar"], ran);
+        alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(("#2", "#2.png"), (alice!.DisplayName, alice.AvatarUrl));
+
+        // A change to neither input queues nothing.
+        alice.Domain = "example.org";
+        await db.SaveAsync(alice, ct);
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+    }
+
+    [Fact]
+    public async Task Update_WhenTheObjectWasSavedMeanwhile_AppliesWhatItSetToTheNewerVersion_IfItsInputsAreTheSame()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            {
+                runs++;
+                await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "set elsewhere"; return a; }, token));
+                actor.DisplayName = $"#{actor.Counter}";
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+
+        // Both changes are there, and the handler was not called a second time to get them there.
+        var alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(("#1", "set elsewhere", 1), (alice!.DisplayName, alice.AvatarUrl, runs));
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+    }
+
+    [Fact]
+    public async Task Update_WhenItsInputsChangedMeanwhile_DropsItsResult_AndTheSaveThatChangedThemQueuedAFreshRun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            {
+                if (++runs > 1)
+                    return;   // the fresh run: leaves the object alone, so what is stored shows what the first run did
+                await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.Counter = 2; return a; }, token));
+                actor.DisplayName = "made for counter 1";
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+
+        var alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(("", 2, 2), (alice!.DisplayName, alice.Counter, runs));
+    }
+
+    [Fact]
+    public async Task Update_WithoutNamedInputs_DropsItsResult_WhenTheObjectWasSavedMeanwhile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Update("describe", async (actor, context, token) =>
+            {
+                if (++runs > 1)
+                    return;
+                await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "set elsewhere"; return a; }, token));
+                actor.DisplayName = "made for the older version";
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        // The save from elsewhere queued the rule again, as any save does.
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+
+        var alice = await db.GetAsync<Actor>("alice", ct);
+        Assert.Equal(("", "set elsewhere"), (alice!.DisplayName, alice.AvatarUrl));
+    }
+
+    [Fact]
+    public async Task Update_WhenSomeoneElseSetTheSameProperty_LetsTheirsStand()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            {
+                await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "theirs"; return a; }, token));
+                actor.DisplayName = "the rule's";
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+
+        Assert.Equal("theirs", (await db.GetAsync<Actor>("alice", ct))!.DisplayName);
+        Assert.Null((await StatusOf<Actor>(db, "Actor/describe", ct)).LastError);   // dropping a result is no failure
+    }
+
+    // === Changed ===
+
+    [Fact]
+    public async Task Changed_QueuesTheRule_OnlyForASaveThatChangesTheValue_OnEverySavePath()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Actor>(a => Changed(a.DisplayName)).Then("renamed", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        // A new object counts as changed.
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "A" }, ct);
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
+
+        // Loaded, and saved with something else changed: not for this rule.
+        var loaded = await db.GetAsync<Actor>("alice", ct);
+        loaded!.Counter = 5;
+        await db.SaveAsync(loaded, ct);
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
+        loaded.DisplayName = "B";
+        await db.SaveAsync(loaded, ct);
+        Assert.Equal(2, await WaitingOf<Actor>(db, ct));
+
+        // Saved without having been loaded: compared with what is stored.
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "B", Counter = 9 }, ct);
+        Assert.Equal(2, await WaitingOf<Actor>(db, ct));
+        await db.SaveAsync(new Actor { Username = "alice", DisplayName = "C" }, ct);
+        Assert.Equal(3, await WaitingOf<Actor>(db, ct));
+
+        await db.ChangeAsync<Actor>("alice", a => { a.Counter++; return a; }, ct);
+        Assert.Equal(3, await WaitingOf<Actor>(db, ct));
+        await db.ChangeAsync<Actor>("alice", a => { a.DisplayName = "D"; return a; }, ct);
+        Assert.Equal(4, await WaitingOf<Actor>(db, ct));
+
+        await db.SaveManyAsync(new[] { new Actor { Username = "alice", DisplayName = "D", Counter = 7 } }, ct);
+        Assert.Equal(4, await WaitingOf<Actor>(db, ct));
+        await db.SaveManyAsync(new[] { new Actor { Username = "alice", DisplayName = "E" } }, ct);
+        Assert.Equal(5, await WaitingOf<Actor>(db, ct));
+
+        Assert.Equal(5, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["E", "E", "E", "E", "E"], seen);
+    }
+
+    [Fact]
+    public async Task Changed_WorksInAnInlineRule_AlongsideOtherConditions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fired = new List<int>();
+        var db = await CreateDbAsync(opts =>
+            opts.Rules.When<Actor>(a => Changed(a.Counter) && a.Counter > 1).Do((actor, _, _) => { fired.Add(actor.Counter); return Task.CompletedTask; }),
+            cancellationToken: ct);
+
+        var alice = new Actor { Username = "alice", Counter = 1 };
+        await db.SaveAsync(alice, ct);          // changed, but not more than 1
+        alice.Counter = 2;
+        await db.SaveAsync(alice, ct);          // fires
+        alice.DisplayName = "Alice";
+        await db.SaveAsync(alice, ct);          // more than 1, but not changed
+        await db.ChangeAsync<Actor>("alice", a => { a.Counter = 3; return a; }, ct);   // fires
+
+        Assert.Equal([2, 3], fired);
+    }
+
+    [Fact]
+    public async Task Changed_WorksInARuleAddedToTheOpenDatabase()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fired = new List<int>();
+        var db = await CreateDbAsync(cancellationToken: ct);
+        using var rule = db.Rules.When<Actor>(a => Changed(a.Counter)).Do((actor, _, _) => { fired.Add(actor.Counter); return Task.CompletedTask; });
+
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);                          // new
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 1, DisplayName = "Alice" }, ct);   // not loaded: compared with what is stored
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 2, DisplayName = "Alice" }, ct);
+
+        Assert.Equal([1, 2], fired);
+    }
+
+    [Fact]
+    public async Task Changed_IsTakenToBeTrue_WhenTheRunComesUp_AndTheRestOfTheFilterIsCheckedAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Actor>(a => Changed(a.DisplayName) && a.Counter > 0).Then("named", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        // Queued, then saved so that the rest of the filter is false: skipped when its run comes up.
+        var alice = new Actor { Username = "alice", DisplayName = "A", Counter = 1 };
+        await db.SaveAsync(alice, ct);
+        alice.Counter = 0;
+        await db.SaveAsync(alice, ct);
+        // Queued, then saved with the name as it was: at its run nothing has "changed", and it runs all the same.
+        var bob = new Actor { Username = "bob", DisplayName = "B", Counter = 1 };
+        await db.SaveAsync(bob, ct);
+        bob.Counter = 2;
+        await db.SaveAsync(bob, ct);
+        Assert.Equal(2, await WaitingOf<Actor>(db, ct));
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["bob"], seen);
     }
 
     // === Failure ===
@@ -276,15 +630,42 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask).Retry(5, TimeSpan.Zero);
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Actor>().Then("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask);
         }, cancellationToken: ct);
 
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
-        Assert.Empty(saved.Errors);   // a handler's failure is not the save's
+        Assert.Empty(saved.Errors);   // a rule's failure is not the save's
 
         Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
-        var status = await StatusOf(db, "flaky", ct);
-        Assert.Equal((0, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+        Assert.Equal((0, 0, null), await StatusOf<Actor>(db, "Actor/flaky", ct));
+    }
+
+    [Fact]
+    public async Task ARuleThatFails_IsRetriedByItself_WhileTheOthersOfItsMessageAreDone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Actor>()
+                .Then("before", (_, _, _) => { ran.Add("before"); return Task.CompletedTask; })
+                .Then("flaky", (_, context, _) =>
+                {
+                    ran.Add($"flaky {context.Attempt}");
+                    return context.Attempt < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask;
+                })
+                .Then("after", (_, _, _) => { ran.Add("after"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        Assert.Equal(5, await db.DrainAsync(cancellationToken: ct));
+        // The failure held nothing back, and the rules that were done were not done again.
+        Assert.Equal(["before", "flaky 1", "after", "flaky 2", "flaky 3"], ran);
+        Assert.Equal(0, await WaitingOf<Actor>(db, ct));
     }
 
     [Fact]
@@ -296,26 +677,65 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("broken", (_, _, _) =>
+            opts.RuleMaxAttempts = 3;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Actor>().Then("broken", (_, _, _) =>
             {
                 runs++;
                 return broken ? throw new InvalidOperationException("the model is down") : Task.CompletedTask;
-            }).Retry(3, TimeSpan.Zero);
+            });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
         Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
-        var status = await StatusOf(db, "broken", ct);
+        var status = await StatusOf<Actor>(db, "Actor/broken", ct);
         Assert.Equal((0, 1), (status.Waiting, status.Poisoned));
         Assert.Contains("the model is down", status.LastError);
+        Assert.Equal(1, Assert.Single((await db.Rules.StatusAsync(ct)).Types).Poisoned);
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // set aside means left alone
 
         broken = false;
-        Assert.Equal(1, await db.RetryPoisonedAsync("broken", ct));
+        Assert.Equal(1, await db.Rules.RetryAsync("broken", ct));   // by its name alone, as only one rule has it
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        status = await StatusOf(db, "broken", ct);
-        Assert.Equal((0, 0, null, 4), (status.Waiting, status.Poisoned, status.LastError, runs));
+        Assert.Equal((0, 0, null), await StatusOf<Actor>(db, "Actor/broken", ct));
+        Assert.Equal(4, runs);
+    }
+
+    [Fact]
+    public async Task ARuleSetAside_DoesNotTakeTheOtherRulesOfItsMessageWithIt_AndItsWorkCanBeDiscarded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleMaxAttempts = 2;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Actor>()
+                .Then("broken", (_, _, _) => { ran.Add("broken"); throw new InvalidOperationException("never works"); })
+                .Then("flaky", (_, context, _) =>
+                {
+                    ran.Add("flaky");
+                    return context.Attempt < 2 ? throw new InvalidOperationException("not yet") : Task.CompletedTask;
+                })
+                .Then("fine", (_, _, _) => { ran.Add("fine"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        Assert.Equal(5, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["broken", "flaky", "fine", "broken", "flaky"], ran);
+        var status = await db.Rules.StatusAsync(ct);
+        Assert.Equal([("Actor/broken", 1), ("Actor/flaky", 0), ("Actor/fine", 0)], status.Rules.Select(r => (r.Rule, r.Poisoned)));
+        Assert.Equal((0, 1), (status.Types[0].Waiting, status.Types[0].Poisoned));
+
+        Assert.Equal(0, await db.Rules.DiscardAsync("Actor/fine", ct));   // nothing of that rule's is set aside
+        Assert.Equal(1, await db.Rules.DiscardAsync("Actor/broken", ct));
+        status = await db.Rules.StatusAsync(ct);
+        Assert.Equal((0, 0), (status.Rules[0].Poisoned, status.Types[0].Poisoned));
+        Assert.Equal(0, await db.Rules.RetryAsync("Actor/broken", ct));
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
 
     [Fact]
@@ -325,14 +745,39 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("slow-retry", (_, _, _) => throw new InvalidOperationException("no")).Retry(5, TimeSpan.FromMinutes(1));
+            opts.RuleRetryDelay = TimeSpan.FromMinutes(1);
+            opts.Rules.When<Actor>().Then("slow-retry", (_, _, _) => throw new InvalidOperationException("no"));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // one attempt; the next is a minute away
-        var status = await StatusOf(db, "slow-retry", ct);
+        var status = await StatusOf<Actor>(db, "Actor/slow-retry", ct);
         Assert.Equal((1, 0), (status.Waiting, status.Poisoned));
+    }
+
+    [Fact]
+    public async Task TheAttemptsAndTheDelay_AreTheDatabases()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleMaxAttempts = 2;
+            opts.RuleRetryDelay = TimeSpan.FromSeconds(1);
+            opts.Rules.When<Actor>().Then("fails", (_, _, _) => { runs++; throw new InvalidOperationException("no"); });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // the second attempt is a second away
+        var status = await StatusOf<Actor>(db, "Actor/fails", ct);
+        Assert.Equal((1, 0), (status.Waiting, status.Poisoned));
+        await Task.Delay(1500, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // two attempts allowed: set aside
+        status = await StatusOf<Actor>(db, "Actor/fails", ct);
+        Assert.Equal((0, 1, 2), (status.Waiting, status.Poisoned, runs));
     }
 
     [Fact]
@@ -342,7 +787,9 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("stuck", (_, _, token) => Task.Delay(Timeout.Infinite, token)).Retry(1, TimeSpan.FromSeconds(2)).Timeout(TimeSpan.FromMilliseconds(200));
+            opts.RuleMaxAttempts = 1;
+            opts.RuleTimeout = TimeSpan.FromMilliseconds(200);
+            opts.Rules.When<Actor>().Then("stuck", (_, _, token) => Task.Delay(Timeout.Infinite, token));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -350,7 +797,9 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var timer = System.Diagnostics.Stopwatch.StartNew();
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.True(timer.Elapsed < TimeSpan.FromSeconds(60), $"the run was stopped after {timer.Elapsed}, not its 200 ms timeout");
-        Assert.Equal(1, (await StatusOf(db, "stuck", ct)).Poisoned);
+        var status = await StatusOf<Actor>(db, "Actor/stuck", ct);
+        Assert.Equal(1, status.Poisoned);
+        Assert.Contains("stopped after", status.LastError);
     }
 
     [Fact]
@@ -361,20 +810,21 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
+            opts.RuleMaxAttempts = 1;
+            opts.RuleRetryDelay = TimeSpan.FromSeconds(1);
             // What a handler's own save throws while another process holds the database's write lock.
-            opts.Rules.When<Actor>().Queue("blocked", (_, _, _) =>
-                ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask).Retry(1, TimeSpan.FromSeconds(1));
+            opts.Rules.When<Actor>().Then("blocked", (_, _, _) =>
+                ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
-        // Once given back with no wait, the message was run again at once, so a drain with no
-        // limit never returned; the limit here only turns that into a failure instead of a hang.
+        // Given back with no wait, the message would be run again at once, and a drain with no
+        // limit would never return; the limit here only turns that into a failure instead of a hang.
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
         limit.CancelAfter(TimeSpan.FromSeconds(20));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: limit.Token));
-        var status = await StatusOf(db, "blocked", ct);
-        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));   // MaxAttempts is 1: a counted failure would be set aside
+        Assert.Equal((1, 0, null), await StatusOf<Actor>(db, "Actor/blocked", ct));   // one attempt allowed: a counted failure would be set aside
 
         // Run again after the retry delay; the second time the wait is twice as long.
         await Task.Delay(1500, ct);
@@ -383,8 +833,28 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await Task.Delay(2500, ct);
         Assert.Equal(1, await db.DrainAsync(cancellationToken: limit.Token));
 
-        status = await StatusOf(db, "blocked", ct);
+        var status = await StatusOf<Actor>(db, "Actor/blocked", ct);
         Assert.Equal((0, 0, 3), (status.Waiting, status.Poisoned, runs));
+    }
+
+    [Fact]
+    public async Task AMessageThatCannotBeRead_IsSetAside_NotRunOrLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runs = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+        }, cancellationToken: ct);
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+
+        await QueuesOf<Actor>(db.DatabaseId).Queue.SendMessageAsync("not one of ours", ct);
+
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+        var type = Assert.Single((await db.Rules.StatusAsync(ct)).Types);
+        Assert.Equal((0, 1, 1), (type.Waiting, type.Poisoned, runs));
     }
 
     // === Loops ===
@@ -396,8 +866,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("increment", (actor, db, token) =>
-                db.ChangeAsync<Actor>(actor.Username, a => { a.Counter++; return a; }, token)).EverySave();
+            opts.Rules.When<Actor>().Then("increment", (actor, context, token) =>
+                context.Db.ChangeAsync<Actor>(actor.Username, a => { a.Counter++; return a; }, token));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -408,33 +878,34 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task AHandlersSave_QueuesOnlyLowerPriorities_SoHandlersCannotCircle()
+    public async Task AHandlersSaveOfItsObject_GivesTheRulesStillToComeTheNewObject_AndQueuesTheOnesAlreadyDone()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("describe", async (actor, db, token) =>
+            opts.Rules.When<Actor>().Then("describe", async (actor, context, token) =>
             {
                 ran.Add("describe");
-                await db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "described"; return a; }, token);
-            }).Priority(10);
-            opts.Rules.When<Actor>().Queue("tag", async (actor, db, token) =>
+                await context.Db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "described"; return a; }, token);
+            });
+            opts.Rules.When<Actor>().Then("tag", async (actor, context, token) =>
             {
                 ran.Add($"tag sees {actor.DisplayName}");
-                await db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "tagged"; return a; }, token);
-            }).Priority(1);
+                await context.Db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "tagged"; return a; }, token);
+            });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await db.DrainAsync(cancellationToken: ct);
 
-        // "tag" was queued by the first save and again by describe's change; being "latest" it ran once, after describe.
-        // Its own change did not send the work back up to "describe".
-        Assert.Equal(["describe", "tag sees described"], ran);
+        // describe's change queued nothing: "tag" was still to come in the same run, and was given the changed object.
+        // tag's change queued "describe" again, which had already run; that run changed nothing, and there it ends.
+        Assert.Equal(["describe", "tag sees described", "describe"], ran);
         var alice = await db.GetAsync<Actor>("alice", ct);
         Assert.Equal(("described", "tagged"), (alice!.DisplayName, alice.AvatarUrl));
+        Assert.Equal(0, await WaitingOf<Actor>(db, ct));
     }
 
     [Fact]
@@ -447,7 +918,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Actor>().Do((_, _, _) => { inline++; return Task.CompletedTask; });
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -460,15 +931,15 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.Equal(1, inline);
         Assert.Equal(before!.GetETag(), (await db.GetAsync<Actor>("alice", ct))!.GetETag());
 
-        // Saving an object exactly as it was loaded: the save happens, but there is nothing new to handle.
-        await db.SaveAsync(before, ct);
+        // Saving an object exactly as it was loaded: the save happens, but there is nothing new to do.
+        await db.SaveAsync(before!, ct);
 
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(1, runs);
     }
 
     [Fact]
-    public async Task AChainOfHandlersLongerThanAllowed_IsSetAsideWhereItCanBeSeen()
+    public async Task AChainOfRulesLongerThanAllowed_IsSetAsideWhereItCanBeSeen()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
@@ -476,24 +947,24 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxQueueHops = 1;
-            opts.Rules.When<Note>().Queue("first", async (note, db, token) =>
+            opts.Rules.When<Note>().Then("first", async (note, context, token) =>
             {
                 ran.Add("first");
-                await db.SaveAsync(new Actor { Username = note.NoteId }, token);
-            }).Priority(30);
-            opts.Rules.When<Actor>().Queue("second", async (actor, db, token) =>
+                await context.Db.SaveAsync(new Actor { Username = note.NoteId }, token);
+            });
+            opts.Rules.When<Actor>().Then("second", async (actor, context, token) =>
             {
                 ran.Add("second");
-                await db.SaveAsync(new Person { Id = actor.Username }, token);
-            }).Priority(20);
-            opts.Rules.When<Person>().Queue("third", (_, _, _) => { ran.Add("third"); return Task.CompletedTask; }).Priority(10);
+                await context.Db.SaveAsync(new Person { Id = actor.Username }, token);
+            });
+            opts.Rules.When<Person>().Then("third", (_, _, _) => { ran.Add("third"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1" }, ct);
         await db.DrainAsync(cancellationToken: ct);
 
         Assert.Equal(["first", "second"], ran);
-        var third = await StatusOf(db, "third", ct);
+        var third = await StatusOf<Person>(db, "Person/third", ct);
         Assert.Equal((0, 1), (third.Waiting, third.Poisoned));
     }
 
@@ -507,49 +978,129 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("nested", async (_, db, token) =>
+            opts.Rules.When<Actor>().Then("nested", async (_, context, token) =>
             {
                 try
                 {
-                    await db.DrainAsync(cancellationToken: token);
+                    await context.Db.DrainAsync(cancellationToken: token);
                 }
                 catch (Exception e)
                 {
                     fromHandler = e;
                 }
-            }).EverySave();
+            });
         }, cancellationToken: ct);
 
         foreach (var name in new[] { "a", "b", "c" })
             await db.SaveAsync(new Actor { Username = name }, ct);
 
         Assert.Equal(2, await db.DrainAsync(max: 2, cancellationToken: ct));
-        Assert.Equal(1, (await StatusOf(db, "nested", ct)).Waiting);
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.IsType<InvalidOperationException>(fromHandler);
     }
 
     [Fact]
-    public async Task APausedHandler_IsLeftAlone_UntilItIsResumed()
+    public async Task Drain_WithALimit_CanStopPartWayThroughAnObjectsRules_AndTheRestStayReady()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("held", (_, _, _) => { ran.Add("held"); return Task.CompletedTask; }).Priority(10);
-            opts.Rules.When<Actor>().Queue("free", (_, _, _) => { ran.Add("free"); return Task.CompletedTask; }).Priority(1);
+            foreach (var name in new[] { "one", "two", "three" })
+                opts.Rules.When<Actor>().Then(name, (_, _, _) => { ran.Add(name); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
-        db.PauseQueue("held");
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
 
+        Assert.Equal(2, await db.DrainAsync(max: 2, cancellationToken: ct));
+        Assert.Equal(["one", "two"], ran);
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.True((await StatusOf(db, "held", ct)).Paused);
-        db.ResumeQueue("held");
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["free", "held"], ran);
-        Assert.Throws<ArgumentException>(() => db.PauseQueue("no-such-handler"));
+        Assert.Equal(["one", "two", "three"], ran);
+    }
+
+    [Fact]
+    public async Task TwoRunsForOneObject_NeverOverlap()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var inside = 0;
+        var overlaps = 0;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 4;
+            opts.Rules.When<Actor>().Then("slow", async (_, _, token) =>
+            {
+                if (Interlocked.Increment(ref inside) > 1)
+                    Interlocked.Increment(ref overlaps);
+                await Task.Delay(50, token);
+                Interlocked.Decrement(ref inside);
+            });
+        }, cancellationToken: ct);
+
+        // Four messages for one object, and room to run four at once.
+        for (var n = 1; n <= 4; n++)
+            await db.SaveAsync(new Actor { Username = "alice", Counter = n }, ct);
+
+        Assert.Equal(4, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(0, overlaps);
+    }
+
+    [Fact]
+    public async Task MaxConcurrency_RunsThatManyObjectsAtOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var inside = 0;
+        var together = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 2;
+            opts.RuleMaxAttempts = 1;
+            // Each run waits for the other to have started: one at a time, neither would finish.
+            opts.Rules.When<Actor>().Then("meet", async (_, _, token) =>
+            {
+                if (Interlocked.Increment(ref inside) == 2)
+                    together.TrySetResult();
+                await together.Task.WaitAsync(TimeSpan.FromSeconds(20), token);
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        await db.SaveAsync(new Actor { Username = "bob" }, ct);
+
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal((0, 0, null), await StatusOf<Actor>(db, "Actor/meet", ct));
+    }
+
+    [Fact]
+    public async Task Status_ShowsARunInProgress()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Then("slow", async (_, _, token) =>
+            {
+                started.TrySetResult();
+                await release.Task.WaitAsync(token);
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        var drain = db.DrainAsync(cancellationToken: ct);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
+
+        var during = Assert.Single((await db.Rules.StatusAsync(ct)).Rules);
+        Assert.Equal(("Actor/slow", 1, false), (during.Rule, during.Running, during.Orphaned));
+
+        release.SetResult();
+        Assert.Equal(1, await drain.WaitAsync(TimeSpan.FromSeconds(20), ct));
+        Assert.Equal(0, Assert.Single((await db.Rules.StatusAsync(ct)).Rules).Running);
     }
 
     [Fact]
@@ -561,7 +1112,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
+            opts.RuleMaxAttempts = 1;   // a counted failure would be set aside
+            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try
@@ -573,21 +1125,20 @@ public abstract class QueuedRuleTestBase : LottaTestBase
                     cancelled.TrySetResult();
                     throw;
                 }
-            }).Retry(1, TimeSpan.FromSeconds(2));   // a counted failure would be set aside
+            });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         var drain = db.DrainAsync(cancellationToken: ct);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
 
-        // Before, a drain's run had only the drain's token, which closing the database did not cancel.
+        // A drain's run must stop when the database closes, not only when the drain's own token is cancelled.
         db.Dispose();
 
         await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain);
         // The queues belong to the catalog, which is still open.
-        var status = await StatusOf(db, "long", ct);
-        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+        Assert.Equal((1, 0, null), await StatusOf<Actor>(db, "Actor/long", ct));
     }
 
     [Fact]
@@ -598,11 +1149,12 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
+            opts.RuleMaxAttempts = 1;
+            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
-            }).Retry(1, TimeSpan.FromSeconds(2));
+            });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -610,10 +1162,9 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await started.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
         db.Dispose();
 
-        // Before, a drain whose interrupted run was its last returned 1, as if that run had been done.
+        // An interrupted run is no run: the drain must not return 1 as if it had been done.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain.WaitAsync(TimeSpan.FromSeconds(20), ct));
-        var status = await StatusOf(db, "long", ct);
-        Assert.Equal((1, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+        Assert.Equal((1, 0, null), await StatusOf<Actor>(db, "Actor/long", ct));
     }
 
     // === Filter ===
@@ -630,15 +1181,40 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; }).EverySave();
+                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "short", Content = "hi" }, ct);
         await db.SaveAsync(new Note { NoteId = "long", Content = "a longer note" }, ct);
 
-        Assert.Equal(1, (await StatusOf(db, "long-notes", ct)).Waiting);   // only the long one was queued
+        Assert.Equal(1, await WaitingOf<Note>(db, ct));   // only the long one was queued
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(["long"], ran);
+    }
+
+    [Fact]
+    public async Task When_SeveralRulesWithFilters_OneMessageListsOnlyTheRulesTheSaveMatched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Note>(note => note.Content.Length > 5)
+                .Then("long-notes", (note, _, _) => { ran.Add($"long:{note.NoteId}"); return Task.CompletedTask; });
+            opts.Rules.When<Note>(note => note.AuthorId == "alice")
+                .Then("by-alice", (note, _, _) => { ran.Add($"alice:{note.NoteId}"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "a longer note", AuthorId = "bob" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n2", Content = "hi", AuthorId = "alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n3", Content = "a longer note", AuthorId = "alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n4", Content = "hi", AuthorId = "bob" }, ct);
+
+        Assert.Equal(3, await WaitingOf<Note>(db, ct));
+        Assert.Equal(4, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["long:n1", "alice:n2", "long:n3", "alice:n3"], ran);
     }
 
     [Fact]
@@ -650,7 +1226,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "a longer note" }, ct);   // queued
@@ -658,8 +1234,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
 
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
         Assert.Empty(ran);
-        var status = await StatusOf(db, "long-notes", ct);
-        Assert.Equal((0, 0, null), (status.Waiting, status.Poisoned, status.LastError));
+        Assert.Equal((0, 0, null), await StatusOf<Note>(db, "Note/long-notes", ct));
     }
 
     [Fact]
@@ -670,18 +1245,22 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => Picky(note))
-                .Queue("picky", (_, _, _) => Task.CompletedTask);
+                .Then("picky", (_, _, _) => Task.CompletedTask);
         }, cancellationToken: ct);
 
         var result = await db.SaveAsync(new Note { NoteId = "n1", Content = "boom" }, ct);
 
-        Assert.Contains("bad filter", Assert.Single(result.Errors).Message);
+        var error = Assert.Single(result.Errors);
+        Assert.Contains("bad filter", error.Message);
+        Assert.Contains("Note/picky", error.Message);
         Assert.NotNull(await db.GetAsync<Note>("n1", ct));
-        Assert.Equal(0, (await StatusOf(db, "picky", ct)).Waiting);
+        Assert.Equal(0, await WaitingOf<Note>(db, ct));
     }
 
+    // === Backfill ===
+
     [Fact]
-    public async Task When_Requeue_QueuesOnlyTheObjectsTheFilterIsTrueFor()
+    public async Task Backfill_QueuesOnlyTheObjectsTheFilterIsTrueFor()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new ConcurrentBag<string>();
@@ -689,7 +1268,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Queue("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "a", Content = "a longer note" }, ct);
@@ -698,77 +1277,103 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await db.DrainAsync(cancellationToken: ct);
         ran.Clear();
 
-        Assert.Equal(2, await db.RequeueAsync("long-notes", ct));
+        Assert.Equal(2, await db.Rules.BackfillAsync("long-notes", ct));
         Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(["a", "c"], ran.Order());
     }
 
-    /// <summary>A queued rule for notes with <paramref name="filter"/>, the notes saved and drained, then a requeue: which notes ran, and how they were found.</summary>
-    private async Task<(int Queued, List<string> Ran, string? Path)> RequeueWithAsync(
+    /// <summary>A queued rule for notes with <paramref name="filter"/>, the notes saved and drained, then a backfill: which notes ran, and how they were found.</summary>
+    private async Task<(int Queued, List<string> Ran, string? Path)> BackfillWithAsync(
         System.Linq.Expressions.Expression<Func<Note, bool>> filter, Note[] notes, CancellationToken ct, string testName)
     {
         var ran = new ConcurrentBag<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>(filter).Queue("redo", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+            opts.Rules.When<Note>(filter).Then("redo", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct, testName: testName);
         await db.SaveManyAsync(notes, ct);
         await db.DrainAsync(cancellationToken: ct);
         db.ReloadSearcher();
         ran.Clear();
 
-        var queued = await db.RequeueAsync("redo", ct);
+        var queued = await db.Rules.BackfillAsync("Note/redo", ct);
         await db.DrainAsync(cancellationToken: ct);
-        return (queued, [.. ran.Order()], db.LastRequeuePath);
+        return (queued, [.. ran.Order()], db.LastBackfillPath);
     }
 
     [Fact]
-    public async Task Requeue_WithAFilterTheIndexCanAnswer_UsesTheIndex()
+    public async Task Backfill_WithAFilterTheIndexCanAnswer_UsesTheIndex()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (queued, ran, path) = await RequeueWithAsync(n => n.AuthorId == "alice",
+        var (queued, ran, path) = await BackfillWithAsync(n => n.AuthorId == "alice",
             [new Note { NoteId = "a1", AuthorId = "alice" }, new Note { NoteId = "b1", AuthorId = "bob" }, new Note { NoteId = "a2", AuthorId = "alice" }],
-            ct, nameof(Requeue_WithAFilterTheIndexCanAnswer_UsesTheIndex));
+            ct, nameof(Backfill_WithAFilterTheIndexCanAnswer_UsesTheIndex));
 
         Assert.Equal((2, "index"), (queued, path));
         Assert.Equal(["a1", "a2"], ran);
     }
 
     [Fact]
-    public async Task Requeue_WithAFilterComparingTwoFields_ReadsEveryObject()
+    public async Task Backfill_WithAFilterComparingTwoFields_ReadsEveryObject()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (queued, ran, path) = await RequeueWithAsync(n => n.AuthorId == n.Domain,
+        var (queued, ran, path) = await BackfillWithAsync(n => n.AuthorId == n.Domain,
             [new Note { NoteId = "same", AuthorId = "x", Domain = "x" }, new Note { NoteId = "differ", AuthorId = "x", Domain = "y" }],
-            ct, nameof(Requeue_WithAFilterComparingTwoFields_ReadsEveryObject));
+            ct, nameof(Backfill_WithAFilterComparingTwoFields_ReadsEveryObject));
 
         Assert.Equal((1, "scan"), (queued, path));
         Assert.Equal(["same"], ran);
     }
 
     [Fact]
-    public async Task Requeue_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches()
+    public async Task Backfill_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches()
     {
         var ct = TestContext.Current.CancellationToken;
         // Content is analyzed: the index matches the word "hello" in any note that has it.
-        var (queued, ran, path) = await RequeueWithAsync(n => n.Content == "hello",
+        var (queued, ran, path) = await BackfillWithAsync(n => n.Content == "hello",
             [new Note { NoteId = "exact", Content = "hello" }, new Note { NoteId = "longer", Content = "hello world" }, new Note { NoteId = "other", Content = "bye" }],
-            ct, nameof(Requeue_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches));
+            ct, nameof(Backfill_WhenTheIndexFindsMoreThanTheFilterIsTrueFor_QueuesOnlyTrueMatches));
 
         Assert.Equal((1, "index"), (queued, path));
         Assert.Equal(["exact"], ran);
     }
 
     [Fact]
-    public async Task Requeue_QueuesTheHandlerForEveryStoredObjectOfItsType()
+    public async Task Backfill_TakesChangedToBeTrue_AndAsksTheIndexForTheRest()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (queued, ran, path) = await BackfillWithAsync(n => Changed(n.Content) && n.AuthorId == "alice",
+            [new Note { NoteId = "a1", AuthorId = "alice" }, new Note { NoteId = "b1", AuthorId = "bob" }],
+            ct, nameof(Backfill_TakesChangedToBeTrue_AndAsksTheIndexForTheRest));
+
+        Assert.Equal((1, "index"), (queued, path));
+        Assert.Equal(["a1"], ran);
+    }
+
+    [Fact]
+    public async Task Backfill_OfARuleForChangesOnly_QueuesEveryObject()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (queued, ran, _) = await BackfillWithAsync(n => Changed(n.Content),
+            [new Note { NoteId = "a1" }, new Note { NoteId = "b1" }],
+            ct, nameof(Backfill_OfARuleForChangesOnly_QueuesEveryObject));
+
+        Assert.Equal(2, queued);
+        Assert.Equal(["a1", "b1"], ran);
+    }
+
+    [Fact]
+    public async Task Backfill_QueuesTheRuleForEveryStoredObjectOfItsType_AndOnlyThatRule()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new ConcurrentBag<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("redo", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Actor>()
+                .Then("redo", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; })
+                .Then("other", (actor, _, _) => { ran.Add($"other:{actor.Username}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var name in new[] { "a", "b", "c" })
@@ -777,7 +1382,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await db.DrainAsync(cancellationToken: ct);
         ran.Clear();
 
-        Assert.Equal(3, await db.RequeueAsync("redo", ct));
+        Assert.Equal(3, await db.Rules.BackfillAsync("redo", ct));
         Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(["a", "b", "c"], ran.Order());
     }
@@ -790,16 +1395,16 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; }).EverySave();
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await db.SaveAsync(new Actor { Username = "bob" }, ct);
-        Assert.Equal(2, (await StatusOf(db, "count", ct)).Waiting);
+        Assert.Equal(2, await WaitingOf<Actor>(db, ct));
 
         await db.ResetDatabaseAsync(ct);
 
-        Assert.Equal(0, (await StatusOf(db, "count", ct)).Waiting);
+        Assert.Equal(0, await WaitingOf<Actor>(db, ct));
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(0, runs);
     }
@@ -807,7 +1412,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     // === Opening ===
 
     [Fact]
-    public async Task AnOpenThatFails_KeepsNothing_SoTheNextOpenStartsTheHandlers()
+    public async Task AnOpenThatFails_KeepsNothing_SoTheNextOpenRunsTheRules()
     {
         var ct = TestContext.Current.CancellationToken;
         var runs = 0;
@@ -816,17 +1421,17 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         void Configure(ILottaConfiguration opts)
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
-        // Fails while starting the handlers, the last step of opening.
+        // Fails while looking for the rules' queues, the last step of opening.
         await Assert.ThrowsAsync<RequestFailedException>(() => CreateDbAsync(Configure, cancellationToken: ct));
 
-        // Before, the half-open database was kept and handed out again: its saves queued nothing and said nothing.
+        // A half-open database kept and handed out again would save, queue nothing and say nothing.
         var db = await CreateDbAsync(Configure, cancellationToken: ct);
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
         Assert.Empty(saved.Errors);
-        Assert.Single(await db.GetQueueStatusAsync(ct));
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(1, runs);
     }
@@ -839,13 +1444,13 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
         }, ct);
 
         var both = await Task.WhenAll(Open(), Open());
         Assert.Same(both[0], both[1]);
         Assert.Same(both[0], await Open());
-        Assert.Single(await both[0].GetQueueStatusAsync(ct));
+        Assert.Single((await both[0].Rules.StatusAsync(ct)).Rules);
     }
 
     [Fact]
@@ -857,19 +1462,19 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
         }
         using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var gaveUp = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         var a = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, first.Token), ct);
         await hold.Reached.WaitAsync(TimeSpan.FromSeconds(20), ct);
-        // Each on its own thread: before, joining an open could block until it finished.
+        // Each on its own thread, so that joining an open cannot block the test until it finishes.
         var b = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, ct), ct);
         var c = Task.Run(() => Catalog.GetDatabaseAsync("shared", Configure, gaveUp.Token), ct);
 
-        // Before, everyone waited on the open under the token of the caller who started it: one
-        // who gave up waited on regardless, and the starter giving up failed the open for all.
+        // Each caller waits with its own token: one who gives up stops waiting, and the starter
+        // giving up does not fail the open for the others.
         gaveUp.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => c.WaitAsync(TimeSpan.FromSeconds(20), ct));
         first.Cancel();
@@ -881,7 +1486,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.Same(db, await Catalog.GetDatabaseAsync("shared", Configure, ct));
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
         Assert.Empty(saved.Errors);
-        Assert.Single(await db.GetQueueStatusAsync(ct));
+        Assert.Equal(1, await WaitingOf<Actor>(db, ct));
     }
 
     [Fact]
@@ -889,11 +1494,11 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     {
         var ct = TestContext.Current.CancellationToken;
         using var hold = new OpenHold(Catalog);
-        // Auto, so a database kept would have its pump running handlers.
+        // Auto, so a database kept would have its rules running.
         static void Configure(ILottaConfiguration opts)
         {
             opts.Store<Actor>();
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("closing", Configure, ct), ct);
@@ -901,8 +1506,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Catalog.Dispose();
         hold.Release();
 
-        // Before, the open went on to keep the database in the disposed catalog and hand it out
-        // live, its handlers running and its index open, with nothing left to dispose it.
+        // The open must not go on to keep the database in the disposed catalog and hand it out
+        // live, its rules running and its index open, with nothing left to dispose it.
         await Assert.ThrowsAsync<ObjectDisposedException>(() => opening.WaitAsync(TimeSpan.FromSeconds(20), ct));
         await Assert.ThrowsAsync<ObjectDisposedException>(() => Catalog.GetDatabaseAsync("closing", Configure, ct));
     }
@@ -917,7 +1522,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("deleted", Configure, ct), ct);
@@ -927,7 +1532,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         hold.Release();
         await deleting.WaitAsync(TimeSpan.FromSeconds(20), ct);
 
-        // Before, the open kept a database whose manifest the deletion had removed.
+        // The open must not keep a database whose manifest the deletion removed.
         await Assert.ThrowsAsync<InvalidOperationException>(() => opening.WaitAsync(TimeSpan.FromSeconds(20), ct));
         var db = await Catalog.GetDatabaseAsync("deleted", Configure, ct);
         Assert.Contains("deleted", await Catalog.ListAsync(ct));
@@ -937,9 +1542,46 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.Equal(1, runs);
     }
 
+    [Fact]
+    public async Task QueuesLeftByAnEarlierRunOfTheProgram_AreFoundWhenTheDatabaseOpens()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        // What an earlier run of the program left: work for actors, which still have a rule, and
+        // for notes, which no longer have one.
+        async Task LeaveAsync<T>(string key, string rule)
+        {
+            var (queue, _) = QueuesOf<T>("found");
+            await queue.CreateIfNotExistsAsync(
+                new Dictionary<string, string> { [RuleQueueNames.TypeMetadata] = Uri.EscapeDataString(typeof(T).FullName!) }, ct);
+            await queue.SendMessageAsync(new RuleMessage { Key = key, Rules = [rule] }.ToText(), ct);
+        }
+        await LeaveAsync<Actor>("alice", "Actor/count");
+        await LeaveAsync<Note>("n1", "Note/gone");
+
+        var db = await Catalog.GetDatabaseAsync("found", opts =>
+        {
+            opts.Store<Actor>();
+            opts.Store<Note>();
+            opts.QueueMode = QueueMode.Manual;
+            opts.MaxConcurrency = 1;
+            opts.Rules.When<Actor>().Then("count", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+        }, ct);
+
+        var types = (await db.Rules.StatusAsync(ct)).Types.Select(t => (t.Type, t.Waiting, t.Orphaned)).ToList();
+        Assert.Equal([(typeof(Actor).FullName!, 1, false), (typeof(Note).FullName!, 1, true)], types);
+
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
+        // The work that was left and the save's own, for the actor; a type without rules is not run.
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["alice", "alice"], ran);
+        Assert.Equal(1, await WaitingOf<Note>(db, ct));
+    }
+
     /// <summary>
-    /// Holds the catalog's next open at its last step, making the handlers' queues, until
-    /// <see cref="Release"/>: the queue storage's first request for a queue waits for it.
+    /// Holds the catalog's next open at its last step, finding the rules' queues, until
+    /// <see cref="Release"/>: the queue storage's first listing of queues waits for it.
     /// </summary>
     private sealed class OpenHold : IDisposable
     {
@@ -977,33 +1619,33 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         /// </summary>
         private sealed class Held(QueueServiceClient inner, OpenHold hold) : QueueServiceClient
         {
-            public override QueueClient GetQueueClient(string queueName)
+            public override QueueClient GetQueueClient(string queueName) => inner.GetQueueClient(queueName);
+
+            public override AsyncPageable<Azure.Storage.Queues.Models.QueueItem> GetQueuesAsync(
+                Azure.Storage.Queues.Models.QueueTraits traits = default, string? prefix = null, CancellationToken cancellationToken = default)
             {
                 if (Interlocked.Exchange(ref hold._taken, 1) == 0)
                 {
                     hold._reached.TrySetResult();
                     hold._released.Wait();
                 }
-                return inner.GetQueueClient(queueName);
+                return inner.GetQueuesAsync(traits, prefix, cancellationToken);
             }
-
-            public override AsyncPageable<Azure.Storage.Queues.Models.QueueItem> GetQueuesAsync(
-                Azure.Storage.Queues.Models.QueueTraits traits = default, string? prefix = null, CancellationToken cancellationToken = default) =>
-                inner.GetQueuesAsync(traits, prefix, cancellationToken);
         }
     }
 
-    /// <summary>Queue storage whose first request for a queue fails, as a transient error would.</summary>
+    /// <summary>Queue storage whose first listing of queues fails, as a transient error would.</summary>
     private sealed class FailsOnceQueueServiceClient(QueueServiceClient inner) : QueueServiceClient, IDisposable
     {
         private int _calls;
 
-        public override QueueClient GetQueueClient(string queueName) =>
-            Interlocked.Increment(ref _calls) == 1 ? throw new RequestFailedException(503, "Queue storage is unavailable.") : inner.GetQueueClient(queueName);
+        public override QueueClient GetQueueClient(string queueName) => inner.GetQueueClient(queueName);
 
         public override AsyncPageable<Azure.Storage.Queues.Models.QueueItem> GetQueuesAsync(
             Azure.Storage.Queues.Models.QueueTraits traits = default, string? prefix = null, CancellationToken cancellationToken = default) =>
-            inner.GetQueuesAsync(traits, prefix, cancellationToken);
+            Interlocked.Increment(ref _calls) == 1
+                ? throw new RequestFailedException(503, "Queue storage is unavailable.")
+                : inner.GetQueuesAsync(traits, prefix, cancellationToken);
 
         public void Dispose() => (inner as IDisposable)?.Dispose();
     }
@@ -1012,39 +1654,40 @@ public abstract class QueuedRuleTestBase : LottaTestBase
 
     private readonly ConcurrentQueue<string> _namedRuns = new();
 
-    private Task Summarize(Note note, LottaDB db, CancellationToken cancellationToken)
+    private Task Summarize(Note note, RuleContext context, CancellationToken cancellationToken)
     {
-        _namedRuns.Enqueue($"summarize:{note.NoteId}");
+        _namedRuns.Enqueue($"{context.Rule}:{note.NoteId}");
         return Task.CompletedTask;
     }
 
     private sealed class NoteHandlers(ConcurrentQueue<string> runs)
     {
-        public Task NotifyFollowersAsync(Note note, LottaDB db, CancellationToken cancellationToken)
+        public Task NotifyFollowersAsync(Note note, RuleContext context, CancellationToken cancellationToken)
         {
-            runs.Enqueue($"notify:{note.NoteId}");
+            runs.Enqueue($"{context.Rule}:{note.NoteId}");
             return Task.CompletedTask;
         }
     }
 
     [Fact]
-    public async Task Queue_NamedAfterItsHandlerMethod_RunsFromThatQueue()
+    public async Task ARule_IsNamedAfterItsHandlerMethod_AndItsType()
     {
         var ct = TestContext.Current.CancellationToken;
         var handlers = new NoteHandlers(_namedRuns);
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Queue(Summarize).Queue(handlers.NotifyFollowersAsync);
+            opts.Rules.When<Note>().Update(Summarize).Then(handlers.NotifyFollowersAsync);
         }, cancellationToken: ct);
         _namedRuns.Clear();
 
         await db.SaveAsync(new Note { NoteId = "n1" }, ct);
 
-        var names = (await db.GetQueueStatusAsync(ct)).Select(s => (s.Name, s.Waiting)).ToList();
-        Assert.Equal([("summarize", 1), ("notify-followers", 1)], names);
+        var status = await db.Rules.StatusAsync(ct);
+        Assert.Equal(["Note/summarize", "Note/notify-followers"], status.Rules.Select(r => r.Rule));
+        Assert.Equal((typeof(Note).FullName, 1), (Assert.Single(status.Types).Type, status.Types[0].Waiting));
         Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["notify:n1", "summarize:n1"], _namedRuns.Order());
+        Assert.Equal(["summarize:n1", "notify-followers:n1"], _namedRuns);
     }
 
     [Fact]
@@ -1056,62 +1699,17 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(n => n.Content.Length > 5)
-                .Do((note, _, _) => { ran.Add($"inline:{note.NoteId}"); return Task.CompletedTask; })
-                .Queue("later", (note, _, _) => { ran.Add($"queued:{note.NoteId}"); return Task.CompletedTask; })
+                .Do((note, context, _) => { ran.Add($"inline:{note.NoteId}:{context.Rule}:{context.Attempt}"); return Task.CompletedTask; })
+                .Then("later", (note, context, _) => { ran.Add($"queued:{note.NoteId}:{context.Rule}:{context.Attempt}"); return Task.CompletedTask; })
                 .Do((note, _, _) => { ran.Add($"inline2:{note.NoteId}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "short", Content = "hi" }, ct);
         await db.SaveAsync(new Note { NoteId = "long", Content = "a longer note" }, ct);
-        Assert.Equal(["inline:long", "inline2:long"], ran);   // inline, in the save, in order
+        Assert.Equal(["inline:long::1", "inline2:long"], ran);   // inline, in the save, in order, and with no name
 
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["inline:long", "inline2:long", "queued:long"], ran);
-    }
-
-    [Fact]
-    public async Task Modifiers_ApplyOnlyToTheQueueTheyFollow()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var ran = new List<string>();
-        var db = await CreateDbAsync(opts =>
-        {
-            opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>()
-                .Queue("first", (a, _, _) => { ran.Add($"first:{a.Counter}"); return Task.CompletedTask; })
-                .Queue("second", (a, _, _) => { ran.Add($"second:{a.Counter}"); return Task.CompletedTask; }).Priority(10).EverySave();
-        }, cancellationToken: ct);
-
-        await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
-        await db.SaveAsync(new Actor { Username = "alice", Counter = 2 }, ct);
-
-        var statuses = (await db.GetQueueStatusAsync(ct)).ToDictionary(s => s.Name);
-        Assert.Equal((0, true), (statuses["first"].Priority, statuses["first"].Latest));
-        Assert.Equal((10, false), (statuses["second"].Priority, statuses["second"].Latest));
-        // "second" first, as it has the higher priority, once for each save; "first" once, for the latest.
-        Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["second:2", "second:2", "first:2"], ran);
-    }
-
-    [Fact]
-    public async Task Retry_SetsTheAttemptsAndTheDelay()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var runs = 0;
-        var db = await CreateDbAsync(opts =>
-        {
-            opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("fails", (_, _, _) => { runs++; throw new InvalidOperationException("no"); }).Retry(2, TimeSpan.FromSeconds(1));
-        }, cancellationToken: ct);
-
-        await db.SaveAsync(new Actor { Username = "alice" }, ct);
-
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // the second attempt is a second away
-        Assert.Equal((1, 0), ((await StatusOf(db, "fails", ct)).Waiting, (await StatusOf(db, "fails", ct)).Poisoned));
-        await Task.Delay(1500, ct);
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // two attempts allowed: set aside
-        var status = await StatusOf(db, "fails", ct);
-        Assert.Equal((0, 1, 2), (status.Waiting, status.Poisoned, runs));
+        Assert.Equal(["inline:long::1", "inline2:long", "queued:long:later:1"], ran);
     }
 
     [Fact]
@@ -1119,85 +1717,102 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     {
         var ct = TestContext.Current.CancellationToken;
         RuleBuilder<Actor>? rule = null;
-        QueuedRuleBuilder<Actor>? queued = null;
         await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            rule = opts.Rules.When<Actor>();
-            queued = rule.Queue("count", (_, _, _) => Task.CompletedTask);
+            rule = opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
         }, cancellationToken: ct);
 
         // Read when the database opened: a change now would silently do nothing.
-        Assert.Throws<InvalidOperationException>(() => queued!.Priority(5));
         Assert.Throws<InvalidOperationException>(() => rule!.Do((_, _, _) => Task.CompletedTask));
-        Assert.Throws<InvalidOperationException>(() => rule!.Queue("more", (_, _, _) => Task.CompletedTask));
-    }
-
-    // === Orphaned queues ===
-
-    /// <summary>Makes a queue of this database that no rule uses, as a renamed rule leaves behind, holding work for the actors.</summary>
-    private async Task MakeOrphanAsync(LottaDB db, string name, string[] waiting, string[] poisoned, CancellationToken ct)
-    {
-        var queues = Catalog.GetQueueServiceClient()!;
-        var queue = queues.GetQueueClient(Internal.AsyncQueueNames.Queue(Catalog.Name, db.DatabaseId, name));
-        var poison = queues.GetQueueClient(Internal.AsyncQueueNames.Poison(Catalog.Name, db.DatabaseId, name));
-        await queue.CreateIfNotExistsAsync(cancellationToken: ct);
-        await poison.CreateIfNotExistsAsync(cancellationToken: ct);
-        var seq = 0;
-        foreach (var key in waiting)
-            await queue.SendMessageAsync(new Internal.AsyncMessage { Type = typeof(Actor).FullName!, Key = key, Sender = "old", Seq = ++seq }.ToText(), ct);
-        foreach (var key in poisoned)
-            await poison.SendMessageAsync(new Internal.AsyncMessage { Type = typeof(Actor).FullName!, Key = key, Sender = "old", Seq = ++seq, Attempts = 5, LastError = "failed" }.ToText(), ct);
+        Assert.Throws<InvalidOperationException>(() => rule!.Then("more", (_, _, _) => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => rule!.Update("other", (_, _, _) => Task.CompletedTask));
     }
 
     [Fact]
-    public async Task AnOrphanedQueue_IsReported_AndItsWorkCanBeMovedToTheRenamedRule()
+    public async Task ARule_IsNamedInFull_OrByItsNameAloneWhenOnlyOneRuleHasIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask).Then("only-actors", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Note>().Then("count", (_, _, _) => Task.CompletedTask);
+        }, cancellationToken: ct);
+
+        Assert.Equal(0, await db.Rules.RetryAsync("only-actors", ct));
+        Assert.Equal(0, await db.Rules.RetryAsync("Note/count", ct));
+        var several = await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.RetryAsync("count", ct));
+        Assert.Contains("Actor/count, Note/count", several.Message);
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.DiscardAsync("no-such-rule", ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.BackfillAsync("no-such-rule", ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.BackfillAsync("Actor/no-such-rule", ct));
+    }
+
+    // === Renamed and removed rules ===
+
+    [Fact]
+    public async Task AMessageNamingARuleThatIsGone_RunsAllOfTheTypesRules()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("new-name", (a, _, _) => { ran.Add(a.Username); return Task.CompletedTask; }).EverySave();
+            opts.Rules.When<Actor>()
+                .Then("first", (actor, _, _) => { ran.Add($"first:{actor.Username}"); return Task.CompletedTask; })
+                .Then("second", (actor, _, _) => { ran.Add($"second:{actor.Username}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
-        await db.SaveManyAsync(new[] { new Actor { Username = "alice" }, new Actor { Username = "bob" }, new Actor { Username = "carol" } }, ct);
+        await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await db.DrainAsync(cancellationToken: ct);
         ran.Clear();
-        await MakeOrphanAsync(db, "old-name", ["alice", "bob"], ["carol"], ct);
 
-        var orphan = Assert.Single(await db.GetQueueStatusAsync(ct), s => s.Orphaned);
-        Assert.Equal(("old-name", 2, 1), (orphan.Name, orphan.Waiting, orphan.Poisoned));
-        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // never run by itself
+        // As a rule renamed between two runs of the program leaves it: work waiting under the old name.
+        await QueuesOf<Actor>(db.DatabaseId).Queue.SendMessageAsync(new RuleMessage { Key = "alice", Rules = ["Actor/old-name"] }.ToText(), ct);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => db.MoveQueuedAsync("new-name", "old-name", ct));   // from must be orphaned
-        await Assert.ThrowsAsync<ArgumentException>(() => db.MoveQueuedAsync("old-name", "no-such-rule", ct));
-        Assert.Equal(3, await db.MoveQueuedAsync("old-name", "new-name", ct));
-
-        var statuses = (await db.GetQueueStatusAsync(ct)).ToDictionary(s => s.Name);
-        Assert.Equal((2, 1), (statuses["new-name"].Waiting, statuses["new-name"].Poisoned));
-        Assert.Equal((true, 0, 0), (statuses["old-name"].Orphaned, statuses["old-name"].Waiting, statuses["old-name"].Poisoned));   // left in place, empty
+        // Which rule it was is not known any more; rules are safe to run twice, so all of them run and no work is lost.
         Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
-        Assert.Equal(["alice", "bob"], ran.Order());
-        Assert.Equal(1, await db.RetryPoisonedAsync("new-name", ct));   // set-aside work stayed set aside
+        Assert.Equal(["first:alice", "second:alice"], ran);
     }
 
     [Fact]
-    public async Task AnOrphanedQueue_CanBeDeleted_ButARulesQueueCannot()
+    public async Task WorkSetAsideForARuleThatIsGone_IsReportedAsOrphaned_AndCanBeRetriedOrDiscarded()
     {
         var ct = TestContext.Current.CancellationToken;
+        var ran = new ConcurrentBag<string>();
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Queue("kept", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().Then("new-name", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
-        await MakeOrphanAsync(db, "removed", ["alice"], [], ct);
-        Assert.Contains(await db.GetQueueStatusAsync(ct), s => s.Name == "removed" && s.Orphaned);
+        await db.SaveManyAsync(new[] { new Actor { Username = "alice" }, new Actor { Username = "bob" } }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        ran.Clear();
 
-        await Assert.ThrowsAsync<ArgumentException>(() => db.DeleteQueueAsync("kept", ct));
-        await db.DeleteQueueAsync("removed", ct);
+        var poison = QueuesOf<Actor>(db.DatabaseId).Poison;
+        Task SetAsideAsync(string key) => poison.SendMessageAsync(
+            new PoisonRecord { Type = typeof(Actor).FullName!, Key = key, Rule = "Actor/old-name", Error = "failed", Attempts = 5 }.ToText(), ct);
+        await SetAsideAsync("alice");
+        await SetAsideAsync("bob");
 
-        var status = Assert.Single(await db.GetQueueStatusAsync(ct));
-        Assert.Equal(("kept", false), (status.Name, status.Orphaned));
+        var rules = (await db.Rules.StatusAsync(ct)).Rules.Select(r => (r.Rule, r.Poisoned, r.Orphaned)).ToList();
+        Assert.Equal([("Actor/new-name", 0, false), ("Actor/old-name", 2, true)], rules);
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // never run by itself
+
+        // An orphaned rule is named in full; a backfill needs a rule that exists.
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.RetryAsync("old-name", ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.BackfillAsync("Actor/old-name", ct));
+
+        // Retried, the work is run by the type's rules as they are now.
+        Assert.Equal(2, await db.Rules.RetryAsync("Actor/old-name", ct));
+        Assert.Equal(2, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["alice", "bob"], ran.Order());
+        Assert.Single((await db.Rules.StatusAsync(ct)).Rules);
+
+        await SetAsideAsync("alice");
+        Assert.Equal(1, await db.Rules.DiscardAsync("Actor/old-name", ct));
+        Assert.Single((await db.Rules.StatusAsync(ct)).Rules);
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
 }
 
@@ -1211,15 +1826,15 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(20);
 
     [Fact]
-    public async Task Handlers_RunByThemselves_SoonAfterTheSave()
+    public async Task Rules_RunByThemselves_SoonAfterTheSave()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.Rules.When<Actor>().Queue("greet", async (actor, db, token) =>
+            opts.Rules.When<Actor>().Then("greet", async (actor, context, token) =>
             {
                 // A save from inside the handler works: the handler is not inside anyone's write.
-                await db.SaveAsync(new Note { NoteId = $"hello-{actor.Username}" }, token);
+                await context.Db.SaveAsync(new Note { NoteId = $"hello-{actor.Username}" }, token);
                 seen.TrySetResult(actor.Username);
             }), cancellationToken: ct);
 
@@ -1230,20 +1845,45 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task APausedHandler_Waits_AndRunsOnceResumed()
+    public async Task AnUpdateRule_ChangesTheObject_ByItself_AndTheRuleAfterItSeesTheChange()
     {
         var ct = TestContext.Current.CancellationToken;
-        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.Rules.When<Actor>().Queue("held", (_, _, _) => { seen.TrySetResult(); return Task.CompletedTask; }), cancellationToken: ct);
+            opts.Rules.When<Actor>()
+                .Update("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; })
+                .Then("notify", (actor, _, _) => { seen.TrySetResult(actor.DisplayName); return Task.CompletedTask; }),
+            cancellationToken: ct);
 
-        db.PauseQueue();
+        await db.SaveAsync(new Actor { Username = "alice", Counter = 7 }, ct);
+
+        Assert.Equal("#7", await seen.Task.WaitAsync(Patience, ct));
+        Assert.Equal("#7", (await db.GetAsync<Actor>("alice", ct))!.DisplayName);
+    }
+
+    [Fact]
+    public async Task AFailedRun_IsTriedAgainByItself_OnceItsWaitIsOver()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var attempts = new ConcurrentQueue<int>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.RuleRetryDelay = TimeSpan.FromMilliseconds(200);
+            opts.Rules.When<Actor>().Then("flaky", (_, context, _) =>
+            {
+                attempts.Enqueue(context.Attempt);
+                if (context.Attempt < 2)
+                    throw new InvalidOperationException("not yet");
+                done.TrySetResult();
+                return Task.CompletedTask;
+            });
+        }, cancellationToken: ct);
+
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
-        await Task.Delay(500, ct);
-        Assert.False(seen.Task.IsCompleted);
 
-        db.ResumeQueue();
-        await seen.Task.WaitAsync(Patience, ct);
+        await done.Task.WaitAsync(Patience, ct);
+        Assert.Equal([1, 2], attempts);
     }
 
     [Fact]
@@ -1253,7 +1893,7 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.Rules.When<Actor>().Queue("long", async (_, _, token) =>
+            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try

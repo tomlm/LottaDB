@@ -15,10 +15,10 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                var actor = await db.GetAsync<Actor>(note.AuthorId);
-                await db.SaveAsync(new NoteView
+                var actor = await context.Db.GetAsync<Actor>(note.AuthorId);
+                await context.Db.SaveAsync(new NoteView
                 {
                     Domain = note.Domain,
                     Id = $"nv-{note.NoteId}",
@@ -45,9 +45,9 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
+                await context.Db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);
 
@@ -63,9 +63,9 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
+                await context.Db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);
 
@@ -81,10 +81,10 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
-                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content }));
-            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) =>
-                await db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
+                await context.Db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content }));
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) =>
+                await context.Db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
         }, cancellationToken: ct);
 
         var note = new Note { NoteId = "n4", Content = "Delete me", Published = DateTimeOffset.UtcNow };
@@ -102,8 +102,8 @@ public abstract class BuilderTestBase : LottaTestBase
         string? received = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) => { received = "saved"; });
-            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) => { received = "deleted"; });
+            opts.Rules.When<Note>().Do(async (note, context, _) => { received = "saved"; });
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) => { received = "deleted"; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "ts1", Published = DateTimeOffset.UtcNow }, ct);
@@ -117,8 +117,8 @@ public abstract class BuilderTestBase : LottaTestBase
         string? received = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) => { received = "saved"; });
-            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) => { received = "deleted"; });
+            opts.Rules.When<Note>().Do(async (note, context, _) => { received = "saved"; });
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) => { received = "deleted"; });
         }, cancellationToken: ct);
 
         var note = new Note { NoteId = "td1", Published = DateTimeOffset.UtcNow };
@@ -133,10 +133,10 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                var actor = await db.GetAsync<Actor>(note.AuthorId);
-                await db.SaveAsync(new NoteView
+                var actor = await context.Db.GetAsync<Actor>(note.AuthorId);
+                await context.Db.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,
@@ -159,7 +159,7 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
                 throw new InvalidOperationException("Handler failed");
             });
@@ -177,7 +177,7 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
                 throw new InvalidOperationException("Handler failed intentionally");
             });
@@ -196,8 +196,8 @@ public abstract class BuilderTestBase : LottaTestBase
         int count = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) => { Interlocked.Increment(ref count); });
-            opts.Rules.When<Note>().Do(async (note, db, _) => { Interlocked.Increment(ref count); });
+            opts.Rules.When<Note>().Do(async (note, context, _) => { Interlocked.Increment(ref count); });
+            opts.Rules.When<Note>().Do(async (note, context, _) => { Interlocked.Increment(ref count); });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "multi", Published = DateTimeOffset.UtcNow }, ct);
@@ -210,9 +210,9 @@ public abstract class BuilderTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                await db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
+                await context.Db.SaveAsync(new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = note.Content });
             });
         }, cancellationToken: ct);
 

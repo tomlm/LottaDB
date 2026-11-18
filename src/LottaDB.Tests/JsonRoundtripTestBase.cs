@@ -304,10 +304,10 @@ public abstract class JsonRoundtripTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                var actor = await db.GetAsync<Actor>(note.AuthorId);
-                await db.SaveAsync(new NoteView
+                var actor = await context.Db.GetAsync<Actor>(note.AuthorId);
+                await context.Db.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,

@@ -6,7 +6,7 @@ LottaDB is a .NET library that stores **POCOs in Azure Table Storage** and index
 
 Each write opens a Lucene session, adds/deletes the document, and the session disposes — triggering commit and IndexSearcher refresh. `Search<T>()` always reflects the last committed state.
 
-Rules (`config.Rules.When<T>(filter).Do(...)`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects. `.Queue(...)` runs slow work later, from a queue.
+Rules (`config.Rules.When<T>(filter).Do(...)`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects. `.Update(...)` and `.Then(...)` run slow work later, from a queue.
 
 ## The Database
 
@@ -148,9 +148,8 @@ public class LottaDB
     // Rules added at runtime (inline only): db.Rules.When<T>(filter).Do(handler) returns IDisposable
     LiveRuleSet Rules { get; }
 
-    // Queued rules
+    // Queued rules: also db.Rules.StatusAsync(), RetryAsync(rule), DiscardAsync(rule), BackfillAsync(rule)
     Task<int> DrainAsync(int? max = null, CancellationToken ct = default);
-    Task<IReadOnlyList<QueueStatus>> GetQueueStatusAsync(CancellationToken ct = default);
 
     // Maintain
     Task RebuildIndex(CancellationToken ct = default);
@@ -207,10 +206,10 @@ Rules are like database triggers, except that they never roll back the save (an 
 A rule names a type, an optional filter, and one or more actions. `.Do` actions run inline after each save (`When`) or delete (`WhenDeleted`). They have full DB access and can trigger further saves/deletes.
 
 ```csharp
-opts.Rules.When<Note>().Do(async (note, db, ct) =>
+opts.Rules.When<Note>().Do(async (note, context, ct) =>
 {
-    var actor = await db.GetAsync<Actor>(note.AuthorId, ct);
-    await db.SaveAsync(new NoteView
+    var actor = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
+    await context.Db.SaveAsync(new NoteView
     {
         Id = $"nv-{note.NoteId}",
         NoteId = note.NoteId,
@@ -218,15 +217,17 @@ opts.Rules.When<Note>().Do(async (note, db, ct) =>
         Content = note.Content,
     }, ct);
 });
-opts.Rules.WhenDeleted<Note>().Do((note, db, ct) => db.DeleteAsync<NoteView>($"nv-{note.NoteId}", ct));
+opts.Rules.WhenDeleted<Note>().Do((note, context, ct) => context.Db.DeleteAsync<NoteView>($"nv-{note.NoteId}", ct));
 ```
+
+Every handler has the shape `(item, context, cancellationToken)`. `RuleContext` carries the database (`Db`) and, for queued rules, the rule's name, the attempt number and an idempotency key.
 
 Inline actions are adapted to the internal handler delegate the built-in index handlers use, stored per type, and run in registration order; saving a derived type runs the rules of its base types too. Built-in handlers are stored apart and run first, for every type in the hierarchy, so inside an inline rule search already reflects the change that triggered it.
 
 Rules added at runtime are inline only and return a disposable handle:
 
 ```csharp
-var handle = db.Rules.When<Actor>().Do((actor, db, ct) => { ... });
+var handle = db.Rules.When<Actor>().Do((actor, context, ct) => { ... });
 handle.Dispose(); // remove the rule
 ```
 
@@ -238,18 +239,23 @@ Handlers that produce objects which trigger further handlers are tracked by type
 
 All changes across a handler chain (root save + handler-triggered saves) are aggregated into a single `ObjectResult` via `AsyncLocal`. The root caller receives the complete set of changes and any handler errors.
 
-## Queued Rules (`.Queue`)
+## Queued Rules (`.Update`, `.Then`)
 
-`.Do` runs inside the save, under the write lease. `.Queue` is for work too slow for that: every save sends a small message (type and key only) to a queue per queued action, and a pump runs the handlers later, outside the write lease, by priority, retrying failures and setting aside what keeps failing in a poison queue.
+`.Do` runs inside the save, under the write lease. `.Update` and `.Then` are for work too slow for that. The verb says what kind of work it is: `.Update` changes the object itself, `.Then` does something outside the database.
 
 ```csharp
-opts.Rules.When<Note>(n => n.SummarizedContent != n.Content)
-    .Queue(Summarize)                 // queue "summarize", named after the method
-    .Priority(10)
-    .Retry(maxAttempts: 3, delay: TimeSpan.FromSeconds(10));
+opts.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);   // rule "Note/summarize", named after the method
+opts.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).Then(NotifyFollowers);
 ```
 
-It runs from queue storage, the third Azure Storage primitive beside tables and blobs, which the storage provider supplies. Queues no rule uses any more (after a rename) are reported as orphaned by `GetQueueStatusAsync`, and handled with `MoveQueuedAsync` or `DeleteQueueAsync`. See `Rules-Design.md` for the behaviour in full.
+- **One queue per object type.** A save sends one small message to the queue of the object's concrete type: the key, the ETag and the names of the rules the save matched. The object itself is read when the rules run.
+- **A pump per database** runs the rules later, outside the write lease, `MaxConcurrency` objects at a time. For each message it runs the `Update` rules, then the `Then` rules.
+- **`Changed(...)`** in a filter compares the save with the version it replaces. An object LottaDB handed out carries the JSON it was loaded with, so nothing extra is stored.
+- **`.Update`** hands the handler a copy and writes it back with a conditional write. If the object changed meanwhile, the result is applied to the newer version when the `Changed(...)` inputs are the same, and dropped otherwise.
+- **Failures are per rule.** A rule that throws is retried by itself: the message is replaced in place by one listing only the rules still to do, with their attempt counts. A rule that keeps failing is set aside in the type's poison queue.
+- **All state is in the queues.** There are no rows per rule or per object.
+
+It runs from queue storage, the third Azure Storage primitive beside tables and blobs, which the storage provider supplies. `db.Rules.StatusAsync()`, `RetryAsync`, `DiscardAsync` and `BackfillAsync` operate it by rule name. See `Rules-Design.md` for the behaviour in full, and `Rules-Next.md` for what is planned.
 
 ## Internals
 
@@ -286,7 +292,7 @@ Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tab
 |---|---|
 | `tables/{catalog}` | The catalog's table: a Lucene index with a document per row. |
 | `blobs/{catalog}` | The catalog's blob container: files in a Lucene `Directory`. |
-| `queues/{queue}` | One queued rule's queue: a file per message in a Lucene `Directory`. |
+| `queues/{queue}` | One object type's rule queue: a file per message in a Lucene `Directory`. |
 | `tables/__registry__`, `queues/__registry__` | Which tables and queues exist. |
 | `{catalog}/{database}/Search` | A database's search index. |
 

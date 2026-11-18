@@ -24,6 +24,15 @@ public class ObjectMetadata
 
     /// <summary>The matched or assigned schema name for JSON documents.</summary>
     public string? Schema { get; set; }
+
+    /// <summary>
+    /// During a save of a type that has <see cref="Rule.Changed"/> rules: the JSON of the version
+    /// the save replaces. Null for a new object, and outside a save.
+    /// </summary>
+    internal string? PreviousJson { get; set; }
+
+    /// <summary><see cref="PreviousJson"/> as an object, made the first time a rule asks.</summary>
+    internal object? Previous { get; set; }
 }
 
 /// <summary>
@@ -108,5 +117,38 @@ public static class ObjectExtensions
     public static string? GetSchema<T>(this T obj) where T : class
     {
         return _table.TryGetValue(obj, out var meta) ? meta.Schema : null;
+    }
+
+    /// <summary>
+    /// Notes, for the length of a save, the JSON of the version the save replaces (null for a new
+    /// object), so that <see cref="Rule.Changed"/> can compare the two.
+    /// </summary>
+    internal static void SetPrevious(this object obj, string? json)
+    {
+        // Nothing to forget on an object nothing was noted for.
+        if (json == null && !_table.TryGetValue(obj, out _))
+            return;
+        var meta = _table.GetOrCreateValue(obj);
+        meta.PreviousJson = json;
+        meta.Previous = null;
+    }
+
+    /// <summary>The version the save in progress replaces, as an object of the same type; null when there is none.</summary>
+    internal static object? GetPrevious(this object obj)
+    {
+        if (!_table.TryGetValue(obj, out var meta) || meta.PreviousJson == null)
+            return null;
+        if (meta.Previous == null)
+        {
+            try
+            {
+                meta.Previous = System.Text.Json.JsonSerializer.Deserialize(meta.PreviousJson, obj.GetType());
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;   // stored as something this type cannot read: nothing to compare with
+            }
+        }
+        return meta.Previous;
     }
 }

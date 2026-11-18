@@ -56,7 +56,7 @@ LottaDB instance
 │   └── _type DocumentKey for type scoping
 └── Rules
     ├── .Do runs inline after every save (When) or delete (WhenDeleted)
-    ├── .Queue runs later, from a queue, with retries
+    ├── .Update and .Then run later, from a queue per type, with retries per rule
     ├── Full DB access (save, delete, query, search)
     ├── Cycle detection via AsyncLocal
     └── Changes aggregate into root ObjectResult
@@ -83,4 +83,4 @@ LottaDB instance
 2. **Lucene query string support** — `Search<T>("content:lucene*")` parameter is accepted but not yet wired to the query
 3. **Polymorphic Search** — `Search<BaseClass>()` scopes by concrete type via DocumentKey, but doesn't yet return all derived types (needs multi-value DocumentKey support)
 4. **Batch operations** — session-based writes for bulk import performance
-5. ~~**Background dispatch**~~ — done: queued rules (`.Queue`), see Rules-Design.md
+5. ~~**Background dispatch**~~ — done: queued rules (`.Update`, `.Then`), see Rules-Design.md

@@ -757,6 +757,8 @@ public partial class LottaDB : IDisposable
             else
             {
                 var meta = GetMeta(entity.GetType());
+                // For rules that ask Changed(...): what this save replaces.
+                await NotePreviousAsync(entity, key, jsonBefore, cancellationToken);
 
                 var existingETag = entity.GetETag();
                 if (existingETag != null)
@@ -788,9 +790,10 @@ public partial class LottaDB : IDisposable
 
             await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
 
-            // A save that left the object as it was gives queued handlers nothing new to do.
+            // A save that left the object as it was gives queued rules nothing new to do.
             if (jsonBefore == null || jsonBefore != entity.GetJson())
                 await EnqueueAsync(entity, key, errors, cancellationToken);
+            ForgetPrevious(entity);
 
             if (isRoot)
             {
@@ -981,6 +984,9 @@ public partial class LottaDB : IDisposable
 
                 // Annotate the mutated entity so the Lucene handler picks up the ETag
                 Internal.EntityMapper.AnnotateAfterWrite(mutated!, key, newETag);
+                // For rules that ask Changed(...): what this change replaced.
+                if (TracksChanges(mutated!.GetType()))
+                    mutated.SetPrevious(jsonBefore);
 
                 var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
 
@@ -991,6 +997,7 @@ public partial class LottaDB : IDisposable
 
                 await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
                 await EnqueueAsync(mutated, key, errors, cancellationToken);
+                ForgetPrevious(mutated);
 
                 if (isRoot)
                 {
@@ -1620,7 +1627,7 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Rules added to the open database, inline only: <c>db.Rules.When&lt;T&gt;().Do(handler)</c>
-    /// returns a handle, and disposing it removes the rule. Queued rules (<c>.Queue</c>) can only be
+    /// returns a handle, and disposing it removes the rule. Queued rules (<c>.Update</c>, <c>.Then</c>) can only be
     /// added in the configuration (<see cref="ILottaConfiguration.Rules"/>).
     /// </summary>
     public LiveRuleSet Rules => _liveRules ??= new LiveRuleSet(this);
@@ -2045,6 +2052,8 @@ public partial class LottaDB : IDisposable
                     key = meta.GetKey(entity);
                     if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
                         meta.SetKey(entity, key);
+                    // For rules that ask Changed(...): what this save replaces.
+                    await NotePreviousAsync(entity, key, entity.GetJson(), cancellationToken);
                     action = _tableAdapter.CreateUpsertAction(key, entity, meta);
                     entity.SetSchema(entity.GetType().Name);
                 }
@@ -2080,7 +2089,10 @@ public partial class LottaDB : IDisposable
                 var saved = pendingEntities.Select(p => p.entity).ToList();
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
                 for (var i = 0; i < saved.Count; i++)
+                {
                     await EnqueueAsync(saved[i], pendingEntityKeys[i], allErrors, cancellationToken);
+                    ForgetPrevious(saved[i]);
+                }
                 pendingActions.Clear();
                 pendingKeys.Clear();
                 pendingEntityKeys.Clear();

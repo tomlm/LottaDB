@@ -1,16 +1,23 @@
-# Rules: what comes next (proposal)
+# Rules: the design, and what comes next
 
-Status: proposal for discussion. Nothing here is built. It extends the rules grammar of 6.0 (`config.Rules.When<T>(filter).Do(...)`, `WhenDeleted<T>`, `db.Rules`), which is described in [Rules-Design.md](Rules-Design.md).
+Status: the design for rules in 6.0, with its reasoning. What is built is described in [Rules-Design.md](Rules-Design.md).
+
+| Build step | State |
+| --- | --- |
+| 1. Per-type queue, `Then`, `Update`, `Changed(...)`, `RuleContext` | Built |
+| 2. `Maintain`, `RefreshWhen`, backfill for projections | Not built |
+| 3. `After`, `At` | Not built |
+| 4. `Every` | Not built |
 
 ## The idea
 
-In 6.0 a queued rule is `.Queue(name, handler)`: a handler, a queue of its own, and settings for retries, priority and latest-only. That still makes you think in queues.
+The first draft of 6.0 had `.Queue(name, handler)`: a handler, a queue of its own, and settings for retries, priority and latest-only. That still made you think in queues.
 
-This proposal replaces `.Queue` with a few verbs, one for each kind of deferred work. You say what the work is; LottaDB owns the queues, the pump, retries, poison handling and status.
+This design replaces `.Queue` with a few verbs, one for each kind of deferred work. You say what the work is; LottaDB owns the queues, the pump, retries, poison handling and status.
 
 | Verb | Kind of work | Example |
 | --- | --- | --- |
-| `Do` | Quick work inside the save (unchanged from 6.0) | Update a counter field |
+| `Do` | Quick work inside the save | Update a counter field |
 | `Update` | Slow work that changes the object itself | Embeddings, summaries, classification |
 | `Maintain` | Other objects kept in sync with this one (projections) | Mention links, a `NoteView` joined to `Actor` |
 | `Then` | Side effects outside the database | Email, webhooks, Graph writes |
@@ -38,7 +45,7 @@ public delegate Task RuleHandler<in T>(T item, RuleContext context, Cancellation
 
 The item carries its key and ETag like any object LottaDB hands out: `item.GetKey()` and `item.GetETag()`. So the context does not repeat them.
 
-This replaces 6.0's `(item, db, ct)` for `Do` as well, so there is one delegate type for every verb.
+`Do` takes it as well, so there is one delegate type for every verb.
 
 ## Model
 
@@ -162,7 +169,7 @@ static async Task NotifyFollowers(Note note, RuleContext context, CancellationTo
 
 ### `Do`: inline
 
-`Do` works as in 6.0: quick work inside the save, no name, no queue. Its handler takes `RuleContext` like the other verbs.
+Quick work inside the save: no name, no queue. Its handler takes `RuleContext` like the other verbs.
 
 ## Timing
 
@@ -199,13 +206,17 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 - A save sends one message to the queue of the object's **concrete type**: saving a `BlobPhoto` uses the `BlobPhoto` queue, and runs the rules for `BlobPhoto` and for its base types, such as `BlobFile`.
 - The message lists the rules that matched at save time: `{ key, etag, rules: ["summarize", "notify"] }`. It has to, because `Changed(...)` cannot be checked again later, once the old values are gone.
 - The pump reads the object once and runs the listed rules, after checking the rest of each filter against the object as it is then.
-- Compared with 6.0's queue per rule: one message and one read per save instead of one per rule, and adding or renaming a rule does not create or orphan a queue.
+- Compared with a queue per rule: one message and one read per save instead of one per rule, and adding or renaming a rule does not create or orphan a queue.
 
 ### A run, in phases
 
-1. **`Update` rules.** If one writes back, the run stops here. Its write queued a new message, so the later phases run on the updated object, not a stale one. That new message records which `Update` wrote it, so that rule skips it.
+1. **`Update` rules.**
 2. **Queued `Maintain` rules.**
 3. **`Then` rules.**
+
+When a rule saves the object its run is for (an `Update` write-back, for one), the run reads the object again and carries on, so the later phases run on the updated object, not a stale one. That save queues neither the rule that made it nor the rules the run has yet to do; it does queue the ones that already ran, if it matches them.
+
+The first draft stopped the run after an `Update` wrote, and let the write's own message do the rest. Carrying on is simpler: no second message, and no marker in it for the rule to skip.
 
 ### Failures, one rule at a time
 
@@ -234,7 +245,7 @@ Replacing is one storage operation. Sending a new message and deleting the old o
 A retry names rules, so every queued rule needs a name that stays the same across builds and deploys.
 
 - **Identity is `(type, name)`,** for example `Note/summarize`. Names only have to be unique within a type.
-- **The default comes from the method group:** `.Update(Summarize)` is named `summarize`, using the `[CallerArgumentExpression]` helper 6.0 already has.
+- **The default comes from the method group:** `.Update(Summarize)` is named `summarize`, taken from the argument's source text (`[CallerArgumentExpression]`).
 - **A lambda must be named:** `.Then("notify", async (note, context, ct) => ...)`. An unnamed lambda throws at startup.
 - **Inline `Do` needs no name.**
 - **Ruled out:** identity from position ("the second rule on `Note`") or from a hash of the code. Both change silently when code is edited or reordered, and a waiting retry would run the wrong rule.
@@ -243,7 +254,7 @@ A retry names rules, so every queued rule needs a name that stays the same acros
 
 ### No priority; concurrency instead
 
-- With one queue per type, priority cannot mean what it does in 6.0, where a high-priority rule jumps ahead of other objects' work.
+- With one queue per type, priority cannot mean what it does with a queue per rule, where a high-priority rule jumps ahead of other objects' work.
 - Instead, a per-database `MaxConcurrency` processes several objects at once, so slow work stops blocking fast work.
 - Two runs for the same object never overlap.
 - Priority can come back if a real need appears. So can `.Isolated()`, giving one slow rule a queue of its own.
@@ -267,14 +278,15 @@ You see rules, not queues. Waiting work is counted per type, not per rule: each 
 
 | Method | What it does |
 | --- | --- |
-| `db.Rules.Status()` | Per rule: runs in progress, poisoned count, last error. Per type: messages waiting (approximate). Orphaned poison records. |
-| `db.Rules.Retry(rule)` | Retry a rule's poisoned work |
-| `db.Rules.Backfill(rule)` | Run a rule over every object it matches now, found through the index (as `RequeueAsync` does in 6.0) |
+| `db.Rules.StatusAsync()` | Per rule: runs in progress, poisoned count, last error. Per type: messages waiting (approximate). Orphaned poison records. |
+| `db.Rules.RetryAsync(rule)` | Retry a rule's poisoned work |
+| `db.Rules.DiscardAsync(rule)` | Delete a rule's poisoned work |
+| `db.Rules.BackfillAsync(rule)` | Run a rule over every object it matches now, found through the index when the filter allows |
 | `db.DrainAsync()` | Run what is due now (manual mode, tests) |
 
 ## Indexing
 
-Search indexing stays inline, as in 6.0, so a search inside a rule already sees the change that triggered it. Embedding generation is the one part that may move to a queue later: text is searchable at once, and vectors follow.
+Search indexing stays inline, so a search inside a rule already sees the change that triggered it. Embedding generation is the one part that may move to a queue later: text is searchable at once, and vectors follow.
 
 ## Build order
 
@@ -285,12 +297,12 @@ Each step is usable on its own:
 3. `After` and `At`.
 4. `Every`.
 
-From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ordering stay. `.Queue`, its modifiers, and the queue-level operations (`PauseQueue`, `MoveQueuedAsync`, `DeleteQueueAsync`) are replaced.
+From the first draft of 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ordering stay. `.Queue`, its modifiers, and the queue-level operations (`PauseQueue`, `MoveQueuedAsync`, `DeleteQueueAsync`) are gone.
 
 ## Hard parts
 
 - **At least once, everywhere.** Every verb can run twice, so `Update` and `Maintain` are safe to repeat by design, and `Then` gets an idempotency key.
-- **The `Update` guard.** The ETag check, applying a result to a newer version when its inputs are unchanged, and stopping a run after a write so later phases see the new object.
+- **The `Update` guard.** The ETag check, applying a result to a newer version when its inputs are unchanged, and reading the object again after a write so later phases see the new object.
 - **`Changed` on unloaded objects.** The extra read when an object is saved without having been loaded, only for types with `Changed` rules.
 - **Projection diffs.** The cost of each diff on objects that produce many views.
 - **Concurrency.** Two runs for the same object must not overlap.
@@ -303,7 +315,7 @@ From 6.0, the grammar, expression filters, `Do`, `db.Rules`, and index-first ord
 - **`Update`:** edits a copy; written only if changed, conditional on the copy's ETag; may read other objects through `context.Db`.
 - **`Maintain`:** inline by default even when it reads other objects; `.Queued()` for heavy projections.
 - **`Every`:** `TimeSpan` and cron with a time zone (UTC by default) in the first version.
-- **`Status()`:** per rule (running, poisoned, last error), plus approximate waiting counts per type.
+- **`StatusAsync()`:** per rule (running, poisoned, last error), plus approximate waiting counts per type.
 - **Messages carry the ETag,** compared for equality only, and the rules that matched at save time. A stale message runs its rules on the current object rather than being dropped.
 - **`Changed(...)` in filters** for edge-triggering and for declaring `Update`'s inputs: compared with the loaded version at save time, no per-rule or per-object state.
 - **Queues per concrete type,** running rules for the type and its base types.

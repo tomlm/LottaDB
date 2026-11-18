@@ -12,7 +12,7 @@ public abstract class ObserveTestBase : LottaTestBase
         Actor? received = null;
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Actor>().Do(async (actor, db, _) => { received = actor; });
+            opts.Rules.When<Actor>().Do(async (actor, context, _) => { received = actor; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "saved", DisplayName = "Saved" }, ct);
@@ -27,8 +27,8 @@ public abstract class ObserveTestBase : LottaTestBase
         var received = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Actor>().Do(async (actor, db, _) => { received.Add($"saved:{actor.DisplayName}"); });
-            opts.Rules.WhenDeleted<Actor>().Do(async (actor, db, _) => { received.Add($"deleted:{actor.DisplayName}"); });
+            opts.Rules.When<Actor>().Do(async (actor, context, _) => { received.Add($"saved:{actor.DisplayName}"); });
+            opts.Rules.WhenDeleted<Actor>().Do(async (actor, context, _) => { received.Add($"deleted:{actor.DisplayName}"); });
         }, cancellationToken: ct);
 
         var actor = new Actor { Username = "deleted", DisplayName = "Gone" };
@@ -44,7 +44,7 @@ public abstract class ObserveTestBase : LottaTestBase
         var db = await CreateDbAsync(cancellationToken: ct);
         Actor? received = null;
 
-        using var handle = db.Rules.When<Actor>().Do(async (actor, db, _) => { received = actor; });
+        using var handle = db.Rules.When<Actor>().Do(async (actor, context, _) => { received = actor; });
         await db.SaveAsync(new Actor { Username = "runtime", DisplayName = "Runtime" }, ct);
 
         Assert.NotNull(received);
@@ -57,7 +57,7 @@ public abstract class ObserveTestBase : LottaTestBase
         var db = await CreateDbAsync(cancellationToken: ct);
         int count = 0;
 
-        var handle = db.Rules.When<Actor>().Do(async (actor, db, _) => { Interlocked.Increment(ref count); });
+        var handle = db.Rules.When<Actor>().Do(async (actor, context, _) => { Interlocked.Increment(ref count); });
         await db.SaveAsync(new Actor { Username = "before" }, ct);
         Assert.Equal(1, count);
 
@@ -181,9 +181,9 @@ public abstract class ObserveTestBase : LottaTestBase
         var seen = new List<string>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                var found = db.Search<Note>().Where(n => n.NoteId == note.NoteId).ToList();
+                var found = context.Db.Search<Note>().Where(n => n.NoteId == note.NoteId).ToList();
                 seen.Add(found.SingleOrDefault()?.Content ?? "(not found)");
             });
         }, cancellationToken: ct);
@@ -203,8 +203,8 @@ public abstract class ObserveTestBase : LottaTestBase
         var found = new List<int>();
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) =>
-                found.Add(db.Search<Note>().Where(n => n.NoteId == note.NoteId).Count()));
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) =>
+                found.Add(context.Db.Search<Note>().Where(n => n.NoteId == note.NoteId).Count()));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "x" }, ct);
@@ -223,8 +223,8 @@ public abstract class ObserveTestBase : LottaTestBase
         var seen = new List<string>();
         await db.SaveAsync(new Note { NoteId = "n1", Content = "first" }, ct);
 
-        using (db.Rules.When<Note>().Do(async (note, db, _) =>
-            seen.Add(db.Search<Note>().Where(n => n.NoteId == note.NoteId).ToList().SingleOrDefault()?.Content ?? "(not found)")))
+        using (db.Rules.When<Note>().Do(async (note, context, _) =>
+            seen.Add(context.Db.Search<Note>().Where(n => n.NoteId == note.NoteId).ToList().SingleOrDefault()?.Content ?? "(not found)")))
         {
             await db.SaveAsync(new Note { NoteId = "n1", Content = "second" }, ct);
         }
@@ -240,10 +240,10 @@ public abstract class ObserveTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             // Saving an Employee runs the index handlers of Employee and of its base types, then these.
-            opts.Rules.When<Employee>().Do(async (e, db, _) =>
-                seen.Add($"employee:{db.Search<Employee>().Where(x => x.Id == e.Id).ToList().SingleOrDefault()?.Name}"));
-            opts.Rules.When<BaseEntity>().Do(async (e, db, _) =>
-                seen.Add($"base:{db.Search<Employee>().Where(x => x.Id == e.Id).ToList().SingleOrDefault()?.Name}"));
+            opts.Rules.When<Employee>().Do(async (e, context, _) =>
+                seen.Add($"employee:{context.Db.Search<Employee>().Where(x => x.Id == e.Id).ToList().SingleOrDefault()?.Name}"));
+            opts.Rules.When<BaseEntity>().Do(async (e, context, _) =>
+                seen.Add($"base:{context.Db.Search<Employee>().Where(x => x.Id == e.Id).ToList().SingleOrDefault()?.Name}"));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "e1", Name = "Eve" }, ct);

@@ -1,62 +1,58 @@
-# Rules: inline and queued
+# Rules
 
-Status: implemented for every built-in storage provider: Memory, SQLite, FileSystem, Lucene and Azure (see *Storage*). Replaced `On<T>` and `OnAsync<T>` in 6.0. A proposal for what comes next (verbs for kinds of deferred work, queues per type, schedules) is in [Rules-Next.md](Rules-Next.md).
+Status: as built in 6.0, for every built-in storage provider: Memory, SQLite, FileSystem, Lucene and Azure. Rules replace `On<T>` and `OnAsync<T>`. The reasoning behind the design, and the parts not built yet, are in [Rules-Next.md](Rules-Next.md).
 
 ## Summary
 
-A rule says what to do when an object is saved or deleted. Rules are like database triggers, except that they never roll back the save (an inline rule's exception goes into the save's `ObjectResult.Errors` and the object stays saved) and they can also queue durable work. Rules live under `Rules`, on the configuration (`config.Rules`) and on an open database (`db.Rules`). A rule names a type and, optionally, a filter, then takes one or more actions:
+A rule says what to do when an object is saved or deleted. Rules are like database triggers, except that they never roll back the save: a rule that fails is reported or retried, and the object stays saved.
 
-- **`.Do(handler)`** runs inside the save, under the write lease. That suits quick, derived work.
-- **`.Queue(name, handler)`** runs later, from a queue, outside the write lease, and is retried until it succeeds. That suits slow work: a model call of a few seconds inside the save would block every other write for that long, a failure would be recorded but never retried, and nothing would rerun it after a crash.
+A rule is **event, condition, action**:
+
+| Part | API |
+| --- | --- |
+| Event | `When<T>` (saved) or `WhenDeleted<T>` (deleted) |
+| Condition | An optional expression filter: `When<Note>(n => n.IsPublished)` |
+| Action | A verb: `Do`, `Update`, `Then` |
+
+The verb says what kind of work it is. LottaDB owns the queues, the pump, retries and status.
+
+| Verb | Kind of work | Runs | On failure |
+| --- | --- | --- | --- |
+| `Do` | Quick work | Inside the save, under the write lease | Reported in the save's `ObjectResult.Errors` |
+| `Update` | Slow work that changes the object itself | Later, outside the write lease | Retried with back-off, then set aside |
+| `Then` | Side effects outside the database | Later, outside the write lease | Retried with back-off, then set aside |
 
 ```csharp
-config.Rules.When<Mail>(mail => mail.SummarizedBody != mail.Body)   // only mail whose summary is out of date
-      .Queue(Describe).Priority(10);                                  // queue "describe"
+using static Lotta.Rule;
 
-static async Task Describe(Mail mail, LottaDB db, CancellationToken ct)
+config.Rules.When<Note>().Do(UpdateFeedView);                                 // in the save
+config.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);           // rule "Note/summarize"
+config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished)
+      .Then("notify", async (note, context, ct) =>
+          await mail.SendAsync(note, idempotencyKey: context.IdempotencyKey, ct));
+config.Rules.WhenDeleted<Note>().Do(RemoveFeedView);
+
+static async Task Summarize(Note note, RuleContext context, CancellationToken ct)
 {
-    var summary = await describer.SummarizeAsync(mail, ct);   // slow: outside the write lease
-    await db.ChangeAsync<Mail>(mail.Id, m =>
-    {
-        if (m.Body == mail.Body)                               // still the mail that was summarized
-        {
-            m.Summary = summary;
-            m.SummarizedBody = mail.Body;
-        }
-        return m;
-    }, ct);
+    note.Summary = await model.SummarizeAsync(note.Content, ct);   // edits a copy; LottaDB writes it back
 }
 ```
-
-| | `.Do` | `.Queue` |
-| --- | --- | --- |
-| Runs | Inside the save | Later, from a queue |
-| Write lease | Held while it runs | Not held; taken only for the handler's own writes |
-| Failure | Returned in `ObjectResult` | Retried with back-off, then set aside in a poison queue |
-| After a crash | Lost | Runs when the database is next opened |
-| Order | The order of saves | By priority, then first in, first out |
-| Deletes | `WhenDeleted<T>().Do(...)` | Not available (see *Left out on purpose*) |
-| On an open database | `db.Rules.When<T>().Do(...)`, removable | Configuration only |
 
 ## Registration
 
 ```csharp
-public delegate Task RuleHandler<in T>(T item, LottaDB db, CancellationToken cancellationToken);
+public delegate Task RuleHandler<in T>(T item, RuleContext context, CancellationToken cancellationToken);
 
 // config.Rules (RuleSet)
 RuleBuilder<T>        When<T>(Expression<Func<T, bool>>? filter = null);
 DeletedRuleBuilder<T> WhenDeleted<T>(Expression<Func<T, bool>>? filter = null);
 
-// RuleBuilder<T>
-RuleBuilder<T>       Do(RuleHandler<T> handler);
-QueuedRuleBuilder<T> Queue(string name, RuleHandler<T> handler);
-QueuedRuleBuilder<T> Queue(RuleHandler<T> handler, [CallerArgumentExpression] string? handlerExpression = null);
-
-// QueuedRuleBuilder<T>: modifiers for the queue just added, and Do/Queue to add more actions
-QueuedRuleBuilder<T> Priority(int priority);                  // default 0
-QueuedRuleBuilder<T> EverySave();                             // default: latest state only
-QueuedRuleBuilder<T> Retry(int maxAttempts, TimeSpan delay);  // defaults 5 and 2 s
-QueuedRuleBuilder<T> Timeout(TimeSpan timeout);               // default 5 minutes
+// RuleBuilder<T>: each returns the builder, so one rule can have several actions
+RuleBuilder<T> Do(RuleHandler<T> handler);
+RuleBuilder<T> Update(string name, RuleHandler<T> handler);
+RuleBuilder<T> Update(RuleHandler<T> handler);   // named after the method
+RuleBuilder<T> Then(string name, RuleHandler<T> handler);
+RuleBuilder<T> Then(RuleHandler<T> handler);     // named after the method
 
 // DeletedRuleBuilder<T>
 DeletedRuleBuilder<T> Do(RuleHandler<T> handler);
@@ -66,142 +62,220 @@ LiveRule<T>        When<T>(Expression<Func<T, bool>>? filter = null);
 LiveDeletedRule<T> WhenDeleted<T>(Expression<Func<T, bool>>? filter = null);
 ```
 
+- **A rule registers when `When` is called.** A rule with no action makes opening the database throw `InvalidOperationException` naming the type.
+- **Rules are read when the database opens.** Adding to one after that throws `InvalidOperationException`.
+- **A rule for a base type also fires for derived types,** from every save path: `When<BlobFile>` fires for an uploaded `BlobPhoto`.
+- **`JsonDocument` objects** are not given to queued rules.
+- **Deletes have inline rules only:** `WhenDeleted<T>(filter).Do(...)`, given the object as it was.
+
+### Handlers
+
+Every verb takes the same handler shape, `(item, context, cancellationToken)`.
+
+| `RuleContext` member | What it is |
+| --- | --- |
+| `Db` | The database the rule runs on |
+| `Rule` | The rule's name, such as `summarize`; empty for `Do` |
+| `Attempt` | 1 on the first run, 2 on the first retry, and so on; always 1 for `Do` |
+| `IdempotencyKey` | A hash of the type, key, ETag and rule; the same on every retry |
+
+The item carries its key and ETag like any object LottaDB hands out: `item.GetKey()`, `item.GetETag()`.
+
+### Rule names
+
+A retry names the rule to run again, so every queued rule (`Update`, `Then`) needs a name that stays the same across builds.
+
+- **Identity is the type and the name:** `Note/summarize`. Names are unique within a type, whatever the verb.
+- **A name** is 3 to 40 lower-case letters and digits, with single hyphens between them.
+- **The default comes from the method:** `.Update(Summarize)` is `summarize`, `handlers.NotifyFollowersAsync` is `notify-followers`, `Handle<Note>` is `handle`. It is taken from the source text of the argument (`[CallerArgumentExpression]`).
+- **A lambda must be named:** `.Then("notify", async (note, context, ct) => ...)`. Without a name it throws `ArgumentException` when the rule is registered.
+- **Inline `Do` has no name.**
+
+### Filters
+
+The filter says which objects the rule is for. Without one, every object of the type. It is an expression, compiled once.
+
+| Verb | When the filter is checked |
+| --- | --- |
+| `Do` | Before the handler, in the save |
+| `Update`, `Then` | In the save: false queues nothing. Again when the rule runs, on the object as it is then: false skips the rule, which is not counted as a run |
+
+- **Quick and pure:** it runs inside the save, under the write lease, so it should look only at the object.
+- **When it throws** in a save, the error goes into the save's `Errors` and the save still happens. When a queued rule comes up, it counts as a failed run.
+
+### `Changed(...)`
+
+A plain filter is true for every save while its condition holds. To react to a change, a filter uses `Changed(...)` (`using static Lotta.Rule;`):
+
 ```csharp
-config.Rules.When<Note>(n => n.IsPublished)
-      .Do(UpdateFeedView)
-      .Queue("notify-followers", Notify).Priority(5);
-config.Rules.When<Note>().Queue("audit", Audit).EverySave();
-config.Rules.WhenDeleted<Note>().Do(RemoveFeedView);
+config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).Then(NotifyFollowers);
+config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).Update(Classify);
 ```
 
-- **A rule registers when `When` is called.** One rule may have several actions (`.Do(a).Queue("b", h)`), and they run in the order added. A rule with no action makes opening the database throw `InvalidOperationException` naming the type. Rules are read when the database opens; adding to one, or calling a modifier, after that throws `InvalidOperationException` instead of silently doing nothing.
-- **Modifiers** apply to the queued action most recently added by `.Queue`, and check their values at the call: `Retry` needs `maxAttempts >= 1` and `delay >= 0`, `Timeout` needs more than zero.
-- **The filter** says which objects the rule is for. Without it, every object of the type. It is an expression, compiled once when the rule is made; every check uses the compiled delegate. The expression itself is kept on the queued registration for `RequeueAsync`.
-  - **For `.Do`:** checked before the handler.
-  - **For `.Queue`, checked on save:** a save it is false for queues nothing, which saves the message, the run and the read of the object.
-  - **For `.Queue`, checked again when the run comes up,** on the object as it then is. A run it has become false for is skipped, not counted as a run, and its message is deleted. `RequeueAsync` queues only the objects it is true for.
-  - **Quick and pure:** it runs inside the save, under the write lease, so it should look only at the object. To react to a change, compare against a marker the handler writes, such as `SummarizedBody` above. A save does not read the stored version first, so "what changed" is not available.
-  - **When it throws:** on save, the error is in the save's `Errors` and the save still happens (for `.Queue`, nothing is queued). When a queued run comes up, it counts as a failed run.
-- **Queue names** identify the work across runs of the program, and its queue is named after it: 3 to 40 lower-case letters and digits, with single hyphens between them, not ending in `-poison`. A duplicate name in one configuration throws.
-- **Default queue names.** `.Queue(handler)` takes the compile-time source text of the handler argument (`[CallerArgumentExpression]`), keeps its last identifier, drops an `Async` suffix and kebab-cases it: `Summarize` gives `summarize`, `handlers.NotifyFollowersAsync` gives `notify-followers`, `Handle<Note>` gives `handle`. Anything that is not an identifier or member access (a lambda, a call, a cast) throws `ArgumentException` asking for `.Queue(name, handler)`. Renaming the method renames the queue; see *Orphaned queues*.
-- **The handler's own saves** never queue the handler itself: inside a queued run, only lower priorities are queued (see *Loop prevention*).
+- **Meaning:** any of these values differs in this save from the version the save replaces.
+- **No extra storage.** An object LottaDB handed out carries the JSON it was loaded with, so a save has both versions. Nothing is stored per rule or per object.
+- **A new object** counts as changed.
+- **An object saved without having been loaded** (`new Note { NoteId = "n1" }` for a key that exists) has no loaded version. For types that have a `Changed` rule, the save reads the stored version first.
+- **Works with every verb,** inline `Do` and live rules included.
+- **When a queued rule runs,** `Changed(...)` is taken to be true: the old values are gone by then. The rest of the filter is checked on the object as it is.
+- **It also names an `Update` rule's inputs** (see below).
+- **A marker, not a function.** Called anywhere but a rule filter, it throws. `Changed()` with no values, and `Changed` in a `WhenDeleted` filter, throw when the rule is registered.
 
-**Inside an inline rule, search already reflects the change that triggered it.** The built-in handlers (the per-type Lucene index handler, and those for `JsonDocument` and `JsonSchema`) are kept apart from rules and run first: for a save of a `BlobPhoto`, the index handlers of `BlobPhoto` and of `BlobFile` all run before any rule for either type, on saves and deletes and through every save and delete path. Built-in handlers are not visible through `Rules`, take no filter, and cannot be removed by a live rule's handle.
+## The verbs
 
-A rule for a base type also fires for derived types, from every save path (`When<BlobFile>` fires for an uploaded `BlobPhoto`). `JsonDocument` objects are not delivered to queued rules.
+### `Do`: in the save
 
-## How queuing works
+- Runs after the object is written and indexed, so a search inside the handler already sees the change. The built-in index handlers run before any rule, for the object's type and its base types.
+- What it saves is part of the save's `ObjectResult.Changes`; what it throws is in `ObjectResult.Errors`.
+- A chain of `Do` rules stops when it reaches a type already being handled in the chain.
+- On an open database: `using var rule = db.Rules.When<Note>().Do(Refresh);`
 
-Every save of an object sends one small message to the queue of each matching queued action. The message holds only what is needed to trigger the handler: the object's type and key. It never holds the object, so an object's size does not matter.
+### `Update`: change the object in the background
 
-A pump takes messages by priority, fetches the object as it is at that moment, and runs the handler on it. Success deletes the message. Failure keeps it, hidden for a wait that doubles each time, until it has failed `maxAttempts` times and is moved to the queue's poison queue.
+- **The handler edits a copy** and returns nothing. LottaDB compares the copy with the original afterwards and writes only if something changed.
+- **Runs outside the write lease,** so slow work never blocks other writes.
+- **The handler is called once per run.** It is not called again on a write conflict, unlike a `ChangeAsync` lambda.
+- **It may read other objects** through `context.Db`.
 
-The queue is the only stored state. There are no extra table rows.
+The write-back is conditional on the ETag the copy was made from. If someone else saved the object meanwhile:
 
-## Priority
-
-- Each queued action has its own queue.
-- The pump takes its next message from the highest priority that has one ready. Lower priorities run only while every higher one is empty.
-- Within a queue, messages are taken first in, first out.
-- Among queues of equal priority, the pump takes the oldest message. Azure records a message's time to the second, so there the order across queues is only that fine.
-
-## Latest
-
-**By default** a queued action is done with an object once it has run on the object's latest state. Several saves before the run comes up give one run.
-
-Each open database keeps, in memory, the newest message it has sent per queue and object. A message is dropped without running the handler only when this database instance knows it has since sent a newer one for the same queue and object. That newer message was sent after the older one's save, so whenever it runs it sees that save, and the queue carries it to success, retry or poison on its own account.
-
-| Where the newer message is when the older one is received | The older message |
+| What happened meanwhile | The result |
 | --- | --- |
-| Waiting or running | Dropped |
-| Finished here (the older one was a retry) | Runs: an extra run on the current object |
-| Finished by another process | Dropped: the newer one ran after the older save |
-| Poisoned | Runs: a second attempt, and the failure stays visible |
+| Nothing | Written |
+| A save that left the `Changed(...)` values alone, and did not touch the properties the handler set | The handler's properties are applied to the newer version, with a conditional write (repeated on another conflict, up to 10 times) |
+| A save that changed a `Changed(...)` value | Dropped: that save queued a fresh run |
+| A save that changed a property the handler set | Dropped: the other writer's value stands |
+| The filter has no `Changed(...)` | Dropped: LottaDB does not know the inputs |
 
-The note can only err towards an extra run. After a restart, or for messages another process sent, there is no note and every message runs.
+"The properties the handler set" are the top-level properties that differ between the original and the copy.
 
-**`.EverySave()`** runs the handler once for every save. Each run still gets the object as it is when the run starts, not as it was at that save.
+### `Then`: side effects outside the database
 
-Either way, a handler that is expensive should check whether its work is already done and return.
+- Delivered **at least once**: retried with back-off, then set aside.
+- `context.IdempotencyKey` is the same on every retry, so an outside service can drop duplicates.
 
-## What the handler is given
+## Queues underneath
 
-The object is fetched when the handler runs, as its concrete type, with its current ETag. A write-back with `SaveAsync` throws `ConcurrencyException` only if the object changes during the run. `SaveManyAsync` ignores ETags and gives no such check.
+### One queue per type
 
-A message whose object no longer exists is dropped. Deletes are not queued: `WhenDeleted<T>().Do(...)` is the way to react to a delete.
+- A save sends **one message** to the queue of the object's **concrete type**, listing the rules the save matched: `{ "key": "n1", "etag": "e7", "rules": ["Note/summarize", "Note/notify"] }`.
+- Saving a `BlobPhoto` uses the `BlobPhoto` queue and lists rules for `BlobPhoto` and for its base types.
+- The message never holds the object. The object is read when the rules run.
+- A save that matches no queued rule sends nothing.
+- The queues are the only stored state. There are no rows per rule or per object.
 
-## Loop prevention
+### A run
 
-- **A save made inside a queued run queues only actions of lower priority** than the one running. A queued action therefore never queues itself, and queued actions cannot queue one another in a circle.
-- **A write that changes nothing queues nothing.** `ChangeAsync` whose mutation leaves the object identical to what is stored now writes nothing at all: no table write, no inline rules, no reindex. `SaveAsync` of an object that is unchanged since it was loaded still writes, but queues nothing.
-- **A hop limit** (`MaxQueueHops`, default 16) is the backstop for chains across databases. A message past the limit goes to the poison queue without running.
-- Inline rules keep their own guard: a chain of `.Do` rules stops when it reaches a type already being handled in the chain.
+The pump takes a message, reads the object once, and runs the listed rules one after another:
+
+1. **`Update` rules,** in the order registered.
+2. **`Then` rules,** in the order registered.
+
+- **A rule's own save does not queue it again.** When a rule saves the object its run is for (an `Update` write-back, or a handler calling `SaveAsync`), that save queues neither the rule itself nor the rules the run has yet to do. Rules that already ran are queued if the save matches them.
+- **Later rules see the saved object.** After such a save, the run reads the object again before the next rule.
+- **A missing object** (deleted since, or replaced by an object of another type) ends the run and deletes the message.
+- **Two runs for the same object never overlap** within a database.
+
+### Failures, one rule at a time
+
+All retry state is in the message. Example: rules A, B and C are listed, and B throws.
+
+1. A and C are done. The message is **replaced in place**, in one `UpdateMessage` call, by one that lists only B:
+
+   ```json
+   { "key": "X1", "etag": "e7", "rules": ["Note/b"], "attempts": { "Note/b": 1 }, "lastError": { "Note/b": "timeout calling model" } }
+   ```
+
+2. It is hidden for `RuleRetryDelay`, doubling with each failure, up to five minutes.
+3. When it comes up again, only B runs. Success deletes the message.
+
+- **A rule that fails `RuleMaxAttempts` times** is set aside in the type's poison queue as `(type, key, etag, rule, error, attempts)`, and removed from the message. The other rules carry on.
+- **A stale message still runs.** A message whose ETag no longer matches the object runs its rules on the object as it is now. Dropping it could lose work: a later save that did not change a rule's inputs queued nothing for it.
+- **A crash during a run** leaves the message as it was. It comes up again when its lease runs out, and every rule in it runs again.
+- **A renamed or removed rule.** A message naming a rule the configuration does not have reruns all of the type's queued rules for that object. That costs at most one extra run, and loses no work.
+- **A message that cannot be read** is moved to the poison queue as it is.
+
+### Loop prevention
+
+- A rule's own save does not queue the rule again (above).
+- `Changed(...)` keeps an `Update` from being triggered by saves that leave its inputs alone, another rule's write included.
+- A write that changes nothing queues nothing. `ChangeAsync` whose lambda leaves the object as it is writes nothing at all; `SaveAsync` of an object unchanged since it was loaded writes, but queues nothing.
+- **`MaxQueueHops`** (default 16) is the backstop. A save made more than that many queued rules deep is set aside without running.
+
+## Settings
+
+| `config.` | Default | What it is |
+| --- | --- | --- |
+| `QueueMode` | `Auto` | `Manual` runs queued rules only in `DrainAsync` |
+| `MaxConcurrency` | 4 | How many objects are worked on at once |
+| `RuleMaxAttempts` | 5 | Runs of a rule for an object before it is set aside |
+| `RuleRetryDelay` | 2 s | The wait before the second run; doubles each time, up to 5 minutes |
+| `RuleTimeout` | 5 min | How long one run of a rule may take |
+| `MaxQueueHops` | 16 | How long a chain of queued rules may get |
+
+There is no priority. Several objects are worked on at once, so slow work does not hold up fast work.
 
 ## The pump
 
 - One per open, writable database that has queued rules. It starts when the catalog has fully opened the database and kept it, never for a read-only one.
-- The catalog hands out a database only once it is fully open, queues started. If any step of opening fails (a schema rebuild, the manifest, creating the queues), the half-open database is disposed and nothing is kept, so the next `GetDatabaseAsync` opens it again from scratch. Callers asking for the database while it is being opened share that one open. The open runs under the catalog's token, not any one caller's, and each caller waits with its own: one that cancels stops waiting without failing the open for the others. An open that every caller has given up on still finishes and is kept. An open still in progress when the catalog is disposed or deleted keeps nothing: its database is disposed before its pump starts, and the open throws `ObjectDisposedException`, or after a deletion `InvalidOperationException` (the next `GetDatabaseAsync` opens it again).
-- `config.QueueMode = QueueMode.Manual` leaves it stopped; queued work then runs only in `DrainAsync`.
-- One run at a time per database.
-- A run holds its message with a short lease, renewed while it runs. A run that loses its lease, or outlasts its `Timeout`, is cancelled and counts as a failure.
-- Disposing the database cancels the token of the run in progress, in `Auto` and `Manual` mode alike: the pump's run, or a `DrainAsync`'s (whose handlers get a token linked to both the caller's token and the database's). It waits up to 10 seconds in all for the run to end before tearing the database down. A run stopped this way, or by cancelling the drain, is given back at once with no failure counted, whatever it threw; `DrainAsync` then throws `OperationCanceledException`, even when the run stopped was the last one its `max` allowed.
-- A run that could not get the write lock (`WriteLockUnavailableException`: another process is writing) counts no failure either, so waiting on another process never sets work aside. But it is given back hidden for the retry delay, doubling with each such run of the message up to five minutes, as failures are; given back at once, it would be run again and again while the lock is held.
+- It looks at the type queues in turn, so none is starved.
+- A run holds its message with a lease (the smaller of `RuleTimeout` and 60 seconds), renewed while it runs. A run that loses its lease is stopped and nothing is recorded; the message comes up again.
+- A rule that outlasts `RuleTimeout` has its token cancelled and counts as failed.
+- **Disposing the database** cancels the runs in progress and waits up to 10 seconds in all for them to end. A run stopped this way, or by cancelling a drain, counts no failure and its message is given back at once.
+- **A run that finds the write lock held by another process** (`WriteLockUnavailableException`) counts no failure. Its message is hidden for the retry delay, doubling each time, so it does not spin while the lock is held.
 - Delivery is at least once.
+
+The catalog hands out a database only once it is fully open. If opening fails, the half-open database is disposed and the next `GetDatabaseAsync` opens it again. An open still in progress when the catalog is disposed or deleted keeps nothing and starts no pump.
 
 ## Operating it
 
-```csharp
-Task<int> DrainAsync(int? max = null, CancellationToken ct = default);   // run until nothing is ready, or max runs
-void PauseQueue(string? name = null);
-void ResumeQueue(string? name = null);
-Task<IReadOnlyList<QueueStatus>> GetQueueStatusAsync(CancellationToken ct = default);   // includes orphaned queues
-Task<int> RetryPoisonedAsync(string name, CancellationToken ct = default);
-Task<int> RequeueAsync(string name, CancellationToken ct = default);     // queue the work for every stored object of its type
-Task<int> MoveQueuedAsync(string from, string to, CancellationToken ct = default);
-Task DeleteQueueAsync(string name, CancellationToken ct = default);
-```
+You see rules, not queues.
 
-`DrainAsync` cannot be called from inside a handler or a save. Work waiting out a retry delay, after a failure or after finding the write lock held, is not ready and is left for later.
+| Method | What it does |
+| --- | --- |
+| `db.Rules.StatusAsync()` | Per rule: runs in progress, set-aside count, last error. Per type: messages waiting and set aside (approximate) |
+| `db.Rules.RetryAsync(rule)` | Puts a rule's set-aside work back in its queue; returns how many |
+| `db.Rules.DiscardAsync(rule)` | Deletes a rule's set-aside work; returns how many |
+| `db.Rules.BackfillAsync(rule)` | Queues a rule for every stored object its filter is true for; returns how many |
+| `db.DrainAsync(max)` | Runs what is ready now; returns how many rules were run, failed runs included |
 
-`RequeueAsync` is how work is redone after a handler changes (a new prompt or model), or how a new rule is backfilled.
+- **`rule`** is a full identity (`Note/summarize`), or just the name (`summarize`) when only one rule has it.
+- **Waiting work is counted per type,** not per rule: each message lists its rules, so a count per rule would mean reading every message.
+- **Set-aside work under a name no rule has** (after a rename) shows in `StatusAsync` with `Orphaned = true`. `RetryAsync` and `DiscardAsync` accept its full identity.
+- **A queue for a type that has no rules any more** shows with `Orphaned = true`. Its work is listed, not run.
+- **`DrainAsync`** cannot be called from inside a handler or a save. Work waiting out a retry delay is not ready and is left. With `max`, objects are worked on one at a time.
 
-- **With a filter the index can express** (`[Queryable]` properties compared with constants), it asks the search index for the matching objects (`Search<T>().Where(filter)`), which is cheap.
-- **Otherwise** (no filter, a type that is not searchable, or a filter the index cannot translate, such as comparing two fields or calling a method) it reads every object in the database.
-- Either way every candidate is checked again with the compiled filter before it is queued, since the index may return more than the filter is true for (an analyzed text field matches a word, not the whole value).
-- The index can lag the newest writes by up to `MaxSearchStaleness`. An object saved within that window queued the rule itself when it was saved, so a requeue that misses it loses nothing.
-- For a condition the index cannot express, store a flag (`NeedsSummary`) that the save sets and the handler clears, and filter on that.
+`BackfillAsync` is how work is redone after a handler changes, or how a new rule is run for objects that already exist.
 
-## Orphaned queues
-
-A queue is named after its rule, so renaming a rule, or the method its default name comes from, leaves the old queue behind with any work still in it; removing a rule does the same.
-
-- **Reported:** `GetQueueStatusAsync` lists every queue of the database (prefix `l{catalog hash}{database hash}-`, poison queues folded into their queue) that no rule in the configuration uses, with `Orphaned = true` and its `Waiting` and `Poisoned` counts. The list is made when the status is asked for, so it is never out of date.
-- **Never touched by itself:** during a rolling deploy an older server may still be running the old rule and queuing to the old name, so nothing is run, moved or deleted automatically.
-- **`MoveQueuedAsync(from, to)`** moves the work of an orphaned queue into the queue of a rule (`to` must be a rule's queue; `from` must not be). Each message is sent to the new queue before it is deleted from the old one, so a crash part way through can run a message twice but never loses one. Set-aside messages go to the rule's poison queue, still set aside. The old queues are left in place, empty.
-- **`DeleteQueueAsync(name)`** deletes an orphaned queue and its poison queue, with any work in them. It refuses a name a rule uses.
+- **With a filter the index can express** (`[Queryable]` properties compared with constants), it asks the search index for the matching objects.
+- **Otherwise** (no filter, a type that is not searchable, a filter comparing two fields or calling a method) it reads every object in the database.
+- `Changed(...)` is taken to be true.
+- Every candidate is checked again with the compiled filter before it is queued.
 
 ## Storage
 
 - `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)` takes a queue factory. Every built-in `Use…()` provider passes one.
 - A queued rule on a catalog with no queue storage throws `NotSupportedException` when the database is opened, before anything is created.
-- **FileSystem:** `UseFileSystem` passes the queue client of `Iciclecreek.Azure.Storage.FileSystem`. It needs 2.1.0 or later: the 2.0.4 client is not first in, first out and can hand one message to two receivers.
-- **Lucene:** `UseLucene` passes the queue client of `Iciclecreek.Azure.Storage.Lucene`, over the same directory factory as everything else. Each queue is a Lucene `Directory` of its own (`queues/{queue}`) with a file per message; no index is involved. A message's file name is about 100 characters. Lucene.Net syncs each file through its own call to Windows, which fails past 260 characters unless the program is declared long-path aware, so `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`). A factory of your own should do the same, or a send to a deep folder fails and is reported in the save's `Errors`.
-- Queue names are `l{catalog hash}{database hash}-{name}` and `…-poison`, since queue names allow only lower-case letters, digits and hyphens. The part after the prefix is the readable name; the catalog, database and name are also in each queue's metadata.
-- `ResetDatabaseAsync` empties the database's queues; `DeleteDatabaseAsync` and deleting the catalog delete them, orphaned ones included.
+- **Queue names** are `l{catalog hash}{database hash}-{type}-{hash}` and `…-poison`: `note-view-k3x9aa`. The type's full name, the catalog and the database are in each queue's metadata.
+- A type's queue is made the first time work is queued for the type. Opening the database finds the queues left by earlier runs.
+- **FileSystem** needs `Iciclecreek.Azure.Storage.FileSystem` 2.1.0 or later.
+- **Lucene:** each queue is a Lucene `Directory` of its own (`queues/{queue}`) with a file per message. `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`), since a message's file name is about 100 characters; a factory of your own should do the same.
+- `ResetDatabaseAsync` empties the database's queues. `DeleteDatabaseAsync` and deleting the catalog delete them.
 - `RebuildSearchIndex` queues nothing.
 
 ## Known limits
 
 - A save in the instant before a crash may not be queued, the same window in which inline rules and indexing are lost.
-- Latest-only collapses saves only within one running database instance.
 - Sends for a batch save go one at a time.
-- Not tested: a latest-only message arriving from another process.
+- The set-aside count per rule is taken from the first 32 records of each poison queue.
+- Queues made by another process after this one opened the database are not run here until it is reopened.
+- "Two runs for the same object never overlap" holds within one process.
 
-## Left out on purpose
+## Not built yet
 
-- Queued deletes (`WhenDeleted<T>().Queue(...)`): the object is gone by the time the run comes up, so it needs a snapshot or tombstone design. Planned for 6.x.
-- More than one run at a time (`MaxConcurrency`), and batch handlers.
-- A change feed (`db.Changes`).
-- Collapsing saves across restarts and processes.
-- Handing the handler the object as it was at each save.
-- Detecting a changed handler automatically.
+See [Rules-Next.md](Rules-Next.md):
+
+- `Maintain`, `RefreshWhen`: projections.
+- `After`, `At`: delayed actions.
+- `Every`: schedules.
+- Queued rules for deletes.

@@ -5,21 +5,28 @@ using Azure.Storage.Queues;
 namespace Lotta.Internal;
 
 /// <summary>
-/// The names of the queues that queued handlers run from. A queue name may hold only lower-case
-/// letters, digits and hyphens and be at most 63 characters, while catalog and database names are
-/// free text, so the catalog and the database each appear as a short hash:
-/// <c>l{catalog:6}{database:7}-{handler}</c>, and <c>…-poison</c> for work that failed too often.
+/// The names of queued rules, and of the queues their work waits in. There is one queue per
+/// object type. A queue name may hold only lower-case letters, digits and hyphens and be at most
+/// 63 characters, while catalog, database and type names are free text, so the catalog and the
+/// database each appear as a short hash and the type as a readable part plus a hash of its full
+/// name: <c>l{catalog:6}{database:7}-{type}-{hash:6}</c>, and <c>…-poison</c> for work that failed
+/// too often.
 /// </summary>
-internal static partial class AsyncQueueNames
+internal static partial class RuleQueueNames
 {
-    public const int MaxHandlerNameLength = 40;
+    public const int MaxRuleNameLength = 40;
     public const string PoisonSuffix = "-poison";
+
+    /// <summary>The metadata entry of a queue that holds the full name of its object type.</summary>
+    public const string TypeMetadata = "type";
+
+    private const int MaxTypeSlugLength = 30;
     private const string Base32 = "abcdefghijklmnopqrstuvwxyz234567";
 
-    /// <summary>3 to 40 lower-case letters and digits, with single hyphens between them, and not ending in <c>-poison</c>.</summary>
-    public static bool IsValidHandlerName(string name)
+    /// <summary>3 to 40 lower-case letters and digits, with single hyphens between them.</summary>
+    public static bool IsValidRuleName(string name)
     {
-        if (name.Length is < 3 or > MaxHandlerNameLength || name.EndsWith(PoisonSuffix, StringComparison.Ordinal))
+        if (name.Length is < 3 or > MaxRuleNameLength)
             return false;
         for (var n = 0; n < name.Length; n++)
         {
@@ -32,18 +39,21 @@ internal static partial class AsyncQueueNames
     }
 
     /// <summary>
-    /// The queue name for <c>.Queue(handler)</c>, made from the source text of the handler argument
-    /// (<c>[CallerArgumentExpression]</c>): its last identifier, without an <c>Async</c> suffix, in
-    /// kebab case. <c>Summarize</c> gives <c>summarize</c>, <c>handlers.NotifyFollowersAsync</c>
-    /// gives <c>notify-followers</c>, and <c>Handle&lt;Note&gt;</c> gives <c>handle</c>.
+    /// The rule name for <c>.Then(handler)</c> or <c>.Update(handler)</c>, made from the source
+    /// text of the handler argument (<c>[CallerArgumentExpression]</c>): its last identifier,
+    /// without an <c>Async</c> suffix, in kebab case. <c>Summarize</c> gives <c>summarize</c>,
+    /// <c>handlers.NotifyFollowersAsync</c> gives <c>notify-followers</c>, and
+    /// <c>Handle&lt;Note&gt;</c> gives <c>handle</c>.
     /// </summary>
+    /// <param name="expression">The source text of the handler argument.</param>
+    /// <param name="verb">The method the handler was given to, for the message: <c>Then</c>.</param>
     /// <exception cref="ArgumentException">
     /// The text is not an identifier or a member access (a lambda, a call, a cast), or the name
-    /// made from it is not a valid queue name.
+    /// made from it is not a valid rule name.
     /// </exception>
-    public static string HandlerNameFromExpression(string? expression)
+    public static string RuleNameFromExpression(string? expression, string verb)
     {
-        const string useName = "Name the queue instead: .Queue(\"queue-name\", handler).";
+        var useName = $"Name the rule instead: .{verb}(\"rule-name\", handler).";
         var text = expression?.Trim() ?? "";
         // Type arguments of a generic method group play no part in the name.
         string previous;
@@ -55,15 +65,15 @@ internal static partial class AsyncQueueNames
         while (text != previous);
         if (!MemberAccess().IsMatch(text))
             throw new ArgumentException(
-                $"A queue is named after its handler method, and '{expression}' is not a method name. {useName}", "handler");
+                $"A rule is named after its handler method, and '{expression}' is not a method name. {useName}", "handler");
 
         var identifier = text[(text.LastIndexOf('.') + 1)..].Trim().TrimStart('@');
         if (identifier.Length > "Async".Length && identifier.EndsWith("Async", StringComparison.Ordinal))
             identifier = identifier[..^"Async".Length];
         var name = KebabCase(identifier);
-        if (!IsValidHandlerName(name))
+        if (!IsValidRuleName(name))
             throw new ArgumentException(
-                $"The queue name '{name}', made from the handler '{expression}', is not a queue name: it needs 3 to 40 " +
+                $"The rule name '{name}', made from the handler '{expression}', is not a rule name: it needs 3 to 40 " +
                 $"lower-case letters and digits, with single hyphens between them. {useName}", "handler");
         return name;
     }
@@ -104,16 +114,39 @@ internal static partial class AsyncQueueNames
     [System.Text.RegularExpressions.GeneratedRegex(@"^@?[\p{L}_][\p{L}\p{Nd}_]*(\s*\.\s*@?[\p{L}_][\p{L}\p{Nd}_]*)*$")]
     private static partial System.Text.RegularExpressions.Regex MemberAccess();
 
-    /// <summary>What the name of every handler queue in the catalog starts with.</summary>
+    /// <summary>What the name of every rule queue in the catalog starts with.</summary>
     public static string CatalogPrefix(string catalog) => "l" + Hash(catalog, 6);
 
-    /// <summary>What the name of every handler queue of one database starts with.</summary>
+    /// <summary>What the name of every rule queue of one database starts with.</summary>
     public static string DatabasePrefix(string catalog, string databaseId) =>
         CatalogPrefix(catalog) + Hash(catalog + "\n" + databaseId, 7) + "-";
 
-    public static string Queue(string catalog, string databaseId, string handler) => DatabasePrefix(catalog, databaseId) + handler;
+    /// <summary>
+    /// The queue for one object type: a readable form of the type's name, and a hash of its full
+    /// name so that two types with one name in different namespaces get different queues.
+    /// </summary>
+    public static string Queue(string catalog, string databaseId, Type type) =>
+        DatabasePrefix(catalog, databaseId) + TypeSlug(type.Name) + "-" + Hash(type.FullName ?? type.Name, 6);
 
-    public static string Poison(string catalog, string databaseId, string handler) => Queue(catalog, databaseId, handler) + PoisonSuffix;
+    /// <summary>Where the work of a queue goes when it has failed too often.</summary>
+    public static string Poison(string queue) => queue + PoisonSuffix;
+
+    /// <summary>A type's name as a queue name allows it: <c>BlobPhoto</c> gives <c>blob-photo</c>.</summary>
+    private static string TypeSlug(string typeName)
+    {
+        var slug = new StringBuilder();
+        foreach (var c in KebabCase(typeName))
+        {
+            if (c is >= 'a' and <= 'z' or >= '0' and <= '9')
+                slug.Append(c);
+            else if (slug.Length > 0 && slug[^1] != '-')
+                slug.Append('-');   // generic arity marks, nested-type marks and the like
+            if (slug.Length == MaxTypeSlugLength)
+                break;
+        }
+        var text = slug.ToString().Trim('-');
+        return text.Length == 0 ? "t" : text;
+    }
 
     /// <summary>Deletes every queue whose name starts with <paramref name="prefix"/>.</summary>
     public static async Task DeleteQueuesAsync(QueueServiceClient queues, string prefix, CancellationToken cancellationToken)

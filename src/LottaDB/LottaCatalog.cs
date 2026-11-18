@@ -69,7 +69,7 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Factory for creating a <see cref="QueueServiceClient"/>, or null when the storage provider
-    /// has no queue storage. Queued rules (<c>When&lt;T&gt;().Queue(...)</c>) need one.
+    /// has no queue storage. Queued rules (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>) need one.
     /// </summary>
     public Func<QueueServiceClient>? QueueServiceClientFactory { get; set; }
 
@@ -117,7 +117,7 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Register this catalog's storage provider, including queue storage, which queued rules
-    /// (<c>When&lt;T&gt;().Queue(...)</c>) run from.
+    /// (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>) run from.
     /// </summary>
     /// <param name="provider">Provider name, used in error messages.</param>
     /// <param name="tableServiceClientFactory">Sets <see cref="TableServiceClientFactory"/>.</param>
@@ -291,16 +291,16 @@ public class LottaCatalog : IDisposable
         config.CheckRules();
         config.Opened = true;
         // Before the database is built: building it creates an index that would then be left behind.
-        if (config.AsyncRegistrations.Count > 0 && QueueServiceClientFactory == null)
+        if (config.QueuedRules.Count > 0 && QueueServiceClientFactory == null)
             throw new NotSupportedException(
-                $"Queued rules (.Queue) need queue storage, which {StorageProvider ?? "this catalog's"} storage does not provide. " +
+                $"Queued rules (.Update, .Then) need queue storage, which {StorageProvider ?? "this catalog's"} storage does not provide. " +
                 $"Use .Do for inline rules, or give the catalog queue storage: every built-in Use…() provider " +
                 $"has it, and UseStorage has an overload that takes a queue client factory.");
         var db = new LottaDB(this, databaseId, config);
         try
         {
             await InitializeDatabaseAsync(db, databaseId, config, cancellationToken);
-            db.PrepareAsyncHandlers();
+            await db.PrepareRulesAsync(cancellationToken);
         }
         catch (Exception e)
         {
@@ -320,7 +320,7 @@ public class LottaCatalog : IDisposable
                 _databases[databaseId] = db;
                 // Only now, and only once kept: the schemas are loaded and any rebuild is done, so
                 // a queued handler sees a ready database; and one not kept runs no handler.
-                db.StartAsyncHandlers();
+                db.StartRules();
                 return db;
             }
         }
@@ -489,7 +489,7 @@ public class LottaCatalog : IDisposable
 
             // Every database's handler queues, opened in this session or not, share the catalog's prefix.
             if (GetQueueServiceClient() is { } queues)
-                await Internal.AsyncQueueNames.DeleteQueuesAsync(queues, Internal.AsyncQueueNames.CatalogPrefix(Name), cancellationToken);
+                await Internal.RuleQueueNames.DeleteQueuesAsync(queues, Internal.RuleQueueNames.CatalogPrefix(Name), cancellationToken);
 
             // Subsequent operations recreate the clients
             ReleaseStorageClients();

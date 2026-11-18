@@ -9,14 +9,14 @@ public abstract class CreateViewTestBase : LottaTestBase
     {
         return await CreateDbAsync(opts =>
         {
-            opts.Rules.WhenDeleted<Note>().Do(async (note, db, _) =>
-                await db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) =>
+                await context.Db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
 
-            opts.Rules.When<Note>().Do(async (note, db, _) =>
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                var actor = await context.Db.GetAsync<Actor>(note.AuthorId);
                 if (actor == null) return;
-                await db.SaveAsync(new NoteView
+                await context.Db.SaveAsync(new NoteView
                 {
                     Domain = note.Domain,
                     Id = $"nv-{note.NoteId}",
@@ -30,24 +30,24 @@ public abstract class CreateViewTestBase : LottaTestBase
                 });
             });
 
-            opts.Rules.WhenDeleted<Actor>().Do(async (actor, db, _) =>
+            opts.Rules.WhenDeleted<Actor>().Do(async (actor, context, _) =>
             {
-                var affected = db.Search<NoteView>()
+                var affected = context.Db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();
                 foreach (var view in affected)
-                    await db.DeleteAsync<NoteView>(view.Id);
+                    await context.Db.DeleteAsync<NoteView>(view.Id);
             });
 
-            opts.Rules.When<Actor>().Do(async (actor, db, _) =>
+            opts.Rules.When<Actor>().Do(async (actor, context, _) =>
             {
-                var affected = db.Search<NoteView>()
+                var affected = context.Db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();
                 foreach (var view in affected)
                 {
                     var noteKey = view.NoteId;
-                    var note = await db.GetAsync<Note>(noteKey);
+                    var note = await context.Db.GetAsync<Note>(noteKey);
                     if (note == null) continue;
-                    await db.SaveAsync(new NoteView
+                    await context.Db.SaveAsync(new NoteView
                     {
                         Domain = note.Domain,
                         Id = view.Id,

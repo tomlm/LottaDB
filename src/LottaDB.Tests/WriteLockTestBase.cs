@@ -282,9 +282,9 @@ public abstract class WriteLockTestBase : LottaTestBase
         var db = await CreateDbAsync(config =>
         {
             config.WriteLockReleaseDelay = 1;
-            config.Rules.When<Note>().Do(async (note, database, token) =>
+            config.Rules.When<Note>().Do(async (note, context, token) =>
             {
-                await database.SaveAsync(new NoteView
+                await context.Db.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,

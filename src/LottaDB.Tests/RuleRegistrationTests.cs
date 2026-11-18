@@ -1,4 +1,5 @@
 using Lotta.Internal;
+using static Lotta.Rule;
 
 namespace Lotta.Tests;
 
@@ -8,11 +9,11 @@ namespace Lotta.Tests;
 /// </summary>
 public class RuleRegistrationTests
 {
-    private static Task Handle(Actor actor, LottaDB db, CancellationToken cancellationToken) => Task.CompletedTask;
-    private static Task HandleAsync(Actor actor, LottaDB db, CancellationToken cancellationToken) => Task.CompletedTask;
-    private static Task Generic<T>(T item, LottaDB db, CancellationToken cancellationToken) => Task.CompletedTask;
+    private static Task Handle(Actor actor, RuleContext context, CancellationToken cancellationToken) => Task.CompletedTask;
+    private static Task HandleAsync(Actor actor, RuleContext context, CancellationToken cancellationToken) => Task.CompletedTask;
+    private static Task Generic<T>(T item, RuleContext context, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // === Default queue names ===
+    // === Default rule names ===
 
     [Theory]
     [InlineData("Summarize", "summarize")]
@@ -28,61 +29,68 @@ public class RuleRegistrationTests
     [InlineData("Handle<Note>", "handle")]
     [InlineData("handlers.Handle<Dictionary<string, Note>>", "handle")]
     [InlineData("Async", "async")]
-    public void ADefaultQueueName_IsTheHandlersLastIdentifier_InKebabCase(string expression, string name)
+    public void ADefaultRuleName_IsTheHandlersLastIdentifier_InKebabCase(string expression, string name)
     {
-        Assert.Equal(name, AsyncQueueNames.HandlerNameFromExpression(expression));
+        Assert.Equal(name, RuleQueueNames.RuleNameFromExpression(expression, "Then"));
     }
 
     [Theory]
-    [InlineData("(actor, db, ct) => Task.CompletedTask")]
+    [InlineData("(actor, context, ct) => Task.CompletedTask")]
     [InlineData("async (a, _, _) => await Task.Yield()")]
     [InlineData("MakeHandler()")]
     [InlineData("(RuleHandler<Actor>)Handle")]
     [InlineData("handlers[0]")]
     [InlineData("")]
     [InlineData(null)]
-    public void ADefaultQueueName_NeedsAMethodName(string? expression)
+    public void ADefaultRuleName_NeedsAMethodName(string? expression)
     {
-        var e = Assert.Throws<ArgumentException>(() => AsyncQueueNames.HandlerNameFromExpression(expression));
-        Assert.Contains(".Queue(\"queue-name\", handler)", e.Message);
-    }
-
-    [Theory]
-    [InlineData("Go")]                // too short
-    [InlineData("SetAsidePoison")]    // ends in -poison
-    public void ADefaultQueueName_MustBeAValidQueueName(string expression)
-    {
-        Assert.Throws<ArgumentException>(() => AsyncQueueNames.HandlerNameFromExpression(expression));
+        var e = Assert.Throws<ArgumentException>(() => RuleQueueNames.RuleNameFromExpression(expression, "Update"));
+        Assert.Contains(".Update(\"rule-name\", handler)", e.Message);
     }
 
     [Fact]
-    public void Queue_WithAMethodGroup_IsNamedAfterIt()
+    public void ADefaultRuleName_MustBeAValidRuleName()
     {
-        var config = new LottaConfiguration();
-        config.Rules.When<Actor>().Queue(Handle).Queue(Generic<Actor>);
-        config.Rules.When<Note>().Queue(Generic<Note>, "Summarize");   // an explicit expression is used as given
-        Assert.Equal(["handle", "generic", "summarize"], config.AsyncRegistrations.Select(r => r.Name));
+        Assert.Throws<ArgumentException>(() => RuleQueueNames.RuleNameFromExpression("Go", "Then"));   // too short
     }
 
     [Fact]
-    public void Queue_WithALambdaAndNoName_Throws()
+    public void ThenAndUpdate_WithAMethodGroup_AreNamedAfterIt_AndTheirType()
     {
         var config = new LottaConfiguration();
-        var e = Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Queue((_, _, _) => Task.CompletedTask));
+        config.Rules.When<Actor>().Then(Handle).Update(Generic<Actor>);
+        config.Rules.When<Note>().Then(Generic<Note>, "Summarize");   // an explicit expression is used as given
+        Assert.Equal(["Actor/handle", "Actor/generic", "Note/summarize"], config.QueuedRules.Select(r => r.Id));
+        Assert.Equal(["handle", "generic", "summarize"], config.QueuedRules.Select(r => r.Name));
+        Assert.Equal([RuleVerb.Then, RuleVerb.Update, RuleVerb.Then], config.QueuedRules.Select(r => r.Verb));
+    }
+
+    [Fact]
+    public void ThenAndUpdate_WithALambdaAndNoName_Throw()
+    {
+        var config = new LottaConfiguration();
+        var e = Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Then((_, _, _) => Task.CompletedTask));
         Assert.Contains("is not a method name", e.Message);
+        Assert.Contains(".Then(\"rule-name\", handler)", e.Message);
+        e = Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Update((_, _, _) => Task.CompletedTask));
+        Assert.Contains(".Update(\"rule-name\", handler)", e.Message);
+        Assert.Empty(config.QueuedRules);
     }
 
     [Fact]
-    public void ADuplicateDefaultName_Throws()
+    public void ARuleName_IsUniqueWithinItsType_WhateverTheVerb()
     {
         var config = new LottaConfiguration();
-        config.Rules.When<Actor>().Queue(Handle);
+        config.Rules.When<Actor>().Then(Handle);
         // HandleAsync loses its suffix and becomes "handle" too.
-        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Queue(HandleAsync));
-        Assert.Throws<ArgumentException>(() => config.Rules.When<Note>().Queue("handle", (_, _, _) => Task.CompletedTask));
-    }
+        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Then(HandleAsync));
+        var e = Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Update("handle", (_, _, _) => Task.CompletedTask));
+        Assert.Contains("Actor/handle", e.Message);
 
-    // === Names and modifiers ===
+        // Another type is another rule.
+        config.Rules.When<Note>().Then("handle", (_, _, _) => Task.CompletedTask);
+        Assert.Equal(["Actor/handle", "Note/handle"], config.QueuedRules.Select(r => r.Id));
+    }
 
     [Theory]
     [InlineData("ab")]
@@ -91,42 +99,79 @@ public class RuleRegistrationTests
     [InlineData("-lead")]
     [InlineData("trail-")]
     [InlineData("double--hyphen")]
-    [InlineData("describe-poison")]
+    [InlineData("with/slash")]
     [InlineData("a-name-that-is-longer-than-forty-characters-x")]
-    public void AQueueName_MustBeUsableAsAQueueName(string name)
+    public void ARuleName_IsLowerCaseLettersDigitsAndSingleHyphens(string name)
     {
         var config = new LottaConfiguration();
-        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Queue(name, (_, _, _) => Task.CompletedTask));
+        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Then(name, (_, _, _) => Task.CompletedTask));
+        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>().Update(name, (_, _, _) => Task.CompletedTask));
+    }
+
+    // === Changed ===
+
+    [Fact]
+    public void Changed_NamesTheInputsOfARule_AndLeavesTheRestOfTheFilterForLaterChecks()
+    {
+        var config = new LottaConfiguration();
+        config.Rules.When<Actor>(a => Changed(a.DisplayName, a.AvatarUrl) && a.Counter > 0).Update("describe", (_, _, _) => Task.CompletedTask);
+        config.Rules.When<Actor>(a => Changed(a.Counter)).Then("counted", (_, _, _) => Task.CompletedTask);
+        config.Rules.When<Actor>(a => a.Counter > 0).Then("plain", (_, _, _) => Task.CompletedTask);
+
+        var describe = config.QueuedRules[0];
+        Assert.True(describe.UsesChanged);
+        Assert.Equal(2, describe.Inputs.Length);
+        var alice = new Actor { DisplayName = "Alice", AvatarUrl = "a.png" };
+        Assert.Equal(new object?[] { "Alice", "a.png" }, describe.Inputs.Select(input => input(alice)).ToArray());
+        // With Changed taken to be true, the counter is still checked.
+        Assert.True(describe.Rest!(new Actor { Counter = 1 }));
+        Assert.False(describe.Rest!(new Actor { Counter = 0 }));
+
+        // Nothing but Changed: nothing is left to check later.
+        Assert.Null(config.QueuedRules[1].Rest);
+        Assert.False(config.QueuedRules[2].UsesChanged);
+        Assert.Empty(config.QueuedRules[2].Inputs);
+        Assert.Contains(typeof(Actor), config.ChangedTypes);
     }
 
     [Fact]
-    public void TwoQueues_CannotShareAName_AndModifierValuesAreChecked()
+    public void Changed_UnderANot_OrInAnOr_LeavesAFilterThatLetsTheRuleThrough()
     {
         var config = new LottaConfiguration();
-        var queued = config.Rules.When<Actor>().Queue("describe-mail", (_, _, _) => Task.CompletedTask);
+        config.Rules.When<Actor>(a => !Changed(a.Counter) && a.Counter > 0).Then("unchanged", (_, _, _) => Task.CompletedTask);
+        config.Rules.When<Actor>(a => Changed(a.Counter) || a.Counter > 0).Then("either", (_, _, _) => Task.CompletedTask);
 
-        Assert.Throws<ArgumentException>(() => config.Rules.When<Note>().Queue("describe-mail", (_, _, _) => Task.CompletedTask));
-        Assert.Throws<ArgumentOutOfRangeException>(() => queued.Retry(0, TimeSpan.FromSeconds(1)));
-        Assert.Throws<ArgumentOutOfRangeException>(() => queued.Retry(3, TimeSpan.FromSeconds(-1)));
-        Assert.Throws<ArgumentOutOfRangeException>(() => queued.Timeout(TimeSpan.Zero));
-        Assert.Throws<ArgumentOutOfRangeException>(() => queued.Timeout(TimeSpan.FromSeconds(-1)));
-        queued.Retry(1, TimeSpan.Zero);   // zero delay is allowed
+        // "Not changed" cannot be asked later either, and is taken to be true.
+        Assert.True(config.QueuedRules[0].Rest!(new Actor { Counter = 1 }));
+        Assert.False(config.QueuedRules[0].Rest!(new Actor { Counter = 0 }));
+        // Changed or anything: always through.
+        Assert.Null(config.QueuedRules[1].Rest);
     }
 
     [Fact]
-    public void Modifiers_SetTheQueuesOptions_AndOnlyThoseOfTheQueueTheyFollow()
+    public void Changed_MustBeGivenValues_AndOnlyMeansSomethingInAFilter()
     {
         var config = new LottaConfiguration();
-        config.Rules.When<Actor>()
-            .Queue("first", (_, _, _) => Task.CompletedTask)
-            .Queue("second", (_, _, _) => Task.CompletedTask)
-                .Priority(10).EverySave().Retry(3, TimeSpan.FromSeconds(10)).Timeout(TimeSpan.FromMinutes(2));
+        Assert.Throws<ArgumentException>(() => config.Rules.When<Actor>(a => Changed()));
+        // A delete has no newer version to compare with.
+        Assert.Throws<ArgumentException>(() => config.Rules.WhenDeleted<Actor>(a => Changed(a.Counter)));
+        Assert.Throws<InvalidOperationException>(() => Changed(1));
+    }
 
-        var first = config.AsyncRegistrations.Single(r => r.Name == "first").Options;
-        var second = config.AsyncRegistrations.Single(r => r.Name == "second").Options;
-        Assert.Equal((0, true, 5, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)),
-            (first.Priority, first.Latest, first.MaxAttempts, first.Timeout, first.RetryDelay));
-        Assert.Equal((10, false, 3, TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(10)),
-            (second.Priority, second.Latest, second.MaxAttempts, second.Timeout, second.RetryDelay));
+    // === Settings ===
+
+    [Fact]
+    public void TheSettingsOfQueuedRules_AreChecked()
+    {
+        var config = new LottaConfiguration();
+        Assert.Equal((4, 5, TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5), 16),
+            (config.MaxConcurrency, config.RuleMaxAttempts, config.RuleRetryDelay, config.RuleTimeout, config.MaxQueueHops));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => config.MaxConcurrency = 0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => config.RuleMaxAttempts = 0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => config.RuleRetryDelay = TimeSpan.FromSeconds(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => config.RuleTimeout = TimeSpan.Zero);
+        Assert.Throws<ArgumentOutOfRangeException>(() => config.RuleTimeout = TimeSpan.FromSeconds(-1));
+        config.RuleRetryDelay = TimeSpan.Zero;   // no wait is allowed
     }
 }
