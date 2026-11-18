@@ -5,8 +5,8 @@
     <RootNamespace>Lotta.Tiki</RootNamespace>
     <Description>Tiki.Net integration for LottaDB — auto-extract rich metadata from blobs on upload.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>5.3.0</Version>
-    <AssemblyVersion>5.3.0.0</AssemblyVersion>
+    <Version>5.4.0</Version>
+    <AssemblyVersion>5.4.0.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,7 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../LottaDB/LottaDB.csproj" />
-    <PackageReference Include="Tiki.Net" Version="1.0.1" />
+    <PackageReference Include="Tiki.Net" Version="1.1.0-rc001" />
   </ItemGroup>
 
 </Project>

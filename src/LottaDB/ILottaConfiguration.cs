@@ -110,6 +110,46 @@ public interface ILottaConfiguration
     ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new();
 
     /// <summary>
+    /// Register a handler that runs later, from a queue, outside the save that caused it. Every
+    /// save of a <typeparamref name="T"/> (or a type derived from it) queues the handler; it is
+    /// then given the object as it is when it runs, and is retried until it succeeds or has
+    /// failed <see cref="AsyncHandlerOptions.MaxAttempts"/> times. Use it for work too slow to do
+    /// inside a save. The handler may run more than once for one save, so it must be safe to repeat.
+    /// </summary>
+    /// <typeparam name="T">The object type to react to.</typeparam>
+    /// <param name="name">
+    /// Identifies the handler across runs of the program; its queue is named after it. 3 to 40
+    /// lower-case letters and digits, with single hyphens between them.
+    /// </param>
+    /// <param name="handler">
+    /// Receives the object, <see cref="TriggerKind.Saved"/>, the database, and a token that is
+    /// cancelled when the run outlasts <see cref="AsyncHandlerOptions.Timeout"/> (a failure), or
+    /// when the database is disposed or the <see cref="LottaDB.DrainAsync"/> running it is
+    /// cancelled (not a failure: the work stays queued).
+    /// </param>
+    /// <param name="priority">Higher runs first. Within one priority, work runs first in, first out.</param>
+    /// <param name="latest">
+    /// True when only an object's latest state matters: several saves of one object before the
+    /// handler gets to it then give one run instead of one each. False to run once for every save.
+    /// </param>
+    /// <param name="options">Retry limit and time allowed for one run.</param>
+    /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
+    ILottaConfiguration OnAsync<T>(string name, EntityHandler<T> handler, int priority = 0, bool latest = true, AsyncHandlerOptions? options = null)
+        where T : class, new();
+
+    /// <summary>
+    /// Whether queued handlers run by themselves while the database is open (the default), or
+    /// only when <see cref="LottaDB.DrainAsync"/> is called.
+    /// </summary>
+    public AsyncHandlerMode AsyncHandlers { get; set; }
+
+    /// <summary>
+    /// How long a chain of queued handlers triggering one another may get before the next link is
+    /// set aside as failed. Guards against handlers that keep triggering each other. Default: 16.
+    /// </summary>
+    public int AsyncHandlerMaxHops { get; set; }
+
+    /// <summary>
     /// Set the blob upload handler (replacement semantics: last one wins).
     /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
     /// Use <c>On&lt;BlobFile&gt;</c> for additional post-upload processing (CSAM scanning, thumbnails, etc.).

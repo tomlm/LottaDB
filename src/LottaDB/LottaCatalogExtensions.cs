@@ -1,5 +1,6 @@
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
 
 namespace Lotta;
 
@@ -19,5 +20,6 @@ public static class LottaCatalogExtensions
         => catalog.UseStorage("Azure",
             () => new TableServiceClient(connectionString),
             () => new BlobServiceClient(connectionString),
+            () => new QueueServiceClient(connectionString),
             LuceneDirectories.Azure(catalog.GetBlobServiceClient));
 }

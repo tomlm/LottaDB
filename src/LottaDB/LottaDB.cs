@@ -25,7 +25,7 @@ namespace Lotta;
 /// (catalog) while maintaining isolation via distinct partition keys (database IDs).
 /// Each database has its own Lucene index.
 /// </summary>
-public class LottaDB : IDisposable
+public partial class LottaDB : IDisposable
 {
     private readonly object _lock = new object();
     internal readonly LottaCatalog _lottaCatalog;
@@ -33,21 +33,6 @@ public class LottaDB : IDisposable
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
     private LuceneDirectory _directory;
-
-    // Set when table storage is a LuceneTableServiceClient: the index is the storage, so a table
-    // write indexes the object itself and the post-write indexing handlers are not registered.
-    private readonly LuceneTableServiceClient? _luceneTables;
-    private bool IndexIsStorage => _luceneTables != null;
-
-    // Near-real-time searcher over the IndexWriter, so storage reads see this process's
-    // uncommitted writes. Only used when IndexIsStorage; lives and dies with the writer.
-    private Lucene.Net.Search.SearcherManager? _writerSearchers;
-
-    // Changes whenever the index may have changed other than through WriteIndexDocument: the
-    // writer is taken or released (another process may write in between) or the whole index is
-    // cleared. LuceneTableClient drops what it knows about recent writes when this moves.
-    private long _indexEpoch;
-    internal long IndexEpoch => Interlocked.Read(ref _indexEpoch);
 
     /// <summary>Returns the underlying Lucene directory (for testing/diagnostics).</summary>
     internal LuceneDirectory GetLuceneDirectory() => _directory;
@@ -136,9 +121,7 @@ public class LottaDB : IDisposable
         _lottaCatalog = catalog;
         _databaseId = databaseId;
         _config = config;
-        var tableServiceClient = catalog.GetTableServiceClient();
-        _tableAdapter = new TableStorageAdapter(tableServiceClient, partitionKey: databaseId);
-        _luceneTables = tableServiceClient as LuceneTableServiceClient;
+        _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
         _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
@@ -182,8 +165,6 @@ public class LottaDB : IDisposable
             _metadata.TryGetValue(type, out var meta);
             return Activator.CreateInstance(mapperType, version, catalog.Analyzer, meta, catalog.EmbeddingGenerator, this)!;
         };
-
-        _luceneTables?.Attach(databaseId, this);
     }
 
     // === Cross-process write lock ===
@@ -326,7 +307,6 @@ public class LottaDB : IDisposable
                 lock (_lock)
                 {
                     _indexWriter = writer;
-                    Interlocked.Increment(ref _indexEpoch);
                 }
                 _writerAcquiredTimestamp = Stopwatch.GetTimestamp();
             }
@@ -369,10 +349,8 @@ public class LottaDB : IDisposable
                 {
                     if (_indexDirty)
                         _indexWriter.Commit();
-                    CloseWriterSearchersLocked();
                     _indexWriter.Dispose();   // releases write.lock / blob lease
                     _indexWriter = null;
-                    Interlocked.Increment(ref _indexEpoch);
                     _indexDirty = false;
                 }
                 RefreshReadersLocked();
@@ -459,28 +437,24 @@ public class LottaDB : IDisposable
         }
 
         // Built-in handler: index JsonDocument in Lucene via the schema-aware mapper.
-        // Not needed when the index is the storage — the table write already indexed it.
-        if (!IndexIsStorage)
+        var jsonDocHandler = (EntityHandler<JsonDocument>)((doc, kind, db, cancellationToken) =>
         {
-            var jsonDocHandler = (EntityHandler<JsonDocument>)((doc, kind, db, cancellationToken) =>
+            var schemaName = doc.GetSchema() ?? Internal.StorageFields.DefaultSchema;
+            WriteIndexDocument(doc.GetKey()!, () =>
             {
-                var schemaName = doc.GetSchema() ?? Internal.StorageFields.DefaultSchema;
-                WriteIndexDocument(doc.GetKey()!, () =>
-                {
-                    if (kind != TriggerKind.Saved || !_dynamicMappers.TryGetValue(schemaName, out var mapper))
-                        return null;
-                    var document = new Document();
-                    mapper.ToDocument(doc, document);
-                    var etag = doc.GetETag() ?? "";
-                    Internal.EntityMapper.AddMetadataToLuceneDocument(document, typeof(JsonDocument).FullName!, etag, schemaName);
-                    return document;
-                });
-                return Task.CompletedTask;
+                if (kind != TriggerKind.Saved || !_dynamicMappers.TryGetValue(schemaName, out var mapper))
+                    return null;
+                var document = new Document();
+                mapper.ToDocument(doc, document);
+                var etag = doc.GetETag() ?? "";
+                Internal.EntityMapper.AddMetadataToLuceneDocument(document, typeof(JsonDocument).FullName!, etag, schemaName);
+                return document;
             });
-            _handlers.AddOrUpdate(typeof(JsonDocument),
-                _ => ImmutableArray.Create<object>(jsonDocHandler),
-                (_, existing) => existing.Add(jsonDocHandler));
-        }
+            return Task.CompletedTask;
+        });
+        _handlers.AddOrUpdate(typeof(JsonDocument),
+            _ => ImmutableArray.Create<object>(jsonDocHandler),
+            (_, existing) => existing.Add(jsonDocHandler));
 
         // Built-in handler: when a JsonSchema is saved/deleted, update the dynamic mappers
         var jsonSchemaHandler = (EntityHandler<JsonSchema>)(async (schema, kind, db, cancellationToken) =>
@@ -506,22 +480,13 @@ public class LottaDB : IDisposable
             {
                 _schemas.TryRemove(schema.Name, out _);
                 _dynamicMappers.TryRemove(schema.Name, out _);
-                if (IndexIsStorage)
+                // Delete Lucene documents for this schema
+                lock (_lock)
                 {
-                    // The documents are the stored rows — keep them, now unmapped, rather than
-                    // deleting them; they leave search just as their table rows would.
-                    await ReindexJsonRowsAsync(schema.Name, cancellationToken);
+                    RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schema.Name));
+                    _indexDirty = true;
                 }
-                else
-                {
-                    // Delete Lucene documents for this schema
-                    lock (_lock)
-                    {
-                        RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schema.Name));
-                        _indexDirty = true;
-                    }
-                    ScheduleRefresh();
-                }
+                ScheduleRefresh();
             }
         });
         _handlers.AddOrUpdate(typeof(JsonSchema),
@@ -532,9 +497,6 @@ public class LottaDB : IDisposable
     // ===== LUCENE HANDLER ===
     private void InitializeLuceneHandlers()
     {
-        // When the index is the storage, the table write is the indexing step.
-        if (IndexIsStorage) return;
-
         var method = typeof(LottaDB).GetMethod(nameof(RegisterLuceneHandler),
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         foreach (var type in _metadata.Keys)
@@ -553,6 +515,7 @@ public class LottaDB : IDisposable
                 var mapper = GetMapper<T>();
                 var document = new Document();
                 mapper.ToDocument(entity, document);
+                SetIndexKey(document, key);
                 var etag = entity.GetETag()
                     ?? throw new InvalidOperationException(
                         $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
@@ -573,19 +536,11 @@ public class LottaDB : IDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task RebuildSearchIndex(CancellationToken cancellationToken = default)
     {
-        // The index is its own source: remap every stored row in place.
-        if (IndexIsStorage)
-        {
-            await RemapStoredRowsAsync(_ => true, cancellationToken);
-            return;
-        }
-
         using var lease = await AcquireWriterAsync(cancellationToken);
 
         lock (_lock)
         {
             RequireWriter().DeleteAll();
-            Interlocked.Increment(ref _indexEpoch);
             _indexDirty = true;
         }
 
@@ -605,8 +560,7 @@ public class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Replace the index document for a key — the one index write shared by the On&lt;T&gt;
-    /// indexing handlers and, when the index is the storage, <see cref="LuceneTableServiceClient"/>.
+    /// Replace the index document for a key — the index write the On&lt;T&gt; indexing handlers use.
     /// The document is built under the index lock; a null document just removes the key.
     /// </summary>
     internal void WriteIndexDocument(string key, Func<Document?> buildDocument)
@@ -636,37 +590,37 @@ public class LottaDB : IDisposable
 
     /// <summary>
     /// Map a table row to its index document — typed or dynamic mapper by its Type column, plus
-    /// ETag and Schema metadata. Returns null for a row no mapper covers, except when the index is
-    /// the storage: then the row is kept as an unmapped document, and every document also
-    /// carries the row's columns so it can be read back as the row.
+    /// ETag and Schema metadata. Returns null for a row no mapper covers.
     /// </summary>
-    internal Document? BuildIndexDocument(TableEntity tableEntity)
+    private Document? BuildIndexDocument(TableEntity tableEntity)
     {
         var document = MapRow(tableEntity);
-        if (document != null)
-        {
-            // Store metadata (ETag + Schema)
-            var rebuildTypeName = tableEntity.GetString(Internal.StorageFields.Type) ?? "";
-            var schemaFallback = JsonMetadata.IsJsonTypeName(rebuildTypeName)
-                ? Internal.StorageFields.DefaultSchema
-                : rebuildTypeName;
-            var rebuildSchema = tableEntity.TryGetValue(Internal.StorageFields.Schema, out var schemaObj) && schemaObj is string schemaStr
-                ? schemaStr : schemaFallback;
-            Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema);
-        }
+        if (document == null)
+            return null;
+        SetIndexKey(document, TableStorageAdapter.DecodeKey(tableEntity.RowKey));
 
-        if (!IndexIsStorage)
-            return document;
-
-        document ??= LuceneRowCodec.CreateRawDocument(tableEntity);
-
-        // The key field is how the row is found again, so it must be the row key itself. The typed
-        // mapper writes the [Key] property's value, which differs from a SetKey(...) computed key.
-        document.RemoveFields(Internal.StorageFields.Key);
-        document.Add(new StringField(Internal.StorageFields.Key, TableStorageAdapter.DecodeKey(tableEntity.RowKey), Field.Store.YES));
-
-        LuceneRowCodec.AddRowFields(document, tableEntity);
+        // Store metadata (ETag + Schema)
+        var rebuildTypeName = tableEntity.GetString(Internal.StorageFields.Type) ?? "";
+        var schemaFallback = JsonMetadata.IsJsonTypeName(rebuildTypeName)
+            ? Internal.StorageFields.DefaultSchema
+            : rebuildTypeName;
+        var rebuildSchema = tableEntity.TryGetValue(Internal.StorageFields.Schema, out var schemaObj) && schemaObj is string schemaStr
+            ? schemaStr : schemaFallback;
+        Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema);
         return document;
+    }
+
+    /// <summary>
+    /// Make the document's key field the object's key. The index finds a document again by this
+    /// field, and the typed mapper writes the key property's value there (or nothing), which is
+    /// not the key when it is computed with <c>SetKey(...)</c>.
+    /// </summary>
+    private static void SetIndexKey(Document document, string key)
+    {
+        if (document.Get(Internal.StorageFields.Key) == key)
+            return;
+        document.RemoveFields(Internal.StorageFields.Key);
+        document.Add(new StringField(Internal.StorageFields.Key, key, Field.Store.YES));
     }
 
     private Document? MapRow(TableEntity tableEntity)
@@ -697,74 +651,6 @@ public class LottaDB : IDisposable
             mapper.ToDocument(entity, document);
         }
         return document;
-    }
-
-    // === Index as storage (used by LuceneTableServiceClient) ===
-
-    /// <summary>Remove every document from the index. Caller holds a write lease.</summary>
-    internal void DeleteAllIndexDocuments()
-    {
-        lock (_lock)
-        {
-            RequireWriter().DeleteAll();
-            Interlocked.Increment(ref _indexEpoch);
-            _indexDirty = true;
-            ScheduleRefresh();
-        }
-    }
-
-    /// <summary>
-    /// Read the index as storage. While this process holds the writer, reads go through a
-    /// near-real-time searcher over it; otherwise they read the latest commit. Returns
-    /// <paramref name="empty"/> if the index does not exist yet.
-    /// <para>
-    /// The near-real-time searcher is only reopened when <paramref name="refresh"/> is set — a
-    /// reopen flushes the writer's buffer into a new segment, so doing it per read is costly.
-    /// Without it the searcher is as of its last refresh; the caller accounts for writes since.
-    /// </para>
-    /// </summary>
-    internal T ReadIndex<T>(Func<Lucene.Net.Search.IndexSearcher, T> read, T empty, bool refresh)
-    {
-        // Only acquiring the searcher needs the lock. The read itself — possibly a scan of every
-        // document — runs outside it, so it never blocks writers: an acquired searcher is a
-        // ref-counted point-in-time view that stays valid even if the writer is released meanwhile.
-        if (AcquireStorageSearcher(refresh) is not ({ } searchers, { } searcher))
-            return empty;
-        try
-        {
-            return read(searcher);
-        }
-        finally
-        {
-            searchers.Release(searcher);
-        }
-    }
-
-    /// <summary>The searcher <see cref="ReadIndex"/> reads with, acquired from its manager; nulls if there is no index yet.</summary>
-    private (Lucene.Net.Search.SearcherManager?, Lucene.Net.Search.IndexSearcher?) AcquireStorageSearcher(bool refresh)
-    {
-        lock (_lock)
-        {
-            if (_indexWriter != null)
-            {
-                if (_writerSearchers == null)
-                    _writerSearchers = new Lucene.Net.Search.SearcherManager(_indexWriter, true, null);
-                else if (refresh)
-                    _writerSearchers.MaybeRefreshBlocking();
-                return (_writerSearchers, _writerSearchers.Acquire());
-            }
-        }
-
-        if (!IndexAvailable()) return (null, null);
-        Searchers.MaybeRefreshBlocking();
-        return (Searchers, Searchers.Acquire());
-    }
-
-    /// <summary>Close the near-real-time searcher before its IndexWriter goes away. Caller holds _lock.</summary>
-    private void CloseWriterSearchersLocked()
-    {
-        _writerSearchers?.Dispose();
-        _writerSearchers = null;
     }
 
     internal TypeMetadata GetMeta(Type type)
@@ -836,6 +722,8 @@ public class LottaDB : IDisposable
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
             string newETag;
+            // The JSON this object had when it was last loaded or saved; the write below replaces it.
+            var jsonBefore = entity is JsonDocument ? null : entity.GetJson();
 
             if (entity is JsonDocument jsonDoc)
             {
@@ -893,6 +781,10 @@ public class LottaDB : IDisposable
             changes.Add(change);
 
             await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
+
+            // A save that left the object as it was gives queued handlers nothing new to do.
+            if (jsonBefore == null || jsonBefore != entity.GetJson())
+                await EnqueueAsync(entity, key, errors, cancellationToken);
 
             if (isRoot)
             {
@@ -1058,7 +950,15 @@ public class LottaDB : IDisposable
             if (current == null || string.IsNullOrEmpty(etag))
                 throw new InvalidOperationException($"{typeof(T).Name} '{key}' not found.");
 
+            var jsonBefore = current.GetJson();
             var mutated = mutate(current);
+
+            // A change that leaves the object exactly as it is stored writes nothing: no new
+            // ETag, no handlers, no reindex. This is also what lets handlers that write back to
+            // the object they were given come to rest.
+            if (jsonBefore != null && mutated != null
+                && jsonBefore == JsonSerializer.Serialize(mutated, mutated.GetType()))
+                return new ObjectResult { Changes = Array.Empty<ObjectChange>(), Errors = Array.Empty<Exception>() };
 
             // Per-key lock: table write + Lucene handler are atomic for this key
             using var keyLock = await AcquireLockAsync(key, cancellationToken);
@@ -1084,6 +984,7 @@ public class LottaDB : IDisposable
                 changes.Add(change);
 
                 await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
+                await EnqueueAsync(mutated, key, errors, cancellationToken);
 
                 if (isRoot)
                 {
@@ -1185,8 +1086,6 @@ public class LottaDB : IDisposable
                 foreach (var hit in hits.ScoreDocs)
                 {
                     var doc = searcher.Doc(hit.Doc);
-                    // Unmapped rows (index-as-storage) carry no type and are not search results.
-                    if (doc.Get(Internal.StorageFields.Type) == null) continue;
                     var obj = Internal.EntityMapper.FromLuceneDocument(doc, this);
                     results.Add((T)obj);
                 }
@@ -1393,12 +1292,6 @@ public class LottaDB : IDisposable
         if (!_schemas.TryGetValue(schemaName, out var dynSchema)) return;
         if (!_dynamicMappers.TryGetValue(schemaName, out var mapper)) return;
 
-        if (IndexIsStorage)
-        {
-            await ReindexJsonRowsAsync(schemaName, cancellationToken);
-            return;
-        }
-
         using var lease = await AcquireWriterAsync(cancellationToken);
 
         lock (_lock)
@@ -1418,60 +1311,6 @@ public class LottaDB : IDisposable
             {
                 RequireWriter().AddDocument(document);
                 _indexDirty = true;
-            }
-        }
-
-        ReloadSearcher();
-    }
-
-    /// <summary>
-    /// Index-as-storage form of a schema reindex: the JSON documents stored under the schema are
-    /// remapped in place with its current mapper (or kept unmapped, if the schema is gone).
-    /// </summary>
-    private Task ReindexJsonRowsAsync(string schemaName, CancellationToken cancellationToken)
-        => RemapStoredRowsAsync(row =>
-            JsonMetadata.IsJsonTypeName(row.GetString(Internal.StorageFields.Type))
-            && (schemaName == Internal.StorageFields.DefaultSchema
-                || (row.TryGetValue(Internal.StorageFields.Schema, out var schema) && schema as string == schemaName)),
-            cancellationToken);
-
-    /// <summary>
-    /// Index-as-storage reindexing: rewrite the stored rows <paramref name="include"/> selects with
-    /// the current mappers, reading them from a point-in-time view of the index — constant memory,
-    /// and no DeleteAll, since the documents being remapped are the data. Each row is rewritten
-    /// under its key lock, and only if its ETag is unchanged since the view was taken: a row
-    /// written meanwhile was already indexed by that write, and rewriting it from the older view
-    /// would lose the write.
-    /// </summary>
-    private async Task RemapStoredRowsAsync(Func<TableEntity, bool> include, CancellationToken cancellationToken)
-    {
-        using var lease = await AcquireWriterAsync(cancellationToken);
-
-        // Refreshed, so the view includes this process's uncommitted writes.
-        if (AcquireStorageSearcher(refresh: true) is ({ } searchers, { } searcher))
-        {
-            try
-            {
-                foreach (var segment in searcher.IndexReader.Leaves)
-                {
-                    var reader = segment.AtomicReader;
-                    var liveDocs = reader.LiveDocs;
-                    for (var doc = 0; doc < reader.MaxDoc; doc++)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (liveDocs != null && !liveDocs.Get(doc)) continue;
-                        if (LuceneRowCodec.ToRow(reader.Document(doc)) is not { } row || !include(row)) continue;
-
-                        var key = TableStorageAdapter.DecodeKey(row.RowKey);
-                        using var keyLock = await AcquireLockAsync(key, cancellationToken);
-                        if (_tableAdapter.GetETag(_lottaCatalog.Name, key) != row.ETag.ToString()) continue;
-                        WriteIndexDocument(key, () => BuildIndexDocument(row));
-                    }
-                }
-            }
-            finally
-            {
-                searchers.Release(searcher);
             }
         }
 
@@ -2065,26 +1904,14 @@ public class LottaDB : IDisposable
     /// <summary>
     /// Deletes all documents from the Lucene index without touching Table Storage.
     /// Used by tests to verify that RebuildSearchIndex repopulates the index.
-    /// When the index is the storage, the rows are kept and only their search mapping is
-    /// dropped — every document becomes an unmapped row, invisible to search.
     /// </summary>
     internal async Task DeleteSearchIndexAsync(CancellationToken cancellationToken = default)
     {
         using var lease = await AcquireWriterAsync(cancellationToken);
-        var rows = IndexIsStorage
-            ? await _tableAdapter.GetAllRawAsync(_lottaCatalog.Name, cancellationToken: cancellationToken).ToListAsync(cancellationToken)
-            : null;
         lock (_lock)
         {
             var writer = RequireWriter();
             writer.DeleteAll();
-            Interlocked.Increment(ref _indexEpoch);
-            foreach (var row in rows ?? [])
-            {
-                var document = LuceneRowCodec.CreateRawDocument(row);
-                LuceneRowCodec.AddRowFields(document, row);
-                writer.AddDocument(document);
-            }
             writer.Commit();
             _indexDirty = false;
             RefreshReadersLocked();
@@ -2099,17 +1926,14 @@ public class LottaDB : IDisposable
     {
         using var writerLease = await AcquireWriterAsync(cancellationToken);
 
-        // 1. Delete all rows in this database's partition — unless the index is the storage, in
-        //    which case clearing the index below deletes them.
-        if (!IndexIsStorage)
-            await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
+        // 1. Delete all rows in this database's partition
+        await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
         {
             var writer = RequireWriter();
             writer.DeleteAll();
-            Interlocked.Increment(ref _indexEpoch);
             writer.Commit();
             _indexDirty = false;
             RefreshReadersLocked();
@@ -2122,6 +1946,9 @@ public class LottaDB : IDisposable
         {
             await container.DeleteBlobIfExistsAsync(blob.Blob.Name, cancellationToken: cancellationToken);
         }
+
+        // 4. Work queued for objects that no longer exist.
+        await ClearAsyncQueuesAsync(cancellationToken);
     }
 
     /// <summary>
@@ -2133,13 +1960,11 @@ public class LottaDB : IDisposable
     {
         using (var writerLease = await AcquireWriterAsync(cancellationToken))
         {
-            if (!IndexIsStorage) // otherwise clearing the index below deletes the rows
-                await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+            await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
             lock (_lock)
             {
                 var writer = RequireWriter();
                 writer.DeleteAll();
-                Interlocked.Increment(ref _indexEpoch);
                 writer.Commit();
                 _indexDirty = false;
             }
@@ -2149,6 +1974,9 @@ public class LottaDB : IDisposable
             // rows we have already deleted — which the manifest removal would then orphan.
             await _lottaCatalog.RemoveDatabaseManifestAsync(_databaseId, cancellationToken);
         }
+
+        StopAsyncHandlers();
+        await DeleteAsyncQueuesAsync(cancellationToken);
 
         // Don't keep holding the cross-process write lock for a database we just deleted.
         await ReleaseWriteLockAsync(cancellationToken);
@@ -2175,6 +2003,9 @@ public class LottaDB : IDisposable
         var pendingActions = new List<TableTransactionAction>();
         var pendingKeys = new HashSet<string>();
         var pendingEntities = new List<(object entity, Type type)>();
+        // The key each pending entity is written under, in the same order. Its metadata key may
+        // still be the one it was loaded under, which is not where it is now stored.
+        var pendingEntityKeys = new List<string>();
 
         // One lease covering every batch flush.
         using var writerLease = await AcquireWriterAsync(cancellationToken);
@@ -2215,6 +2046,7 @@ public class LottaDB : IDisposable
                 pendingActions.Add(action);
                 pendingKeys.Add(key);
                 pendingEntities.Add((entity, entity.GetType()));
+                pendingEntityKeys.Add(key);
 
                 // Auto-flush at 100 operations
                 if (pendingActions.Count >= 100)
@@ -2234,9 +2066,14 @@ public class LottaDB : IDisposable
                     if (etags[i] != null)
                         pendingEntities[i].entity.SetETag(etags[i]!);
                 }
+                // RunPendingHandlersAsync empties the list.
+                var saved = pendingEntities.Select(p => p.entity).ToList();
                 await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
+                for (var i = 0; i < saved.Count; i++)
+                    await EnqueueAsync(saved[i], pendingEntityKeys[i], allErrors, cancellationToken);
                 pendingActions.Clear();
                 pendingKeys.Clear();
+                pendingEntityKeys.Clear();
             }
         }
         finally
@@ -2486,9 +2323,11 @@ public class LottaDB : IDisposable
     {
         if (!_disposed)
         {
+            // First, while the database still works: a handler being cancelled may be mid-save.
+            if (disposing)
+                StopAsyncHandlers();
             _disposed = true;
             _disposeCts.Cancel();
-            _luceneTables?.Detach(_databaseId, this);
             if (disposing)
             {
                 // Wait for the background refresh task to exit
@@ -2501,10 +2340,8 @@ public class LottaDB : IDisposable
                     if (_indexWriter != null)
                     {
                         try { _indexWriter.Commit(); } catch { }
-                        CloseWriterSearchersLocked();
                         _indexWriter.Dispose();
                         _indexWriter = null;
-                        Interlocked.Increment(ref _indexEpoch);
                     }
                     _searcherManager?.Dispose();   // must precede _directory.Dispose()
                     _lucene?.Dispose();

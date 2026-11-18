@@ -43,3 +43,5 @@ public class Memory_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class Memory_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Memory_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Memory_VectorSearchTests : VectorSearchTestBase { public Memory_VectorSearchTests() : base(Tests.Configure) { } }
 public class Memory_WriteLockTests : WriteLockTestBase { public Memory_WriteLockTests() : base(Tests.Configure) { } }
+public class Memory_AsyncHandlerTests : AsyncHandlerTestBase { public Memory_AsyncHandlerTests() : base(Tests.Configure) { } }
+public class Memory_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public Memory_AsyncHandlerPumpTests() : base(Tests.Configure) { } }

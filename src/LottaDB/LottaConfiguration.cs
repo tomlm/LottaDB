@@ -12,6 +12,13 @@ public class LottaConfiguration : ILottaConfiguration
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
     internal BlobUploadHandler? UploadHandler { get; private set; }
+    internal List<AsyncRegistration> AsyncRegistrations { get; } = new();
+
+    /// <inheritdoc/>
+    public AsyncHandlerMode AsyncHandlers { get; set; } = AsyncHandlerMode.Auto;
+
+    /// <inheritdoc/>
+    public int AsyncHandlerMaxHops { get; set; } = 16;
 
     /// <summary>
     /// Gets or sets the delay, in milliseconds, before an automatic commit is performed after a change.
@@ -57,6 +64,30 @@ public class LottaConfiguration : ILottaConfiguration
         return this;
     }
 
+    /// <inheritdoc/>
+    public ILottaConfiguration OnAsync<T>(string name, EntityHandler<T> handler, int priority = 0, bool latest = true, AsyncHandlerOptions? options = null)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (name is null || !Internal.AsyncQueueNames.IsValidHandlerName(name))
+            throw new ArgumentException(
+                $"'{name}' is not a handler name. Use 3 to 40 lower-case letters and digits, with single hyphens between them (\"describe-mail\").", nameof(name));
+        if (AsyncRegistrations.Any(r => r.Name == name))
+            throw new ArgumentException($"A queued handler named '{name}' is already registered.", nameof(name));
+        options ??= new AsyncHandlerOptions();
+        if (options.MaxAttempts < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "MaxAttempts must be at least 1.");
+        if (options.Timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), "Timeout must be positive.");
+        if (options.RetryDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), "RetryDelay cannot be negative.");
+
+        AsyncRegistrations.Add(new AsyncRegistration(
+            name, typeof(T), priority, latest, options,
+            (entity, db, cancellationToken) => handler((T)entity, TriggerKind.Saved, db, cancellationToken)));
+        return this;
+    }
+
     /// <summary>
     /// Set the blob upload handler. Replacement semantics: last one wins.
     /// Call with no arguments to use the default handler (extension-based mime type detection,
@@ -97,3 +128,8 @@ public class LottaConfiguration : ILottaConfiguration
 }
 
 internal record OnRegistration(Type ObjectType, object Handler);
+
+/// <summary>A queued handler as registered: what it handles, in what order, and how to call it.</summary>
+internal sealed record AsyncRegistration(
+    string Name, Type ObjectType, int Priority, bool Latest, AsyncHandlerOptions Options,
+    Func<object, LottaDB, CancellationToken, Task> Invoke);

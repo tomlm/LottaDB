@@ -160,6 +160,26 @@ await db.ChangeAsync<Actor>("alice", actor =>
 
 Multiple concurrent writers on the same key are handled correctly -- ETag-based optimistic concurrency ensures no updates are lost.
 
+## Queued Handlers
+
+`On<T>` runs inside the save. For work too slow for that, such as a model call, `OnAsync<T>` registers a handler that runs later, from a queue, outside the write lock:
+
+```csharp
+opts.OnAsync<Note>("summarize", async (note, kind, db, ct) =>
+{
+    if (note.Summary != null) return;       // a handler may run more than once: make it safe to repeat
+    var summary = await model.SummarizeAsync(note.Content, ct);
+    await db.ChangeAsync<Note>(note.NoteId, n => { n.Summary = summary; return n; }, ct);
+}, priority: 10, latest: true);
+```
+
+- Every save of a `Note` queues the handler, which is given the object as it is when it runs. Deletes are not delivered.
+- Higher `priority` runs first. With `latest: true`, several saves of one object before the handler gets to it give one run.
+- A failing run is retried with a growing delay, then set aside in a poison queue (`RetryPoisonedAsync`). A run whose save finds the write lock held by another server is retried with the same growing delay, but is not counted as a failure. Queued work survives a restart.
+- Handlers run by themselves while the database is open. Set `AsyncHandlers = AsyncHandlerMode.Manual` to run them only when you call `db.DrainAsync()`, which is what tests usually want.
+
+Every built-in storage provider supplies the queues. See [OnAsync-Design.md](OnAsync-Design.md) for the behaviour in full.
+
 ## Running Multiple Servers Against One Database
 
 Several server processes can open the same database at once. Reads never take a lock, so any
@@ -272,7 +292,7 @@ LottaDB works with Azure Table Storage out of the box. For local development and
 | Package | Install | Usage | Description |
 |---------|---------|-------| ---------|
 | **LottaDB** | `dotnet add package LottaDB` | `catalog.UseAzure(connectionString)` | The default provider. Uses Azure Table Storage API for durability. |
-| **LottaDB** (Lucene) | `dotnet add package LottaDB` | `catalog.UseLucene(LuceneDirectories.FileSystem(path))` | Pure-Lucene storage: objects, search index and blobs are all stored in Lucene directories. |
+| **LottaDB** (Lucene) | `dotnet add package LottaDB` | `catalog.UseLucene(LuceneDirectories.FileSystem(path))` | Storage that needs nothing but Lucene: tables, blobs, queues and the search index are each kept in a Lucene `Directory` (in memory, on disk, or one you supply). |
 | **LottaDB.Memory** | `dotnet add package LottaDB.Memory` | `catalog.UseMemory()` | In-memory provider for unit testing. No durability, but lightning fast and supports all features. |
 | **LottaDB.SQLite** | `dotnet add package LottaDB.SQLite` | `catalog.UseSQLite(path)` | Local storage with SQLite. Durable and supports all features, but no serverless scaling. |
 
@@ -292,7 +312,7 @@ var catalog = new LottaCatalog("myapp", catalog => catalog.UseMemory());
 | `LuceneDirectories.FileSystem(rootPath)` | `FSDirectory` on disk under `rootPath`. |
 | `LuceneDirectories.Azure(connectionString)` | `AzureDirectory` backed by Azure Blob Storage, with a local cache. |
 
-You can also pass your own `Func<string, Directory>`; it receives paths like `{catalog}/{database}/Search`.
+You can also pass your own `Func<string, Directory>` returning a Lucene `Directory`; it receives paths like `{catalog}/{database}/Search`, and with `UseLucene` also `tables/{table}`, `blobs/{container}` and `queues/{queue}`.
 
 ## Documentation
 
