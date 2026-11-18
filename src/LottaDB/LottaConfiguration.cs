@@ -144,11 +144,16 @@ public class LottaConfiguration : ILottaConfiguration
     /// Registers a queued action of a rule (<c>Update</c> or <c>Then</c>), checking its name. The
     /// rule's identity is the type and the name, <c>Note/summarize</c>, and must be unique.
     /// </summary>
-    internal void AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter, RuleHandler<T> handler)
+    /// <param name="after">How long after the save the rule runs; null for as soon as it can.</param>
+    /// <param name="at">The time, taken from the object, at which the rule runs; null for as soon as it can.</param>
+    internal void AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter, RuleHandler<T> handler,
+        TimeSpan? after = null, Func<T, DateTimeOffset?>? at = null)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(handler);
-        AddQueuedRule(verb, name, filter, (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken), project: null);
+        var rule = AddQueuedRule(verb, name, filter, (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken), project: null);
+        rule.After = after;
+        rule.At = at == null ? null : entity => at((T)entity);
     }
 
     /// <summary>

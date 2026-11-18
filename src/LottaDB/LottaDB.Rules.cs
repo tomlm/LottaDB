@@ -83,12 +83,21 @@ public partial class LottaDB
 
         /// <summary>How many rules were run, failed runs included.</summary>
         public int Runs;
+
+        /// <summary>Set when a rule was left for later because its object now gives it a later time (<c>At</c>): the earliest such time.</summary>
+        public DateTimeOffset? DeferUntil;
     }
 
     private static readonly TimeSpan MaxLease = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan NeverExpires = TimeSpan.FromSeconds(-1);
     private const int MaxUpdateWrites = 10;
+    /// <summary>The longest a queue hides a message for. A longer wait is made in steps.</summary>
+    internal static readonly TimeSpan MaxHide = TimeSpan.FromDays(7);
+
+    /// <summary>How long to hide a message that is to run at <paramref name="due"/>; null when that time has come.</summary>
+    internal static TimeSpan? HideFor(DateTimeOffset due, DateTimeOffset now) =>
+        due <= now ? null : (due - now < MaxHide ? due - now : MaxHide);
 
     private static readonly AsyncLocal<AsyncRun?> _asyncRun = new();
 
@@ -325,6 +334,9 @@ public partial class LottaDB
             own.Dirty = true;
 
         var matched = new List<string>();
+        // Delayed rules (After, At), each with the time it is to run.
+        var later = new List<(string Rule, DateTimeOffset Due)>();
+        var now = DateTimeOffset.UtcNow;
         foreach (var rule in rules)
         {
             if (own != null && (rule.Id == own.RuleId || own.Remaining.Contains(rule.Id)))
@@ -339,6 +351,18 @@ public partial class LottaDB
                 if (rule.OnSave is { } onSave && !onSave(entity)
                     && !(rule.Verb == RuleVerb.Maintain && rule.Rest is { } rest && !rest(entity)))
                     continue;
+                if (rule.After is { } after)
+                {
+                    later.Add((rule.Id, now + after));
+                    continue;
+                }
+                if (rule.At is { } at)
+                {
+                    // No time: not at all.
+                    if (at(entity) is { } due)
+                        later.Add((rule.Id, due));
+                    continue;
+                }
             }
             catch (Exception e)
             {
@@ -347,7 +371,7 @@ public partial class LottaDB
             }
             matched.Add(rule.Id);
         }
-        if (matched.Count == 0)
+        if (matched.Count == 0 && later.Count == 0)
             return;
 
         var hop = run is null ? 0 : run.Hop + 1;
@@ -357,7 +381,7 @@ public partial class LottaDB
             if (hop > _config.MaxQueueHops)
             {
                 // A chain this long is rules feeding one another; stop it where it can be seen.
-                foreach (var rule in matched)
+                foreach (var rule in matched.Concat(later.Select(l => l.Rule)))
                 {
                     var record = new PoisonRecord
                     {
@@ -372,8 +396,17 @@ public partial class LottaDB
                 return;
             }
 
-            var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = matched, Hop = hop };
-            await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+            if (matched.Count > 0)
+            {
+                var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = matched, Hop = hop };
+                await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+            }
+            // A delayed rule has a message of its own, hidden until its time (or as long as a queue can hide it).
+            foreach (var (rule, due) in later)
+            {
+                var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = [rule], Hop = hop, Due = due };
+                await queue.Queue.SendMessageAsync(message.ToText(), HideFor(due, now), NeverExpires, cancellationToken).ConfigureAwait(false);
+            }
             Signal();
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -562,6 +595,13 @@ public partial class LottaDB
             return 0;
         }
 
+        // Not yet time (a wait longer than a queue can hide a message for, made in steps): hidden again, with nothing run.
+        if (message.Due is { } due && HideFor(due, DateTimeOffset.UtcNow) is { } hide)
+        {
+            await queue.Queue.UpdateMessageAsync(received.MessageId, received.PopReceipt, (string?)null, hide, cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
         // The pop receipt changes every time the hold on the message is extended.
         var receipt = received.PopReceipt;
         var holdLost = false;
@@ -673,7 +713,13 @@ public partial class LottaDB
             message.Attempts = Only(message.Attempts, state.Pending);
             message.LastError = Only(message.LastError, state.Pending);
             TimeSpan wait;
-            if (tries > 0)
+            if (tries == 0 && !state.Contended && !state.Interrupted && state.DeferUntil is { } until)
+            {
+                // What is left has a later time now (At): hidden until then.
+                message.Due = until;
+                wait = HideFor(until, DateTimeOffset.UtcNow) ?? TimeSpan.Zero;
+            }
+            else if (tries > 0)
                 wait = RetryWait(tries);              // hidden for a wait that doubles with each failure
             else if (state.Contended)
                 wait = RetryWait(++message.Waits);    // no failure counted, but given back at once it would spin while the lock is held
@@ -763,6 +809,24 @@ public partial class LottaDB
                     state.Runs--;   // not for this object any more: skipped, which is no run
                     state.Pending.Remove(rule.Id);
                     continue;
+                }
+
+                if (rule.At is { } at)
+                {
+                    var when = at(entity);
+                    if (when is null)
+                    {
+                        state.Runs--;   // the object gives no time any more: dropped, which is no run
+                        state.Pending.Remove(rule.Id);
+                        continue;
+                    }
+                    if (when > DateTimeOffset.UtcNow)
+                    {
+                        state.Runs--;   // the object gives a later time now: left in the message for then
+                        if (state.DeferUntil is null || when < state.DeferUntil)
+                            state.DeferUntil = when;
+                        continue;
+                    }
                 }
 
                 ruleCts.CancelAfter(_config.RuleTimeout);

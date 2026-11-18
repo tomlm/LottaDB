@@ -50,6 +50,15 @@ internal sealed class RuleMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int Waits { get; set; }
 
+    /// <summary>
+    /// For a delayed rule (<c>After</c>, <c>At</c>): when it is to run. A message that comes up
+    /// before then is hidden again, which is how a wait longer than a queue can hide a message
+    /// for is made.
+    /// </summary>
+    [JsonPropertyName("due")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? Due { get; set; }
+
     /// <summary>How many runs of the rule have failed.</summary>
     public int AttemptsOf(string rule) => Attempts != null && Attempts.TryGetValue(rule, out var count) ? count : 0;
 

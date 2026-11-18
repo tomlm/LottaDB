@@ -9,6 +9,7 @@ internal static class Tests
 
 public class FileSystem_QueuedRuleTests : QueuedRuleTestBase { public FileSystem_QueuedRuleTests() : base(Tests.Configure) { } }
 public class FileSystem_MaintainTests : MaintainTestBase { public FileSystem_MaintainTests() : base(Tests.Configure) { } }
+public class FileSystem_TimedRuleTests : TimedRuleTestBase { public FileSystem_TimedRuleTests() : base(Tests.Configure) { } }
 public class FileSystem_QueuedRulePumpTests : QueuedRulePumpTestBase { public FileSystem_QueuedRulePumpTests() : base(Tests.Configure) { } }
 public class FileSystem_AdHocJoinTests : AdHocJoinTestBase { public FileSystem_AdHocJoinTests() : base(Tests.Configure) { } }
 public class FileSystem_FacetTests : FacetTestBase { public FileSystem_FacetTests() : base(Tests.Configure) { } }

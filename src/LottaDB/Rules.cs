@@ -250,6 +250,8 @@ public sealed class RuleBuilder<T> where T : class, new()
     private readonly LottaConfiguration _config;
     private readonly RuleRegistration _rule;
     private readonly RuleFilter<T> _filter;
+    private TimeSpan? _after;
+    private Func<T, DateTimeOffset?>? _at;
 
     internal RuleBuilder(LottaConfiguration config, RuleRegistration rule, RuleFilter<T> filter)
     {
@@ -270,6 +272,7 @@ public sealed class RuleBuilder<T> where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(handler);
         _config.ThrowIfOpened();
+        ThrowIfTimed(nameof(Do));
         _config.OnRegistrations.Add(new OnRegistration(typeof(T), RuleActions.Inline(TriggerKind.Saved, _filter.OnSave, handler)));
         _rule.Actions++;
         return this;
@@ -294,7 +297,7 @@ public sealed class RuleBuilder<T> where T : class, new()
     /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
     public RuleBuilder<T> Then(string name, RuleHandler<T> handler)
     {
-        _config.AddQueuedRule(RuleVerb.Then, name, _filter, handler);
+        _config.AddQueuedRule(RuleVerb.Then, name, _filter, handler, _after, _at);
         _rule.Actions++;
         return this;
     }
@@ -342,7 +345,7 @@ public sealed class RuleBuilder<T> where T : class, new()
     /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
     public RuleBuilder<T> Update(string name, RuleHandler<T> handler)
     {
-        _config.AddQueuedRule(RuleVerb.Update, name, _filter, handler);
+        _config.AddQueuedRule(RuleVerb.Update, name, _filter, handler, _after, _at);
         _rule.Actions++;
         return this;
     }
@@ -461,8 +464,61 @@ public sealed class RuleBuilder<T> where T : class, new()
         [CallerArgumentExpression(nameof(projection))] string? projectionExpression = null) where TView : class, new()
         => Maintain(RuleQueueNames.ProjectionName(projectionExpression, typeof(TView)), projection);
 
+    /// <summary>
+    /// Run the <c>Then</c> and <c>Update</c> actions that follow some time after the save, rather
+    /// than as soon as they can be:
+    /// <code>
+    /// config.Rules.When&lt;Invite&gt;(i =&gt; Changed(i.SentAt) &amp;&amp; !i.Accepted)
+    ///     .After(TimeSpan.FromDays(3))
+    ///     .Then(SendReminder);
+    /// </code>
+    /// The filter is checked in the save, and again (without its <c>Changed</c> parts) when the
+    /// time comes: an invite accepted meanwhile gets no reminder. Every save the filter is true
+    /// for starts a wait of its own, so the filter usually names the change that starts it with
+    /// <see cref="Rule.Changed"/>. Replaces an earlier <c>After</c> or <c>At</c> on this rule.
+    /// </summary>
+    /// <param name="delay">How long to wait. It may be longer than a queue can hide a message for (7 days): the wait is then made in steps.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The delay is negative.</exception>
+    public RuleBuilder<T> After(TimeSpan delay)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);
+        _config.ThrowIfOpened();
+        _after = delay;
+        _at = null;
+        return this;
+    }
+
+    /// <summary>
+    /// Run the <c>Then</c> and <c>Update</c> actions that follow at a time taken from the object:
+    /// <code>
+    /// config.Rules.When&lt;Session&gt;().At(s =&gt; s.ExpiresAt).Then(EndSession);
+    /// </code>
+    /// The time is read in the save, and again when it comes: if the object then gives a later
+    /// time (the session was extended), the action waits for that; if it gives none, the action
+    /// is dropped. A time already past runs the action as soon as it can be. Replaces an earlier
+    /// <c>After</c> or <c>At</c> on this rule.
+    /// </summary>
+    /// <param name="time">The time to run at, from the object; null for not at all.</param>
+    public RuleBuilder<T> At(Func<T, DateTimeOffset?> time)
+    {
+        ArgumentNullException.ThrowIfNull(time);
+        _config.ThrowIfOpened();
+        _at = time;
+        _after = null;
+        return this;
+    }
+
+    /// <summary>Throws for a verb that cannot be delayed, when <c>After</c> or <c>At</c> came before it.</summary>
+    private void ThrowIfTimed(string verb)
+    {
+        if (_after != null || _at != null)
+            throw new InvalidOperationException(
+                $".{verb} runs inside the save, so it cannot follow .After or .At. Delay a .Then or an .Update instead.");
+    }
+
     private MaintainBuilder<T> AddMaintain(string name, Func<T, RuleContext, CancellationToken, Task<List<object>>> project)
     {
+        ThrowIfTimed("Maintain");
         var rule = _config.AddMaintainRule(name, _filter, project);
         // In every save and delete of the object: the projection when it runs inline, and the
         // clean-up when the object is deleted.
@@ -717,6 +773,12 @@ internal sealed class QueuedRule
 
     /// <summary>For a <c>Maintain</c> rule: the objects it keeps for one source object. Null for the other verbs.</summary>
     public Func<object, RuleContext, CancellationToken, Task<List<object>>>? Project { get; init; }
+
+    /// <summary>How long after the save the rule runs (<c>After</c>); null for as soon as it can.</summary>
+    public TimeSpan? After { get; set; }
+
+    /// <summary>The time, taken from the object, at which the rule runs (<c>At</c>); null when the rule has none.</summary>
+    public Func<object, DateTimeOffset?>? At { get; set; }
 
     /// <summary>
     /// For a <c>Maintain</c> rule: whether it runs inside the save (the default) rather than from

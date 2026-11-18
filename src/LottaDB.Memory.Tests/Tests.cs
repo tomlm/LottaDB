@@ -45,4 +45,5 @@ public class Memory_VectorSearchTests : VectorSearchTestBase { public Memory_Vec
 public class Memory_WriteLockTests : WriteLockTestBase { public Memory_WriteLockTests() : base(Tests.Configure) { } }
 public class Memory_QueuedRuleTests : QueuedRuleTestBase { public Memory_QueuedRuleTests() : base(Tests.Configure) { } }
 public class Memory_MaintainTests : MaintainTestBase { public Memory_MaintainTests() : base(Tests.Configure) { } }
+public class Memory_TimedRuleTests : TimedRuleTestBase { public Memory_TimedRuleTests() : base(Tests.Configure) { } }
 public class Memory_QueuedRulePumpTests : QueuedRulePumpTestBase { public Memory_QueuedRulePumpTests() : base(Tests.Configure) { } }

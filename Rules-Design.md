@@ -55,6 +55,8 @@ RuleBuilder<T> Update(string name, RuleHandler<T> handler);
 RuleBuilder<T> Update(RuleHandler<T> handler);   // named after the method
 RuleBuilder<T> Then(string name, RuleHandler<T> handler);
 RuleBuilder<T> Then(RuleHandler<T> handler);     // named after the method
+RuleBuilder<T> After(TimeSpan delay);                    // delays the Then and Update actions that follow
+RuleBuilder<T> At(Func<T, DateTimeOffset?> time);        // runs them at a time taken from the object
 
 // Maintain: projection is (item) or (item, context, ct), returning TView?, IEnumerable<TView> or a Task of either
 MaintainBuilder<T> Maintain<TView>(string name, projection);
@@ -208,6 +210,32 @@ The projection returns what should exist for the object: one object, a collectio
 - Delivered **at least once**: retried with back-off, then set aside.
 - `context.IdempotencyKey` is the same on every retry, so an outside service can drop duplicates.
 
+## Timing: `After` and `At`
+
+```csharp
+config.Rules.When<Invite>(i => Changed(i.SentAt) && !i.Accepted)
+    .After(TimeSpan.FromDays(3))
+    .Then(SendReminder);                     // accepted in the meantime: nothing is sent
+
+config.Rules.When<Session>()
+    .At(s => s.ExpiresAt)
+    .Then(EndSession);
+```
+
+`After` and `At` delay the `Then` and `Update` actions that follow them on the rule. `Do` and `Maintain` cannot be delayed; either one after `After` or `At` throws when the rule is registered.
+
+| | When it runs | When the time comes |
+| --- | --- | --- |
+| `After(delay)` | `delay` after the save that matched the filter | The filter is checked again, without its `Changed(...)` parts; false drops the work |
+| `At(item => time)` | At the time the object gives in that save; a time already past runs as soon as it can; null queues nothing | The filter is checked again, and the time is read again: a later time waits for it, null drops the work |
+
+- **Every matching save starts a wait of its own.** So an `After` filter usually names the change that starts it with `Changed(...)`; without it, each save of an unaccepted invite would schedule another reminder.
+- **A delayed rule has a message of its own,** with the time in it (`"due"`), hidden until then. The rules of the save that are not delayed go in the usual message.
+- **Waits longer than 7 days** (the longest a queue hides a message) are made in steps: the message comes up, is not due yet, and is hidden again with nothing run.
+- **A changed `At` time.** A save that gives a new time queues a new message; the old one comes up at the old time, finds the later time, and waits for it too. So the action can run more than once for one time, like any queued rule.
+- **Failures** are retried and set aside like any queued rule.
+- **`BackfillAsync` and `RetryAsync`** run an `After` rule at once, since there is no save to count from. An `At` rule still waits for the object's time.
+
 ## Queues underneath
 
 ### One queue per type
@@ -335,6 +363,5 @@ You see rules, not queues.
 
 See [Rules-Next.md](Rules-Next.md):
 
-- `After`, `At`: delayed actions.
 - `Every`: schedules.
 - Queued rules for deletes.
