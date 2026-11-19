@@ -26,7 +26,7 @@
     <PackageReference Include="Azure.Storage.Queues" Version="12.28.1" />
     <PackageReference Include="Cronos" Version="0.13.0" />
     <PackageReference Include="Iciclecreek.Lucene.Net.Linq" Version="4.8.11-beta00018" />
-    <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.5-beta021" />
+    <PackageReference Include="Lucene.Net.Store.Azure" Version="4.8.6-beta018" />
     <PackageReference Include="MimeMapping" Version="4.0.0" />
     <PackageReference Include="System.IO.Pipelines" Version="10.0.14" />
     <PackageReference Include="System.Linq.Async" Version="7.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
