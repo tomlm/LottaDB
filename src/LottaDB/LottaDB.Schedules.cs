@@ -1,6 +1,6 @@
 namespace Lotta;
 
-// Schedules (Rules.Every(...).Then(...)): work done at times, for no object. Each schedule has one
+// Schedules (Rules.Every(...).Do(...)): work done at times, for no object. Each schedule has one
 // stored record, a RuleSchedule, holding its next time. A process runs the work after moving that
 // time on with a conditional write, so of several processes only one runs each time.
 public partial class LottaDB

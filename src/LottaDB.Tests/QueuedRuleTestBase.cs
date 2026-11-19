@@ -7,7 +7,7 @@ using static Lotta.Rule;
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for queued rules (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>): work that is queued by a
+/// Tests for queued rules (<c>When&lt;T&gt;().ModifyQueued(...)</c>, <c>.DoQueued(...)</c>): work that is queued by a
 /// save and run later, outside it. These run the rules by hand with <see cref="LottaDB.DrainAsync"/>,
 /// so every step is in order.
 /// </summary>
@@ -54,8 +54,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Note>().Then("first", (note, _, _) => { ran.Add($"first:{note.NoteId}"); return Task.CompletedTask; });
-            opts.Rules.When<Note>().Then("second", (note, _, _) => { ran.Add($"second:{note.NoteId}"); return Task.CompletedTask; });
+            opts.Rules.When<Note>().DoQueued("first", (note, _, _) => { ran.Add($"first:{note.NoteId}"); return Task.CompletedTask; });
+            opts.Rules.When<Note>().DoQueued("second", (note, _, _) => { ran.Add($"second:{note.NoteId}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var id in new[] { "n1", "n2", "n3" })
@@ -68,7 +68,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task RulesOfOneObject_RunInPhaseOrder_UpdateBeforeThen()
+    public async Task RulesOfOneObject_RunInPhaseOrder_ModifyBeforeThen()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
@@ -77,8 +77,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             // Registered the other way round: the phase decides, not the order of registration.
             opts.Rules.When<Actor>()
-                .Then("notify", (actor, _, _) => { ran.Add($"notify sees {actor.DisplayName}"); return Task.CompletedTask; })
-                .Update("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
+                .DoQueued("notify", (actor, _, _) => { ran.Add($"notify sees {actor.DisplayName}"); return Task.CompletedTask; })
+                .ModifyQueued("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -98,8 +98,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Note>().Then("notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
-            opts.Rules.When<Actor>().Then("actors", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Note>().DoQueued("notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("actors", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var id in new[] { "n1", "n2", "n3" })
@@ -120,7 +120,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Actor>().Then("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (actor, _, _) => { seen.Add(actor.Counter); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         for (var n = 1; n <= 3; n++)
@@ -148,7 +148,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
             // Registered for the base type: derived types are its business too.
-            opts.Rules.When<BaseEntity>().Then("people", (entity, _, _) =>
+            opts.Rules.When<BaseEntity>().DoQueued("people", (entity, _, _) =>
             {
                 seen.Add($"{entity.GetType().Name}:{entity.Id}:{entity.Name}");
                 return Task.CompletedTask;
@@ -179,7 +179,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("names", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("names", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -205,7 +205,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Store<LargeDocument>();
-            opts.Rules.When<LargeDocument>().Then("big", (document, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
+            opts.Rules.When<LargeDocument>().DoQueued("big", (document, _, _) => { length = document.Payload.Length; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // Far more than a queue message can hold: the message carries only the key.
@@ -224,7 +224,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("writer", async (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("writer", async (actor, context, token) =>
             {
                 if (++runs > 1)
                     return;   // the run queued by the change from elsewhere
@@ -258,7 +258,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -280,7 +280,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.OnUpload();
-            opts.Rules.When<BlobFile>().Then("files", (file, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
+            opts.Rules.When<BlobFile>().DoQueued("files", (file, _, _) => { paths.Add(file.Path); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.UploadBlobAsync("docs/hello.txt", "hello", cancellationToken: ct);
@@ -289,10 +289,10 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.Equal(["docs/hello.txt"], paths);
     }
 
-    // === Then ===
+    // === DoQueued ===
 
     [Fact]
-    public async Task Then_IsToldItsRule_TheAttempt_AndAKeyThatIsTheSameOnEveryRetry()
+    public async Task DoQueued_IsToldItsRule_TheAttempt_AndAKeyThatIsTheSameOnEveryRetry()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new List<(string Rule, int Attempt, string Key, LottaDB Db)>();
@@ -300,7 +300,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleRetryDelay = TimeSpan.Zero;
-            opts.Rules.When<Actor>().Then("notify", (_, context, _) =>
+            opts.Rules.When<Actor>().DoQueued("notify", (_, context, _) =>
             {
                 seen.Add((context.Rule, context.Attempt, context.IdempotencyKey, context.Db));
                 return seen.Count < 3 ? throw new InvalidOperationException("the mail server is down") : Task.CompletedTask;
@@ -323,16 +323,16 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.NotEqual(key, seen[^1].Key);
     }
 
-    // === Update ===
+    // === ModifyQueued ===
 
     [Fact]
-    public async Task Update_GivesTheHandlerACopyToEdit_AndWritesItBackOnlyIfItChanged()
+    public async Task ModifyQueued_GivesTheHandlerACopyToEdit_AndWritesItBackOnlyIfItChanged()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Update("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().ModifyQueued("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -354,7 +354,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Update_ThatFails_LeavesTheObjectAsItWas_ForTheRulesAfterIt()
+    public async Task ModifyQueued_ThatFails_LeavesTheObjectAsItWas_ForTheRulesAfterIt()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new List<string>();
@@ -363,12 +363,12 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 1;
             opts.Rules.When<Actor>()
-                .Update("describe", (actor, _, _) =>
+                .ModifyQueued("describe", (actor, _, _) =>
                 {
                     actor.DisplayName = "half done";   // on its copy
                     throw new InvalidOperationException("the model is down");
                 })
-                .Then("notify", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
+                .DoQueued("notify", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
@@ -380,7 +380,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task UpdateRules_FollowOneAnother_EachRunningWhenItsInputsChange()
+    public async Task ModifyRules_FollowOneAnother_EachRunningWhenItsInputsChange()
     {
         var ct = TestContext.Current.CancellationToken;
         var ran = new List<string>();
@@ -388,9 +388,9 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Actor>(a => Changed(a.Counter))
-                .Update("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
+                .ModifyQueued("describe", (actor, _, _) => { ran.Add("describe"); actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; });
             opts.Rules.When<Actor>(a => Changed(a.DisplayName))
-                .Update("avatar", (actor, _, _) => { ran.Add("avatar"); actor.AvatarUrl = $"{actor.DisplayName}.png"; return Task.CompletedTask; });
+                .ModifyQueued("avatar", (actor, _, _) => { ran.Add("avatar"); actor.AvatarUrl = $"{actor.DisplayName}.png"; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // A new object: everything about it is a change, so one message lists both rules.
@@ -416,14 +416,14 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Update_WhenTheObjectWasSavedMeanwhile_AppliesWhatItSetToTheNewerVersion_IfItsInputsAreTheSame()
+    public async Task ModifyQueued_WhenTheObjectWasSavedMeanwhile_AppliesWhatItSetToTheNewerVersion_IfItsInputsAreTheSame()
     {
         var ct = TestContext.Current.CancellationToken;
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).ModifyQueued("describe", async (actor, context, token) =>
             {
                 runs++;
                 await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "set elsewhere"; return a; }, token));
@@ -441,14 +441,14 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Update_WhenItsInputsChangedMeanwhile_DropsItsResult_AndTheSaveThatChangedThemQueuedAFreshRun()
+    public async Task ModifyQueued_WhenItsInputsChangedMeanwhile_DropsItsResult_AndTheSaveThatChangedThemQueuedAFreshRun()
     {
         var ct = TestContext.Current.CancellationToken;
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).ModifyQueued("describe", async (actor, context, token) =>
             {
                 if (++runs > 1)
                     return;   // the fresh run: leaves the object alone, so what is stored shows what the first run did
@@ -465,14 +465,14 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Update_WithoutNamedInputs_DropsItsResult_WhenTheObjectWasSavedMeanwhile()
+    public async Task ModifyQueued_WithoutNamedInputs_DropsItsResult_WhenTheObjectWasSavedMeanwhile()
     {
         var ct = TestContext.Current.CancellationToken;
         var runs = 0;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Update("describe", async (actor, context, token) =>
+            opts.Rules.When<Actor>().ModifyQueued("describe", async (actor, context, token) =>
             {
                 if (++runs > 1)
                     return;
@@ -490,13 +490,13 @@ public abstract class QueuedRuleTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Update_WhenSomeoneElseSetTheSameProperty_LetsTheirsStand()
+    public async Task ModifyQueued_WhenSomeoneElseSetTheSameProperty_LetsTheirsStand()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>(a => Changed(a.Counter)).Update("describe", async (actor, context, token) =>
+            opts.Rules.When<Actor>(a => Changed(a.Counter)).ModifyQueued("describe", async (actor, context, token) =>
             {
                 await Elsewhere(() => context.Db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "theirs"; return a; }, token));
                 actor.DisplayName = "the rule's";
@@ -521,7 +521,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Actor>(a => Changed(a.DisplayName)).Then("renamed", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
+            opts.Rules.When<Actor>(a => Changed(a.DisplayName)).DoQueued("renamed", (actor, _, _) => { seen.Add(actor.DisplayName); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // A new object counts as changed.
@@ -601,7 +601,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Actor>(a => Changed(a.DisplayName) && a.Counter > 0).Then("named", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Actor>(a => Changed(a.DisplayName) && a.Counter > 0).DoQueued("named", (actor, _, _) => { seen.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // Queued, then saved so that the rest of the filter is false: skipped when its run comes up.
@@ -631,7 +631,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleRetryDelay = TimeSpan.Zero;
-            opts.Rules.When<Actor>().Then("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("flaky", (_, _, _) => ++attempts < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask);
         }, cancellationToken: ct);
 
         var saved = await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -651,13 +651,13 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.RuleRetryDelay = TimeSpan.Zero;
             opts.Rules.When<Actor>()
-                .Then("before", (_, _, _) => { ran.Add("before"); return Task.CompletedTask; })
-                .Then("flaky", (_, context, _) =>
+                .DoQueued("before", (_, _, _) => { ran.Add("before"); return Task.CompletedTask; })
+                .DoQueued("flaky", (_, context, _) =>
                 {
                     ran.Add($"flaky {context.Attempt}");
                     return context.Attempt < 3 ? throw new InvalidOperationException("not yet") : Task.CompletedTask;
                 })
-                .Then("after", (_, _, _) => { ran.Add("after"); return Task.CompletedTask; });
+                .DoQueued("after", (_, _, _) => { ran.Add("after"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -679,7 +679,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 3;
             opts.RuleRetryDelay = TimeSpan.Zero;
-            opts.Rules.When<Actor>().Then("broken", (_, _, _) =>
+            opts.Rules.When<Actor>().DoQueued("broken", (_, _, _) =>
             {
                 runs++;
                 return broken ? throw new InvalidOperationException("the model is down") : Task.CompletedTask;
@@ -713,13 +713,13 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.RuleMaxAttempts = 2;
             opts.RuleRetryDelay = TimeSpan.Zero;
             opts.Rules.When<Actor>()
-                .Then("broken", (_, _, _) => { ran.Add("broken"); throw new InvalidOperationException("never works"); })
-                .Then("flaky", (_, context, _) =>
+                .DoQueued("broken", (_, _, _) => { ran.Add("broken"); throw new InvalidOperationException("never works"); })
+                .DoQueued("flaky", (_, context, _) =>
                 {
                     ran.Add("flaky");
                     return context.Attempt < 2 ? throw new InvalidOperationException("not yet") : Task.CompletedTask;
                 })
-                .Then("fine", (_, _, _) => { ran.Add("fine"); return Task.CompletedTask; });
+                .DoQueued("fine", (_, _, _) => { ran.Add("fine"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -746,7 +746,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleRetryDelay = TimeSpan.FromMinutes(1);
-            opts.Rules.When<Actor>().Then("slow-retry", (_, _, _) => throw new InvalidOperationException("no"));
+            opts.Rules.When<Actor>().DoQueued("slow-retry", (_, _, _) => throw new InvalidOperationException("no"));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -766,7 +766,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 2;
             opts.RuleRetryDelay = TimeSpan.FromSeconds(1);
-            opts.Rules.When<Actor>().Then("fails", (_, _, _) => { runs++; throw new InvalidOperationException("no"); });
+            opts.Rules.When<Actor>().DoQueued("fails", (_, _, _) => { runs++; throw new InvalidOperationException("no"); });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -789,7 +789,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 1;
             opts.RuleTimeout = TimeSpan.FromMilliseconds(200);
-            opts.Rules.When<Actor>().Then("stuck", (_, _, token) => Task.Delay(Timeout.Infinite, token));
+            opts.Rules.When<Actor>().DoQueued("stuck", (_, _, token) => Task.Delay(Timeout.Infinite, token));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -813,7 +813,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.RuleMaxAttempts = 1;
             opts.RuleRetryDelay = TimeSpan.FromSeconds(1);
             // What a handler's own save throws while another process holds the database's write lock.
-            opts.Rules.When<Actor>().Then("blocked", (_, _, _) =>
+            opts.Rules.When<Actor>().DoQueued("blocked", (_, _, _) =>
                 ++runs <= 2 ? throw new WriteLockUnavailableException("blocked") : Task.CompletedTask);
         }, cancellationToken: ct);
 
@@ -845,7 +845,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await db.DrainAsync(cancellationToken: ct);
@@ -866,7 +866,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("increment", (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("increment", (actor, context, token) =>
                 context.Db.ChangeAsync<Actor>(actor.Username, a => { a.Counter++; return a; }, token));
         }, cancellationToken: ct);
 
@@ -885,12 +885,12 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("describe", async (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("describe", async (actor, context, token) =>
             {
                 ran.Add("describe");
                 await context.Db.ChangeAsync<Actor>(actor.Username, a => { a.DisplayName = "described"; return a; }, token);
             });
-            opts.Rules.When<Actor>().Then("tag", async (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("tag", async (actor, context, token) =>
             {
                 ran.Add($"tag sees {actor.DisplayName}");
                 await context.Db.ChangeAsync<Actor>(actor.Username, a => { a.AvatarUrl = "tagged"; return a; }, token);
@@ -918,7 +918,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Actor>().Do((_, _, _) => { inline++; return Task.CompletedTask; });
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 1 }, ct);
@@ -947,17 +947,17 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxQueueHops = 1;
-            opts.Rules.When<Note>().Then("first", async (note, context, token) =>
+            opts.Rules.When<Note>().DoQueued("first", async (note, context, token) =>
             {
                 ran.Add("first");
                 await context.Db.SaveAsync(new Actor { Username = note.NoteId }, token);
             });
-            opts.Rules.When<Actor>().Then("second", async (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("second", async (actor, context, token) =>
             {
                 ran.Add("second");
                 await context.Db.SaveAsync(new Person { Id = actor.Username }, token);
             });
-            opts.Rules.When<Person>().Then("third", (_, _, _) => { ran.Add("third"); return Task.CompletedTask; });
+            opts.Rules.When<Person>().DoQueued("third", (_, _, _) => { ran.Add("third"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1" }, ct);
@@ -978,7 +978,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("nested", async (_, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("nested", async (_, context, token) =>
             {
                 try
                 {
@@ -1009,7 +1009,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             foreach (var name in new[] { "one", "two", "three" })
-                opts.Rules.When<Actor>().Then(name, (_, _, _) => { ran.Add(name); return Task.CompletedTask; });
+                opts.Rules.When<Actor>().DoQueued(name, (_, _, _) => { ran.Add(name); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -1031,7 +1031,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 4;
-            opts.Rules.When<Actor>().Then("slow", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("slow", async (_, _, token) =>
             {
                 if (Interlocked.Increment(ref inside) > 1)
                     Interlocked.Increment(ref overlaps);
@@ -1060,7 +1060,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.MaxConcurrency = 2;
             opts.RuleMaxAttempts = 1;
             // Each run waits for the other to have started: one at a time, neither would finish.
-            opts.Rules.When<Actor>().Then("meet", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("meet", async (_, _, token) =>
             {
                 if (Interlocked.Increment(ref inside) == 2)
                     together.TrySetResult();
@@ -1084,7 +1084,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("slow", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("slow", async (_, _, token) =>
             {
                 started.TrySetResult();
                 await release.Task.WaitAsync(token);
@@ -1113,7 +1113,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 1;   // a counted failure would be set aside
-            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try
@@ -1150,7 +1150,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleMaxAttempts = 1;
-            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
@@ -1181,7 +1181,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .DoQueued("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "short", Content = "hi" }, ct);
@@ -1202,9 +1202,9 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Then("long-notes", (note, _, _) => { ran.Add($"long:{note.NoteId}"); return Task.CompletedTask; });
+                .DoQueued("long-notes", (note, _, _) => { ran.Add($"long:{note.NoteId}"); return Task.CompletedTask; });
             opts.Rules.When<Note>(note => note.AuthorId == "alice")
-                .Then("by-alice", (note, _, _) => { ran.Add($"alice:{note.NoteId}"); return Task.CompletedTask; });
+                .DoQueued("by-alice", (note, _, _) => { ran.Add($"alice:{note.NoteId}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "a longer note", AuthorId = "bob" }, ct);
@@ -1226,7 +1226,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .DoQueued("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "a longer note" }, ct);   // queued
@@ -1245,7 +1245,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => Picky(note))
-                .Then("picky", (_, _, _) => Task.CompletedTask);
+                .DoQueued("picky", (_, _, _) => Task.CompletedTask);
         }, cancellationToken: ct);
 
         var result = await db.SaveAsync(new Note { NoteId = "n1", Content = "boom" }, ct);
@@ -1268,7 +1268,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => note.Content.Length > 5)
-                .Then("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .DoQueued("long-notes", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "a", Content = "a longer note" }, ct);
@@ -1290,7 +1290,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>(filter).Then("redo", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+            opts.Rules.When<Note>(filter).DoQueued("redo", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct, testName: testName);
         await db.SaveManyAsync(notes, ct);
         await db.DrainAsync(cancellationToken: ct);
@@ -1372,8 +1372,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Actor>()
-                .Then("redo", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; })
-                .Then("other", (actor, _, _) => { ran.Add($"other:{actor.Username}"); return Task.CompletedTask; });
+                .DoQueued("redo", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; })
+                .DoQueued("other", (actor, _, _) => { ran.Add($"other:{actor.Username}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         foreach (var name in new[] { "a", "b", "c" })
@@ -1395,7 +1395,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
@@ -1421,7 +1421,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         void Configure(ILottaConfiguration opts)
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
         // Fails while looking for the rules' queues, the last step of opening.
@@ -1444,7 +1444,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => Task.CompletedTask);
         }, ct);
 
         var both = await Task.WhenAll(Open(), Open());
@@ -1462,7 +1462,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => Task.CompletedTask);
         }
         using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var gaveUp = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1498,7 +1498,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         static void Configure(ILottaConfiguration opts)
         {
             opts.Store<Actor>();
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => Task.CompletedTask);
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("closing", Configure, ct), ct);
@@ -1522,7 +1522,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.Store<Actor>();
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => { runs++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => { runs++; return Task.CompletedTask; });
         }
 
         var opening = Task.Run(() => Catalog.GetDatabaseAsync("deleted", Configure, ct), ct);
@@ -1565,7 +1565,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.Store<Note>();
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Actor>().Then("count", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("count", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }, ct);
 
         var types = (await db.Rules.StatusAsync(ct)).Types.Select(t => (t.Type, t.Waiting, t.Orphaned)).ToList();
@@ -1677,7 +1677,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Update(Summarize).Then(handlers.NotifyFollowersAsync);
+            opts.Rules.When<Note>().ModifyQueued(Summarize).DoQueued(handlers.NotifyFollowersAsync);
         }, cancellationToken: ct);
         _namedRuns.Clear();
 
@@ -1700,7 +1700,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(n => n.Content.Length > 5)
                 .Do((note, context, _) => { ran.Add($"inline:{note.NoteId}:{context.Rule}:{context.Attempt}"); return Task.CompletedTask; })
-                .Then("later", (note, context, _) => { ran.Add($"queued:{note.NoteId}:{context.Rule}:{context.Attempt}"); return Task.CompletedTask; })
+                .DoQueued("later", (note, context, _) => { ran.Add($"queued:{note.NoteId}:{context.Rule}:{context.Attempt}"); return Task.CompletedTask; })
                 .Do((note, _, _) => { ran.Add($"inline2:{note.NoteId}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
@@ -1720,13 +1720,13 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            rule = opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask);
+            rule = opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => Task.CompletedTask);
         }, cancellationToken: ct);
 
         // Read when the database opened: a change now would silently do nothing.
         Assert.Throws<InvalidOperationException>(() => rule!.Do((_, _, _) => Task.CompletedTask));
-        Assert.Throws<InvalidOperationException>(() => rule!.Then("more", (_, _, _) => Task.CompletedTask));
-        Assert.Throws<InvalidOperationException>(() => rule!.Update("other", (_, _, _) => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => rule!.DoQueued("more", (_, _, _) => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => rule!.ModifyQueued("other", (_, _, _) => Task.CompletedTask));
     }
 
     [Fact]
@@ -1736,8 +1736,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("count", (_, _, _) => Task.CompletedTask).Then("only-actors", (_, _, _) => Task.CompletedTask);
-            opts.Rules.When<Note>().Then("count", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("count", (_, _, _) => Task.CompletedTask).DoQueued("only-actors", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Note>().DoQueued("count", (_, _, _) => Task.CompletedTask);
         }, cancellationToken: ct);
 
         Assert.Equal(0, await db.Rules.RetryAsync("only-actors", ct));
@@ -1760,8 +1760,8 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Actor>()
-                .Then("first", (actor, _, _) => { ran.Add($"first:{actor.Username}"); return Task.CompletedTask; })
-                .Then("second", (actor, _, _) => { ran.Add($"second:{actor.Username}"); return Task.CompletedTask; });
+                .DoQueued("first", (actor, _, _) => { ran.Add($"first:{actor.Username}"); return Task.CompletedTask; })
+                .DoQueued("second", (actor, _, _) => { ran.Add($"second:{actor.Username}"); return Task.CompletedTask; });
         }, cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         await db.DrainAsync(cancellationToken: ct);
@@ -1783,7 +1783,7 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Actor>().Then("new-name", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            opts.Rules.When<Actor>().DoQueued("new-name", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }, cancellationToken: ct);
         await db.SaveManyAsync(new[] { new Actor { Username = "alice" }, new Actor { Username = "bob" } }, ct);
         await db.DrainAsync(cancellationToken: ct);
@@ -1814,6 +1814,173 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         Assert.Single((await db.Rules.StatusAsync(ct)).Rules);
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
+
+    // === Deletes ===
+
+    private static Task RemoveFromSearch(Note note, RuleContext context, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>How many deleted objects are kept aside for rules still to run.</summary>
+    private async Task<int> TombstonesOf(LottaDB db, CancellationToken ct)
+    {
+        var table = Catalog.GetTableServiceClient().GetTableClient(Catalog.Name);
+        var count = 0;
+        await foreach (var _ in table.QueryAsync<global::Azure.Data.Tables.TableEntity>($"PartitionKey eq '{db.DatabaseId}~deleted~'", cancellationToken: ct))
+            count++;
+        return count;
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_RunsLater_WithTheObjectAsItWas()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.WhenDeleted<Note>(note => note.Domain == "public")
+                .DoQueued("unpublish", (note, context, _) =>
+                {
+                    ran.Add($"{note.NoteId}:{note.GetKey()}:{note.Content}:{context.Rule}:{context.Attempt}");
+                    return Task.CompletedTask;
+                });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Domain = "public", Content = "hello" }, ct);
+        await db.SaveAsync(new Note { NoteId = "n2", Domain = "private", Content = "secret" }, ct);
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // a save queues nothing for a rule of deletes
+
+        Assert.Empty((await db.DeleteAsync<Note>("n1", ct)).Errors);
+        await db.DeleteAsync<Note>("n2", ct);                          // the filter is false for it
+        Assert.Empty(ran);                                             // nothing runs inside the delete
+        Assert.Null(await db.GetAsync<Note>("n1", ct));
+        var left = 0;
+        await foreach (var _ in db.GetManyAsync<Note>(cancellationToken: ct))
+            left++;
+        Assert.Equal(0, left);                                         // the tombstone is no object of the database
+        Assert.Equal(1, await TombstonesOf(db, ct));
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["n1:n1:hello:unpublish:1"], ran);                // under its own key, not the tombstone's
+        Assert.Equal(0, await TombstonesOf(db, ct));                   // the last rule to run removed it
+
+        // Deleted by key alone, with no type given.
+        await db.SaveAsync(new Note { NoteId = "n3", Domain = "public", Content = "again" }, ct);
+        await db.DeleteAsync("n3", ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal("n3:n3:again:unpublish:1", ran[^1]);
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_TakesALargeObject_AndAKeySavedAgainBeforeItRuns()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Store<LargeDocument>();
+            opts.Rules.WhenDeleted<LargeDocument>().DoQueued("unpublish", (document, _, _) =>
+            {
+                ran.Add($"{document.Id}:{document.GetKey()}:{document.Payload.Length}:{document.Title}");
+                return Task.CompletedTask;
+            });
+        }, cancellationToken: ct);
+
+        // Far more than a queue message holds.
+        await db.SaveAsync(new LargeDocument { Id = "big", Title = "old", Payload = new string('x', 300_000) }, ct);
+        Assert.Empty((await db.DeleteAsync<LargeDocument>("big", ct)).Errors);
+        // The key is free at once, and the rule still gets the object that was deleted.
+        await db.SaveAsync(new LargeDocument { Id = "big", Title = "new", Payload = "short" }, ct);
+
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["big:big:300000:old"], ran);
+        Assert.Equal("new", (await db.GetAsync<LargeDocument>("big", ct))!.Title);
+        Assert.Equal(0, await TombstonesOf(db, ct));
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_OneMessageForAllItsRules_AndARuleSetAsideKeepsTheObjectForItsRetry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fail = true;
+        var seen = new List<string>();
+        var keys = new HashSet<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.RuleMaxAttempts = 2;
+            opts.Rules.WhenDeleted<Note>()
+                .DoQueued("unpublish", (note, context, _) =>
+                {
+                    seen.Add($"unpublish:{note.Content}:{context.Attempt}");
+                    keys.Add(context.IdempotencyKey);
+                    return fail ? throw new InvalidOperationException("service down") : Task.CompletedTask;
+                })
+                .DoQueued("audit", (note, _, _) => { seen.Add($"audit:{note.Content}"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "hello" }, ct);
+        await db.DeleteAsync<Note>("n1", ct);
+        Assert.Equal(1, await WaitingOf<Note>(db, ct));   // one message, whatever number of rules
+        Assert.Equal(1, await TombstonesOf(db, ct));
+
+        Assert.Equal(3, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["unpublish:hello:1", "audit:hello", "unpublish:hello:2"], seen);   // the rule that worked is not run again
+        var status = await StatusOf<Note>(db, "Note/unpublish", ct);
+        Assert.Equal((0, 1, "service down"), (status.Waiting, status.Poisoned, status.LastError));
+        Assert.Equal(1, await TombstonesOf(db, ct));      // kept for the rule that was set aside
+
+        fail = false;
+        Assert.Equal(1, await db.Rules.RetryAsync("unpublish", ct));
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal("unpublish:hello:1", seen[^1]);
+        Assert.Equal(0, (await StatusOf<Note>(db, "Note/unpublish", ct)).Poisoned);
+        Assert.Single(keys);                              // the same work, every time
+        Assert.Equal(0, await TombstonesOf(db, ct));
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_DiscardingItsSetAsideWork_RemovesTheObjectKeptForIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.RuleMaxAttempts = 1;
+            opts.Rules.WhenDeleted<Note>().DoQueued("unpublish", (_, _, _) => throw new InvalidOperationException("never"));
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
+        await db.DeleteAsync<Note>("n1", ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(1, await TombstonesOf(db, ct));
+
+        Assert.Equal(1, await db.Rules.DiscardAsync("unpublish", ct));
+        Assert.Equal(0, await TombstonesOf(db, ct));
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_IsNamedAfterItsMethod_AndCannotBeBackfilled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.WhenDeleted<Note>().DoQueued(RemoveFromSearch);
+            opts.Rules.When<Note>().DoQueued("index", (_, _, _) => Task.CompletedTask);
+        }, cancellationToken: ct);
+
+        Assert.Contains((await db.Rules.StatusAsync(ct)).Rules, r => r.Rule == "Note/remove-from-search");
+        await Assert.ThrowsAsync<ArgumentException>(() => db.Rules.BackfillAsync("remove-from-search", ct));
+
+        // Each kind of message runs only its own kind of rule.
+        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        await db.DeleteAsync<Note>("n1", ct);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+    }
 }
 
 /// <summary>
@@ -1831,7 +1998,7 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.Rules.When<Actor>().Then("greet", async (actor, context, token) =>
+            opts.Rules.When<Actor>().DoQueued("greet", async (actor, context, token) =>
             {
                 // A save from inside the handler works: the handler is not inside anyone's write.
                 await context.Db.SaveAsync(new Note { NoteId = $"hello-{actor.Username}" }, token);
@@ -1845,14 +2012,14 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task AnUpdateRule_ChangesTheObject_ByItself_AndTheRuleAfterItSeesTheChange()
+    public async Task AModifyRule_ChangesTheObject_ByItself_AndTheRuleAfterItSeesTheChange()
     {
         var ct = TestContext.Current.CancellationToken;
         var seen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
             opts.Rules.When<Actor>()
-                .Update("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; })
-                .Then("notify", (actor, _, _) => { seen.TrySetResult(actor.DisplayName); return Task.CompletedTask; }),
+                .ModifyQueued("describe", (actor, _, _) => { actor.DisplayName = $"#{actor.Counter}"; return Task.CompletedTask; })
+                .DoQueued("notify", (actor, _, _) => { seen.TrySetResult(actor.DisplayName); return Task.CompletedTask; }),
             cancellationToken: ct);
 
         await db.SaveAsync(new Actor { Username = "alice", Counter = 7 }, ct);
@@ -1870,7 +2037,7 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.RuleRetryDelay = TimeSpan.FromMilliseconds(200);
-            opts.Rules.When<Actor>().Then("flaky", (_, context, _) =>
+            opts.Rules.When<Actor>().DoQueued("flaky", (_, context, _) =>
             {
                 attempts.Enqueue(context.Attempt);
                 if (context.Attempt < 2)
@@ -1893,7 +2060,7 @@ public abstract class QueuedRulePumpTestBase : LottaTestBase
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
-            opts.Rules.When<Actor>().Then("long", async (_, _, token) =>
+            opts.Rules.When<Actor>().DoQueued("long", async (_, _, token) =>
             {
                 started.TrySetResult();
                 try

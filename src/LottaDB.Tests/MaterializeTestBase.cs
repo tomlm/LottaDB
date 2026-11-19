@@ -3,13 +3,13 @@ using static Lotta.Rule;
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for <c>When&lt;T&gt;().Maintain(projection)</c>: objects kept in step with a source object,
+/// Tests for <c>When&lt;T&gt;().Materialize(projection)</c>: objects kept in step with a source object,
 /// inside the save or from the queue, and run again when an object the projection reads changes.
 /// Queued work is run by hand with <see cref="LottaDB.DrainAsync"/>, so every step is in order.
 /// </summary>
-public abstract class MaintainTestBase : LottaTestBase
+public abstract class MaterializeTestBase : LottaTestBase
 {
-    protected MaintainTestBase(Action<LottaCatalog> config) : base(config) { }
+    protected MaterializeTestBase(Action<LottaCatalog> config) : base(config) { }
 
     private static NoteView? ProjectView(Note note) =>
         new() { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, AuthorUsername = note.AuthorId, Content = note.Content };
@@ -24,13 +24,13 @@ public abstract class MaintainTestBase : LottaTestBase
     // === Inside the save ===
 
     [Fact]
-    public async Task Maintain_SavesWhatTheObjectProduces_InsideTheSave()
+    public async Task Materialize_SavesWhatTheObjectProduces_InsideTheSave()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(ProjectView);
+            opts.Rules.When<Note>().Materialize(ProjectView);
         }, cancellationToken: ct);
 
         var result = await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Content = "hello" }, ct);
@@ -45,13 +45,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_OnALaterSave_WritesTheViewOnlyWhenItDiffers()
+    public async Task Materialize_OnALaterSave_WritesTheViewOnlyWhenItDiffers()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(ProjectView);
+            opts.Rules.When<Note>().Materialize(ProjectView);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
@@ -68,13 +68,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_WithSeveralObjects_SavesTheNewAndDeletesTheNoLongerProduced()
+    public async Task Materialize_WithSeveralObjects_SavesTheNewAndDeletesTheNoLongerProduced()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+            opts.Rules.When<Note>().Materialize("tags", ProjectTags);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Tags = ["a", "b"] }, ct);
@@ -93,13 +93,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_WhenTheProjectionReturnsNothing_DeletesWhatWasProduced()
+    public async Task Materialize_WhenTheProjectionReturnsNothing_DeletesWhatWasProduced()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(note => note.Content.Length == 0 ? null : ProjectView(note));
+            opts.Rules.When<Note>().Materialize(note => note.Content.Length == 0 ? null : ProjectView(note));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "text" }, ct);
@@ -110,13 +110,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_WhenTheFilterBecomesFalse_DeletesWhatWasProduced()
+    public async Task Materialize_WhenTheFilterBecomesFalse_DeletesWhatWasProduced()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>(note => note.Domain == "public").Maintain(ProjectView);
+            opts.Rules.When<Note>(note => note.Domain == "public").Materialize(ProjectView);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Domain = "public" }, ct);
@@ -129,13 +129,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_WhenTheObjectIsDeleted_DeletesWhatItProduced_HoweverItIsDeleted()
+    public async Task Materialize_WhenTheObjectIsDeleted_DeletesWhatItProduced_HoweverItIsDeleted()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+            opts.Rules.When<Note>().Materialize("tags", ProjectTags);
         }, cancellationToken: ct);
         foreach (var id in new[] { "n1", "n2", "n3", "n4" })
             await db.SaveAsync(new Note { NoteId = id, Tags = ["a", "b"] }, ct);
@@ -152,13 +152,13 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Maintain_ForABaseType_CoversTheTypesDerivedFromIt()
+    public async Task Materialize_ForABaseType_CoversTheTypesDerivedFromIt()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<BaseEntity>().Maintain(entity => new FeedEntry { Id = $"f-{entity.Id}", Title = entity.Name });
+            opts.Rules.When<BaseEntity>().Materialize(entity => new FeedEntry { Id = $"f-{entity.Id}", Title = entity.Name });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Employee { Id = "e1", Name = "Eve" }, ct);
@@ -180,7 +180,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+            opts.Rules.When<Note>().Materialize("tags", ProjectTags);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Tags = ["a", "b"] }, ct);
@@ -207,7 +207,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(note => new NoteView { Id = "shared", NoteId = note.NoteId });
+            opts.Rules.When<Note>().Materialize(note => new NoteView { Id = "shared", NoteId = note.NoteId });
         }, cancellationToken: ct);
 
         Assert.Empty((await db.SaveAsync(new Note { NoteId = "n1" }, ct)).Errors);
@@ -231,7 +231,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+            opts.Rules.When<Note>().Materialize("tags", ProjectTags);
         }, cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Tags = ["a", "b"] }, ct);
 
@@ -258,31 +258,36 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Queued_ARunThatChangesWhatIsProduced_RecordsItOnTheSource_AndSearchStillGivesItsETag()
+    public async Task ARunFromTheQueueThatChangesWhatIsProduced_RecordsItOnTheSource_AndSearchStillGivesItsETag()
     {
         var ct = TestContext.Current.CancellationToken;
+        var none = false;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags).Queued();
+            opts.Rules.When<Note>().Materialize("tags", note => none ? [] : ProjectTags(note));
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Tags = ["a"] }, ct);
-        Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
-        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
-
-        // The run wrote the note's row again; an object from the index still saves without a conflict.
         var found = db.Search<Note>().Where(note => note.AuthorId == "alice").ToList().Single();
-        found.Tags = [];
-        Assert.Empty((await db.SaveAsync(found, ct)).Errors);
-        // The save itself ran no projection, and kept the list for the run that follows.
-        Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
+
+        // The projection now produces nothing; a backfill runs it from the queue.
+        none = true;
+        Assert.Equal(1, await db.Rules.BackfillAsync("tags", ct));
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Empty(await EntriesOf(db, "n1", ct));
         Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
         // Recording it queued nothing.
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+
+        // The run wrote the note's row again, so the object read before it is stale...
+        found.Content = "edited";
+        await Assert.ThrowsAsync<ConcurrencyException>(() => db.SaveAsync(found, ct));
+        // ...and one from the index now saves without a conflict.
+        var again = db.Search<Note>().Where(note => note.AuthorId == "alice").ToList().Single();
+        again.Content = "edited";
+        Assert.Empty((await db.SaveAsync(again, ct)).Errors);
     }
 
     [Fact]
@@ -292,8 +297,8 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
-            opts.Rules.When<Note>(note => note.Domain == "shared").Maintain(note => new NoteView { Id = "shared", NoteId = note.NoteId });
+            opts.Rules.When<Note>().Materialize("tags", ProjectTags);
+            opts.Rules.When<Note>(note => note.Domain == "shared").Materialize(note => new NoteView { Id = "shared", NoteId = note.NoteId });
         }, cancellationToken: ct);
 
         var notes = Enumerable.Range(0, 250).Select(n => new Note { NoteId = $"n{n}", Tags = ["a", "b"], Domain = n is 7 or 8 ? "shared" : "" }).ToList();
@@ -323,7 +328,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(ProjectView);
+            opts.Rules.When<Note>().Materialize(ProjectView);
         }, cancellationToken: ct);
         await db.SaveAsync(new NoteView { Id = "nv-n1", Content = "by hand" }, ct);
 
@@ -341,7 +346,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain("copy", note => new Note { NoteId = $"copy-{note.NoteId}" });
+            opts.Rules.When<Note>().Materialize("copy", note => new Note { NoteId = $"copy-{note.NoteId}" });
         }, cancellationToken: ct);
 
         var result = await db.SaveAsync(new Note { NoteId = "n1" }, ct);
@@ -353,13 +358,13 @@ public abstract class MaintainTestBase : LottaTestBase
     // === From the queue ===
 
     [Fact]
-    public async Task Queued_RunsTheProjectionLater_AndDeletesAtOnceWhenTheObjectIs()
+    public async Task MaterializeQueued_RunsTheProjectionLater_AndDeletesAtOnceWhenTheObjectIs()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>(note => note.Domain == "public").Maintain("tags", ProjectTags).Queued();
+            opts.Rules.When<Note>(note => note.Domain == "public").MaterializeQueued("tags", ProjectTags);
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Domain = "public", Tags = ["a", "b"] }, ct);
@@ -384,7 +389,35 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
-    public async Task Queued_AProjectionThatFails_IsRetried_AndStatusNamesTheRule()
+    public async Task MaterializeQueued_ARunThatChangesWhatIsProduced_RecordsItOnTheSource_AndSearchStillGivesItsETag()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().MaterializeQueued("tags", ProjectTags);
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", AuthorId = "alice", Tags = ["a"] }, ct);
+        Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
+
+        // The run wrote the note's row again; an object from the index still saves without a conflict.
+        var found = db.Search<Note>().Where(note => note.AuthorId == "alice").ToList().Single();
+        found.Tags = [];
+        Assert.Empty((await db.SaveAsync(found, ct)).Errors);
+        // The save itself ran no projection, and kept the list for the run that follows.
+        Assert.Equal(["n1#a"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/tags"]);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Empty(await EntriesOf(db, "n1", ct));
+        Assert.Empty((await db.GetAsync<Note>("n1", ct))!.GetProduced()!);
+        // Recording it queued nothing.
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
+    }
+
+    [Fact]
+    public async Task MaterializeQueued_AProjectionThatFails_IsRetried_AndStatusNamesTheRule()
     {
         var ct = TestContext.Current.CancellationToken;
         var fail = true;
@@ -392,10 +425,11 @@ public abstract class MaintainTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.RuleRetryDelay = TimeSpan.Zero;
-            opts.Rules.When<Note>().Maintain(note => fail ? throw new InvalidOperationException("not yet") : ProjectView(note)).Queued();
+            opts.Rules.When<Note>().MaterializeQueued(note => fail ? throw new InvalidOperationException("not yet") : ProjectView(note));
         }, cancellationToken: ct);
 
-        await db.SaveAsync(new Note { NoteId = "n1", Content = "text" }, ct);
+        var saved = await db.SaveAsync(new Note { NoteId = "n1", Content = "text" }, ct);
+        Assert.Empty(saved.Errors);   // the failure is the queue's to report, not the save's
         Assert.Equal(1, await db.DrainAsync(max: 1, cancellationToken: ct));
         var status = (await db.Rules.StatusAsync(ct)).Rules.Single(r => r.Rule == "Note/note-view");
         Assert.Equal("not yet", status.LastError);
@@ -404,6 +438,37 @@ public abstract class MaintainTestBase : LottaTestBase
         fail = false;
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
         Assert.Equal("text", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+    }
+
+    [Fact]
+    public async Task ARunFromTheQueueThatFails_IsRetried_AndStatusNamesTheRule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fail = false;
+        var shout = false;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.Rules.When<Note>().Materialize(note => fail
+                ? throw new InvalidOperationException("not yet")
+                : new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = shout ? note.Content.ToUpperInvariant() : note.Content });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "text" }, ct);
+        Assert.Equal("text", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+
+        fail = true;
+        shout = true;
+        Assert.Equal(1, await db.Rules.BackfillAsync("note-view", ct));
+        Assert.Equal(1, await db.DrainAsync(max: 1, cancellationToken: ct));
+        var status = (await db.Rules.StatusAsync(ct)).Rules.Single(r => r.Rule == "Note/note-view");
+        Assert.Equal("not yet", status.LastError);
+        Assert.Equal("text", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+
+        fail = false;
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+        Assert.Equal("TEXT", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
     }
 
     // === RefreshWhen ===
@@ -424,7 +489,7 @@ public abstract class MaintainTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>()
-                .Maintain(ProjectWithAuthor)
+                .Materialize(ProjectWithAuthor)
                 .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username);
         }, cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
@@ -459,7 +524,7 @@ public abstract class MaintainTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>()
-                .Maintain(ProjectWithAuthor)
+                .Materialize(ProjectWithAuthor)
                 // Comparing two fields of the note is nothing the index can do.
                 .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username && note.Domain != note.AuthorId);
         }, cancellationToken: ct);
@@ -483,7 +548,7 @@ public abstract class MaintainTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>()
-                .Maintain(ProjectWithAuthor)
+                .Materialize(ProjectWithAuthor)
                 .RefreshWhen<Actor>(actor => Changed(actor.DisplayName), actor => note => note.AuthorId == actor.Username);
         }, cancellationToken: ct);
         await db.SaveAsync(new Actor { Username = "alice", DisplayName = "Alice" }, ct);
@@ -508,7 +573,7 @@ public abstract class MaintainTestBase : LottaTestBase
     // === Inputs ===
 
     [Fact]
-    public async Task Maintain_WithChangedInTheFilter_RunsTheProjectionOnlyWhenThoseValuesChange()
+    public async Task Materialize_WithChangedInTheFilter_RunsTheProjectionOnlyWhenThoseValuesChange()
     {
         var ct = TestContext.Current.CancellationToken;
         var projected = 0;
@@ -516,7 +581,7 @@ public abstract class MaintainTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>(note => Changed(note.Content) && note.Domain != "private")
-                .Maintain(note => { projected++; return ProjectView(note); });
+                .Materialize(note => { projected++; return ProjectView(note); });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
@@ -538,6 +603,78 @@ public abstract class MaintainTestBase : LottaTestBase
         Assert.Null(await db.GetAsync<NoteView>("nv-n1", ct));
     }
 
+    // === Lifetimes ===
+
+    [Fact]
+    public async Task AProducedObject_CanProduceObjectsOfItsOwn_AndDeletingTheFirstSourceDeletesTheWholeChain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Materialize(ProjectView);
+            opts.Rules.When<NoteView>().Materialize(view =>
+                new FeedEntry { Id = $"fe-{view.Id}", NoteViewId = view.Id, Title = view.Content });
+        }, cancellationToken: ct);
+
+        Assert.Empty((await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct)).Errors);
+        Assert.Equal("one", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+        Assert.Equal("one", (await db.GetAsync<FeedEntry>("fe-nv-n1", ct))!.Title);
+
+        // A change runs down the chain.
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "two" }, ct);
+        Assert.Equal("two", (await db.GetAsync<FeedEntry>("fe-nv-n1", ct))!.Title);
+
+        var deleted = await db.DeleteAsync<Note>("n1", ct);
+        Assert.Empty(deleted.Errors);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n1", ct));
+        Assert.Null(await db.GetAsync<FeedEntry>("fe-nv-n1", ct));
+        Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));   // all of it inside the delete
+    }
+
+    [Fact]
+    public async Task AProducedObjectDeletedByHand_IsMadeAgainByTheNextRunOfItsSource()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Materialize(ProjectView);
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
+        await db.DeleteAsync<NoteView>("nv-n1", ct);
+        Assert.Null(await db.GetAsync<NoteView>("nv-n1", ct));
+
+        // The same note again: the view it should have is missing, so it is written.
+        Assert.Empty((await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct)).Errors);
+        Assert.Equal("one", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);
+    }
+
+    [Fact]
+    public async Task WhenARuleIsRemoved_WhatItProducedStays_AndNothingDeletesItAnyMore()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts => opts.QueueMode = QueueMode.Manual, cancellationToken: ct);
+
+        // As a rule removed between two runs of the program leaves it: a view marked with the
+        // rule that made it, and a source that lists it under that rule's name.
+        var view = new NoteView { Id = "nv-n1", NoteId = "n1", Content = "one" };
+        view.SetSource("Note/old-rule n1");
+        await db.SaveAsync(view, ct);
+        var note = new Note { NoteId = "n1", Content = "one" };
+        note.SetProduced(new Dictionary<string, string[]> { ["Note/old-rule"] = ["nv-n1"] });
+        await db.SaveAsync(note, ct);
+        Assert.Equal("Note/old-rule n1", (await db.GetAsync<NoteView>("nv-n1", ct))!.GetSource());
+        Assert.Equal(["nv-n1"], (await db.GetAsync<Note>("n1", ct))!.GetProduced()!["Note/old-rule"]);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "two" }, ct);
+        Assert.Equal("one", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);   // nothing keeps it in step
+
+        Assert.Empty((await db.DeleteAsync<Note>("n1", ct)).Errors);
+        Assert.Equal("one", (await db.GetAsync<NoteView>("nv-n1", ct))!.Content);   // and nothing deletes it
+    }
+
     // === Backfill ===
 
     [Fact]
@@ -548,7 +685,7 @@ public abstract class MaintainTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.When<Note>().Maintain(note =>
+            opts.Rules.When<Note>().Materialize(note =>
                 new NoteView { Id = $"nv-{note.NoteId}", NoteId = note.NoteId, Content = shout ? note.Content.ToUpperInvariant() : note.Content });
         }, cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1", Content = "one" }, ct);
@@ -564,43 +701,45 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 }
 
-/// <summary>How a <c>Maintain</c> rule gets its name. Needs no database.</summary>
-public class MaintainNamingTests
+/// <summary>How a <c>Materialize</c> rule gets its name. Needs no database.</summary>
+public class MaterializeNamingTests
 {
     private static NoteView? ProjectNoteAsync(Note note) => new() { Id = note.NoteId };
 
     [Fact]
-    public void AMaintainRule_IsNamedAfterItsMethod_OrTheTypeALambdaProduces()
+    public void AMaterializeRule_IsNamedAfterItsMethod_OrTheTypeALambdaProduces()
     {
         var config = new LottaConfiguration();
-        config.Rules.When<Note>().Maintain(ProjectNoteAsync);
-        config.Rules.When<Note>().Maintain(note => new NoteView { Id = note.NoteId });
-        config.Rules.When<Note>().Maintain(note => note.Tags.Select(tag => new FeedEntry { Id = tag }));
-        config.Rules.When<Note>().Maintain(note => note.Tags.Select(tag => new ModerationView { NoteId = tag }).ToList());
-        config.Rules.When<Note>().Maintain("by-hand", note => new CycleA { Id = note.NoteId });
+        config.Rules.When<Note>().Materialize(ProjectNoteAsync);
+        config.Rules.When<Note>().Materialize(note => new NoteView { Id = note.NoteId });
+        config.Rules.When<Note>().Materialize(note => note.Tags.Select(tag => new FeedEntry { Id = tag }));
+        config.Rules.When<Note>().Materialize(note => note.Tags.Select(tag => new ModerationView { NoteId = tag }).ToList());
+        config.Rules.When<Note>().Materialize("by-hand", note => new CycleA { Id = note.NoteId });
 
         Assert.Equal(["Note/project-note", "Note/note-view", "Note/feed-entry", "Note/moderation-view", "Note/by-hand"],
             config.QueuedRules.Select(r => r.Id));
-        Assert.All(config.QueuedRules, rule => Assert.True(rule.Inline));
+        Assert.All(config.QueuedRules, rule => Assert.True(rule.InSave));
+    }
+
+    [Fact]
+    public void MaterializeQueued_MakesTheRuleRunFromTheQueue()
+    {
+        var config = new LottaConfiguration();
+        config.Rules.When<Note>().MaterializeQueued(note => new NoteView { Id = note.NoteId });
+
+        var rule = config.QueuedRules.Single();
+        Assert.Equal("Note/note-view", rule.Id);
+        Assert.False(rule.InSave);
     }
 
     [Fact]
     public void TwoLambdasProducingOneType_MustBeNamed()
     {
         var config = new LottaConfiguration();
-        config.Rules.When<Note>().Maintain(note => new NoteView { Id = note.NoteId });
+        config.Rules.When<Note>().Materialize(note => new NoteView { Id = note.NoteId });
 
         var error = Assert.Throws<ArgumentException>(() =>
-            config.Rules.When<Note>().Maintain(note => new NoteView { Id = $"other-{note.NoteId}" }));
+            config.Rules.When<Note>().Materialize(note => new NoteView { Id = $"other-{note.NoteId}" }));
         Assert.Contains("Note/note-view", error.Message);
-    }
-
-    [Fact]
-    public void Queued_MakesTheRuleRunFromTheQueue()
-    {
-        var config = new LottaConfiguration();
-        config.Rules.When<Note>().Maintain(note => new NoteView { Id = note.NoteId }).Queued();
-
-        Assert.False(config.QueuedRules.Single().Inline);
     }
 }

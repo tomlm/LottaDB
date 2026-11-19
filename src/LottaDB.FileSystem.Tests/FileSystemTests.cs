@@ -8,7 +8,8 @@ internal static class Tests
 }
 
 public class FileSystem_QueuedRuleTests : QueuedRuleTestBase { public FileSystem_QueuedRuleTests() : base(Tests.Configure) { } }
-public class FileSystem_MaintainTests : MaintainTestBase { public FileSystem_MaintainTests() : base(Tests.Configure) { } }
+public class FileSystem_MaterializeTests : MaterializeTestBase { public FileSystem_MaterializeTests() : base(Tests.Configure) { } }
+public class FileSystem_ModifyRuleTests : ModifyRuleTestBase { public FileSystem_ModifyRuleTests() : base(Tests.Configure) { } }
 public class FileSystem_ScheduleTests : ScheduleTestBase { public FileSystem_ScheduleTests() : base(Tests.Configure) { } }
 public class FileSystem_TimedRuleTests : TimedRuleTestBase { public FileSystem_TimedRuleTests() : base(Tests.Configure) { } }
 public class FileSystem_QueuedRulePumpTests : QueuedRulePumpTestBase { public FileSystem_QueuedRulePumpTests() : base(Tests.Configure) { } }

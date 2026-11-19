@@ -95,7 +95,7 @@ public interface ILottaConfiguration
     /// The database's rules: what to do when objects are saved or deleted. Start one with
     /// <see cref="RuleSet.When{T}"/> or <see cref="RuleSet.WhenDeleted{T}"/>.
     /// <code>
-    /// config.Rules.When&lt;Note&gt;(n =&gt; n.IsPublished).Do(UpdateFeedView).Then(NotifyFollowers);
+    /// config.Rules.When&lt;Note&gt;(n =&gt; n.IsPublished).Do(UpdateFeedView).DoQueued(NotifyFollowers);
     /// </code>
     /// </summary>
     RuleSet Rules { get; }
@@ -140,7 +140,7 @@ public interface ILottaConfiguration
     /// <summary>
     /// Set the blob upload handler (replacement semantics: last one wins).
     /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
-    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.Update(...)</c> or <c>.Then(...)</c> for additional post-upload
+    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.ModifyQueued(...)</c> or <c>.DoQueued(...)</c> for additional post-upload
     /// processing (CSAM scanning, thumbnails, etc.): uploading saves the blob's record, which fires them.
     /// </summary>
     /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>

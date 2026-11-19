@@ -8,7 +8,7 @@ using Lotta.Internal;
 
 namespace Lotta;
 
-// Queued rules (When<T>().Update(...), .Then(...), and .Maintain(...) when it runs from the queue): a save sends one small message to the queue of
+// Queued rules (When<T>().DoQueued(...), .ModifyQueued(...), the delayed .Do and .Modify, and .Materialize(...) when a refresh or backfill runs it): a save sends one small message to the queue of
 // the object's type, listing the rules the save matched, and a pump runs them later, outside the
 // write lease, retrying each rule until it succeeds. The queues are the only stored state; see
 // Rules-Next.md.
@@ -58,7 +58,7 @@ public partial class LottaDB
         public HashSet<string> Remaining = [];
 
         /// <summary>
-        /// Set when the object was saved during the run (by an <c>Update</c> rule's write, or by a
+        /// Set when the object was saved during the run (by an <c>ModifyQueued</c> rule's write, or by a
         /// handler), so the next rule is given the object as it now is.
         /// </summary>
         public volatile bool Dirty;
@@ -91,7 +91,7 @@ public partial class LottaDB
     private static readonly TimeSpan MaxLease = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan NeverExpires = TimeSpan.FromSeconds(-1);
-    private const int MaxUpdateWrites = 10;
+    private const int MaxModifyWrites = 10;
     /// <summary>The longest a queue hides a message for. A longer wait is made in steps.</summary>
     internal static readonly TimeSpan MaxHide = TimeSpan.FromDays(7);
 
@@ -155,6 +155,36 @@ public partial class LottaDB
     /// compared with the stored version, read here. <see cref="ForgetPrevious"/> ends it.
     /// </summary>
     /// <param name="jsonBefore">The object's JSON when it was last loaded or saved; null when it never was.</param>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, ModifyRule[]> _modifyRulesByType = new();
+
+    /// <summary>
+    /// Before an object's row is written: runs the in-save <c>Modify</c> actions for its type and
+    /// the types it derives from, in the order they were registered, so the write stores what
+    /// they changed. Called after the version the save replaces has been noted, so their filters
+    /// can ask <c>Changed(...)</c>.
+    /// </summary>
+    /// <returns>What the actions threw, for the save's errors; null when nothing went wrong. The object is saved either way.</returns>
+    private async Task<List<Exception>?> RunModifiesAsync(object entity, CancellationToken cancellationToken)
+    {
+        if (_config.ModifyRules.Count == 0 || entity is JsonDocument)
+            return null;
+        var rules = _modifyRulesByType.GetOrAdd(entity.GetType(),
+            type => [.. _config.ModifyRules.Where(rule => rule.ObjectType.IsAssignableFrom(type))]);
+        List<Exception>? errors = null;
+        foreach (var rule in rules)
+        {
+            try
+            {
+                await rule.Invoke(entity, this, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                (errors ??= []).Add(e);
+            }
+        }
+        return errors;
+    }
+
     private async Task NotePreviousAsync(object entity, string key, string? jsonBefore, CancellationToken cancellationToken)
     {
         if (entity is JsonDocument || !TracksChanges(entity.GetType()))
@@ -189,7 +219,7 @@ public partial class LottaDB
         if (!HasQueuedRules || _typeQueues.Length > 0)
             return;
         var queues = _lottaCatalog.GetQueueServiceClient()
-            ?? throw new NotSupportedException($"Rules that run from a queue (.Update, .Maintain, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
+            ?? throw new NotSupportedException($"Rules that run from a queue (.DoQueued, .ModifyQueued, .Materialize, .After, .At) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
         var names = new List<string>();
         var prefix = RuleQueueNames.DatabasePrefix(_lottaCatalog.Name, _databaseId);
@@ -244,7 +274,7 @@ public partial class LottaDB
         if (_queueByType.TryGetValue(type, out var known))
             return known;
         var queues = _lottaCatalog.GetQueueServiceClient()
-            ?? throw new NotSupportedException($"Rules that run from a queue (.Update, .Maintain, .Then) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
+            ?? throw new NotSupportedException($"Rules that run from a queue (.DoQueued, .ModifyQueued, .Materialize, .After, .At) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
         var name = RuleQueueNames.Queue(_lottaCatalog.Name, _databaseId, type);
         var queue = queues.GetQueueClient(name);
@@ -333,7 +363,7 @@ public partial class LottaDB
         if (rules.Length == 0)
             return;
 
-        // A save of the object a run is for, made inside that run (an Update rule's write, or a
+        // A save of the object a run is for, made inside that run (an Modify rule's write, or a
         // handler saving the object it was given): the rule that made it is not queued again, which
         // is what keeps a rule from triggering itself, and neither are the rules the run has yet
         // to do, since they are about to be given the object as saved here.
@@ -350,15 +380,16 @@ public partial class LottaDB
         {
             if (own != null && (rule.Id == own.RuleId || own.Remaining.Contains(rule.Id)))
                 continue;
-            // A Maintain rule that runs inside the save has just run.
-            if (rule.Inline)
+            // A Materialize rule that runs inside the save has just run; a rule of deletes is not for a save.
+            if (rule.InSave || rule.OnDelete)
                 continue;
             try
             {
-                // Not for this save: nothing to queue, run or read back. Except that a Maintain
-                // rule which is no longer for the object at all has what it produced to delete.
+                // Not for this save: nothing to queue, run or read back. Except that a
+                // MaterializeQueued rule which is no longer for the object at all has what it
+                // produced to delete.
                 if (rule.OnSave is { } onSave && !onSave(entity)
-                    && !(rule.Verb == RuleVerb.Maintain && rule.Rest is { } rest && !rest(entity)))
+                    && !(rule.Verb == RuleVerb.Materialize && rule.Rest is { } rest && !rest(entity)))
                     continue;
                 if (rule.After is { } after)
                 {
@@ -421,6 +452,129 @@ public partial class LottaDB
         catch (Exception e) when (e is not OperationCanceledException)
         {
             errors.Add(new InvalidOperationException($"'{key}' was saved, but its rules could not be queued: {e.Message}", e));
+        }
+    }
+
+    /// <summary>The queued rules of deletes that apply to a concrete type, in the order registered.</summary>
+    private QueuedRule[] DeleteRulesFor(Type type) =>
+        _deleteRulesByType.GetOrAdd(type, t => [.. QueuedRulesFor(t).Where(r => r.OnDelete)]);
+
+    private readonly ConcurrentDictionary<Type, QueuedRule[]> _deleteRulesByType = new();
+
+    /// <summary>
+    /// Queues the rules a delete matched: one message, to the queue of the object's type, listing
+    /// them. A run cannot read a deleted object, so the object is first kept aside as a tombstone,
+    /// which the message names and its last rule removes. Called inside the delete, after the rules
+    /// that run there. A filter that throws, or storage that cannot be written to, is reported in
+    /// <paramref name="errors"/>; the delete itself has already happened.
+    /// </summary>
+    private async Task EnqueueDeletedAsync(object entity, List<Exception> errors, CancellationToken cancellationToken)
+    {
+        if (!HasQueuedRules || entity is JsonDocument)
+            return;
+        var type = entity.GetType();
+        var rules = DeleteRulesFor(type);
+        if (rules.Length == 0)
+            return;
+
+        var key = AsyncKeyOf(entity);
+        var matched = new List<string>();
+        foreach (var rule in rules)
+        {
+            try
+            {
+                if (rule.OnSave is { } filter && !filter(entity))
+                    continue;
+            }
+            catch (Exception e)
+            {
+                errors.Add(new InvalidOperationException($"'{key}' was deleted, but the filter of rule '{rule.Id}' failed: {e.Message}", e));
+                continue;
+            }
+            matched.Add(rule.Id);
+        }
+        if (matched.Count == 0)
+            return;
+
+        var run = _asyncRun.Value;
+        var hop = run is null ? 0 : run.Hop + 1;
+        try
+        {
+            var queue = await TypeQueueAsync(type, cancellationToken).ConfigureAwait(false);
+            if (hop > _config.MaxQueueHops)
+            {
+                // A chain this long is rules feeding one another; stop it where it can be seen.
+                foreach (var rule in matched)
+                {
+                    var record = new PoisonRecord
+                    {
+                        Type = queue.TypeName,
+                        Key = key,
+                        ETag = entity.GetETag(),
+                        Rule = rule,
+                        Tombstone = await WriteTombstoneAsync(entity, cancellationToken).ConfigureAwait(false),
+                        Error = $"Set aside without running: {hop} queued rules in a row led to this delete, more than MaxQueueHops ({_config.MaxQueueHops}).",
+                    };
+                    await queue.Poison.SendMessageAsync(record.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+                }
+                return;
+            }
+
+            var message = new RuleMessage
+            {
+                Key = key,
+                ETag = entity.GetETag(),
+                Rules = matched,
+                Hop = hop,
+                Tombstone = await WriteTombstoneAsync(entity, cancellationToken).ConfigureAwait(false),
+            };
+            await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+            Signal();
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            errors.Add(new InvalidOperationException($"'{key}' was deleted, but its rules could not be queued: {e.Message}", e));
+        }
+    }
+
+    /// <summary>Keeps an object aside under a key of its own, and gives that key. Whoever is given it (a message, a set-aside record) removes it.</summary>
+    private async Task<string> WriteTombstoneAsync(object entity, CancellationToken cancellationToken)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        await _tombstones.UpsertAsync(_lottaCatalog.Name, id, entity, GetMeta(entity.GetType()), cancellationToken).ConfigureAwait(false);
+        return id;
+    }
+
+    /// <summary>The deleted object a tombstone keeps, under the key and ETag it had; null when the tombstone is gone.</summary>
+    private async Task<object?> ReadTombstoneAsync(string tombstone, string key, string? etag, CancellationToken cancellationToken)
+    {
+        var (kept, _) = await _tombstones.GetAsync(_lottaCatalog.Name, tombstone, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (kept == null || kept is JsonDocument)
+            return null;
+        kept.SetKey(key);
+        if (etag != null)
+            kept.SetETag(etag);
+        return kept;
+    }
+
+    /// <summary>A second tombstone of the same object, for a rule that is set aside while the others carry on; null when the first is gone.</summary>
+    private async Task<string?> CopyTombstoneAsync(string tombstone, CancellationToken cancellationToken)
+    {
+        var (kept, _) = await _tombstones.GetAsync(_lottaCatalog.Name, tombstone, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return kept == null || kept is JsonDocument ? null : await WriteTombstoneAsync(kept, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Removes a tombstone whose rules are done with it. Failing to is harmless: nothing reads a tombstone no message names.</summary>
+    private async Task RemoveTombstoneAsync(string? tombstone)
+    {
+        if (tombstone == null)
+            return;
+        try
+        {
+            await _tombstones.DeleteAsync(_lottaCatalog.Name, tombstone, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is RequestFailedException or ObjectDisposedException)
+        {
         }
     }
 
@@ -689,6 +843,7 @@ public partial class LottaDB
             if (state.Gone)
             {
                 await queue.Queue.DeleteMessageAsync(received.MessageId, receipt, settle).ConfigureAwait(false);
+                await RemoveTombstoneAsync(message.Tombstone).ConfigureAwait(false);
                 return state.Runs;
             }
 
@@ -702,6 +857,9 @@ public partial class LottaDB
                 {
                     // Set aside by itself: the other rules of the message carry on without it.
                     var record = new PoisonRecord { Type = queue.TypeName, Key = message.Key, ETag = message.ETag, Rule = rule, Error = text, Attempts = attempts };
+                    // A rule of a delete takes a tombstone of its own with it, so the message can remove its own when the other rules are done.
+                    if (message.Tombstone != null)
+                        record.Tombstone = await CopyTombstoneAsync(message.Tombstone, settle).ConfigureAwait(false);
                     await queue.Poison.SendMessageAsync(record.ToText(), null, NeverExpires, settle).ConfigureAwait(false);
                     state.Pending.Remove(rule);
                     continue;
@@ -714,6 +872,8 @@ public partial class LottaDB
             if (state.Pending.Count == 0)
             {
                 await queue.Queue.DeleteMessageAsync(received.MessageId, receipt, settle).ConfigureAwait(false);
+                // The last rule of a delete has run: the object goes for good.
+                await RemoveTombstoneAsync(message.Tombstone).ConfigureAwait(false);
                 return state.Runs;
             }
 
@@ -752,18 +912,23 @@ public partial class LottaDB
     }
 
     /// <summary>
-    /// Reads the object once and runs the message's rules on it in phase order (<c>Update</c>
-    /// rules, then <c>Maintain</c>, then <c>Then</c>), noting in <paramref name="state"/> how each went. A rule
+    /// Reads the object once and runs the message's rules on it in phase order (<c>ModifyQueued</c>
+    /// rules, then <c>Materialize</c>, then <c>DoQueued</c>), noting in <paramref name="state"/> how each went. A rule
     /// that fails does not stop the others.
     /// </summary>
     /// <param name="token">Cancelled when the run must stop: closing, a cancelled drain, or the hold on the message was lost.</param>
     /// <param name="stopping">Cancelled only for closing or a cancelled drain, which are no fault of a rule.</param>
     private async Task RunRulesAsync(TypeQueue queue, RuleMessage message, MessageRun state, int? budget, CancellationToken token, CancellationToken stopping)
     {
-        var found = await GetAsync(message.Key, token).ConfigureAwait(false);
+        // The rules of a delete are given the object as it was, which its tombstone keeps.
+        var deleted = message.Tombstone != null;
+        var found = deleted
+            ? await ReadTombstoneAsync(message.Tombstone!, message.Key, message.ETag, token).ConfigureAwait(false)
+            : await GetAsync(message.Key, token).ConfigureAwait(false);
         if (found == null || found.GetType() != queue.Type)
         {
             // Deleted since, or replaced by an object of another type, whose save queued its own rules.
+            // (For a delete: its tombstone is gone, so its rules have run or the database was reset.)
             state.Gone = true;
             return;
         }
@@ -773,9 +938,10 @@ public partial class LottaDB
         // removed since), every queued rule of the type is run instead: rules are safe to run
         // twice, and that way no work is lost to a rename.
         var named = message.Rules.ToHashSet(StringComparer.Ordinal);
-        var todo = named.All(id => queue.Rules.Any(r => r.Id == id))
-            ? queue.Rules.Where(r => named.Contains(r.Id)).ToList()
-            : [.. queue.Rules];
+        var ofKind = queue.Rules.Where(r => r.OnDelete == deleted).ToList();
+        var todo = named.All(id => ofKind.Any(r => r.Id == id))
+            ? ofKind.Where(r => named.Contains(r.Id)).ToList()
+            : ofKind;
         state.Pending = [.. todo.Select(r => r.Id)];
 
         var run = new AsyncRun(this, message.Hop, message.Key);
@@ -795,6 +961,8 @@ public partial class LottaDB
             var counted = false;
             try
             {
+                if (run.Dirty && deleted)
+                    run.Dirty = false;   // saved again under the same key: the rules of the delete still get the object as it was
                 if (run.Dirty)
                 {
                     // Saved during this run: the next rule is given the object as it now is.
@@ -812,8 +980,8 @@ public partial class LottaDB
                 state.Runs++;
                 counted = true;
                 // The object may have changed since it was queued; Changed(...) is taken to be true.
-                // (A Maintain rule runs all the same: it then deletes what the object produced.)
-                if (rule.Verb != RuleVerb.Maintain && rule.Rest is { } rest && !rest(entity))
+                // (A Materialize rule runs all the same: it then deletes what the object produced.)
+                if (rule.Verb != RuleVerb.Materialize && rule.Rest is { } rest && !rest(entity))
                 {
                     state.Runs--;   // not for this object any more: skipped, which is no run
                     state.Pending.Remove(rule.Id);
@@ -843,10 +1011,10 @@ public partial class LottaDB
                 try
                 {
                     var attempt = message.AttemptsOf(rule.Id) + 1;
-                    if (rule.Verb == RuleVerb.Update)
-                        await RunUpdateAsync(rule, entity, attempt, message.ETag, run, ruleCts.Token).ConfigureAwait(false);
-                    else if (rule.Verb == RuleVerb.Maintain)
-                        await RunMaintainAsync(rule, entity, attempt, message.ETag, ruleCts.Token).ConfigureAwait(false);
+                    if (rule.Verb == RuleVerb.Modify)
+                        await RunModifyAsync(rule, entity, attempt, message.ETag, run, ruleCts.Token).ConfigureAwait(false);
+                    else if (rule.Verb == RuleVerb.Materialize)
+                        await RunMaterializeAsync(rule, entity, attempt, message.ETag, ruleCts.Token).ConfigureAwait(false);
                     else
                         await rule.Invoke(entity, new RuleContext(this, rule.Name, rule.Id, attempt, entity, message.ETag), ruleCts.Token).ConfigureAwait(false);
                 }
@@ -887,13 +1055,13 @@ public partial class LottaDB
     }
 
     /// <summary>
-    /// Runs an <c>Update</c> rule: the handler edits a copy, and the copy is written back only if
+    /// Runs an <c>ModifyQueued</c> rule: the handler edits a copy, and the copy is written back only if
     /// the handler changed it. If the object was saved by someone else meanwhile, the handler's
     /// changes are applied to the newer version when that is safe (the rule's <c>Changed</c>
     /// inputs are still the same, and nobody else touched the properties the handler set), and
     /// dropped otherwise. The handler is called once, whatever happens.
     /// </summary>
-    private async Task RunUpdateAsync(QueuedRule rule, object original, int attempt, string? etag, AsyncRun run, CancellationToken cancellationToken)
+    private async Task RunModifyAsync(QueuedRule rule, object original, int attempt, string? etag, AsyncRun run, CancellationToken cancellationToken)
     {
         var type = original.GetType();
         var key = AsyncKeyOf(original);
@@ -928,7 +1096,7 @@ public partial class LottaDB
         var outputs = before.Select(p => p.Key).Union(after.Select(p => p.Key))
             .Where(name => !JsonNode.DeepEquals(before[name], after[name])).ToList();
 
-        for (var write = 0; write < MaxUpdateWrites; write++)
+        for (var write = 0; write < MaxModifyWrites; write++)
         {
             var latest = await GetAsync(key, cancellationToken).ConfigureAwait(false);
             if (latest == null || latest.GetType() != type)
@@ -962,7 +1130,7 @@ public partial class LottaDB
             }
         }
         throw new InvalidOperationException(
-            $"The result of rule '{rule.Id}' for '{key}' could not be written: the object was saved by others {MaxUpdateWrites} times in a row.");
+            $"The result of rule '{rule.Id}' for '{key}' could not be written: the object was saved by others {MaxModifyWrites} times in a row.");
     }
 
     /// <summary>An object made from JSON, with what an object loaded from the database carries.</summary>
@@ -976,7 +1144,7 @@ public partial class LottaDB
         if (etag != null)
             copy.SetETag(etag);
         copy.SetSchema(type.Name);
-        copy.SetSource(like.GetSource());       // an object a Maintain rule produced stays that rule's
+        copy.SetSource(like.GetSource());       // an object a Materialize rule produced stays that rule's
         copy.SetProduced(like.GetProduced());   // and what was produced from it stays listed
         if (copy is BlobFile blob)
             blob.Database = this;
@@ -1075,7 +1243,7 @@ public partial class LottaDB
         var moved = await WalkPoisonAsync(id, async (queue, record) =>
         {
             // A fresh start: no attempts, and not part of the chain of rules that led to it.
-            var message = new RuleMessage { Key = record.Key, ETag = record.ETag, Rules = [id] };
+            var message = new RuleMessage { Key = record.Key, ETag = record.ETag, Rules = [id], Tombstone = record.Tombstone };
             await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
         if (moved > 0)
@@ -1085,7 +1253,7 @@ public partial class LottaDB
 
     /// <summary>Deletes a rule's set-aside work; see <see cref="LiveRuleSet.DiscardAsync"/>.</summary>
     internal Task<int> DiscardRuleAsync(string rule, CancellationToken cancellationToken) =>
-        WalkPoisonAsync(RuleIdForChange(rule, registered: false), (_, _) => Task.CompletedTask, cancellationToken);
+        WalkPoisonAsync(RuleIdForChange(rule, registered: false), (_, record) => RemoveTombstoneAsync(record.Tombstone), cancellationToken);
 
     /// <summary>
     /// Goes through all set-aside work, takes out the records of one rule after giving each to
@@ -1152,6 +1320,8 @@ public partial class LottaDB
     {
         var id = RuleIdForChange(rule, registered: true);
         var queued = _config.QueuedRules.First(r => r.Id == id);
+        if (queued.OnDelete)
+            throw new ArgumentException($"Rule '{id}' is for deletes: there are no stored objects to run it for.", nameof(rule));
         var count = 0;
         await foreach (var entity in BackfillCandidatesAsync(queued, cancellationToken).ConfigureAwait(false))
         {

@@ -6,7 +6,7 @@ LottaDB is a .NET library that stores **POCOs in Azure Table Storage** and index
 
 Each write opens a Lucene session, adds/deletes the document, and the session disposes — triggering commit and IndexSearcher refresh. `Search<T>()` always reflects the last committed state.
 
-Rules (`config.Rules.When<T>(filter).Do(...)`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects. `.Update(...)` and `.Then(...)` run slow work later, from a queue.
+Rules (`config.Rules.When<T>(filter).Do(...)`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects. `.ModifyQueued(...)` and `.DoQueued(...)` run slow work later, from a queue.
 
 ## The Database
 
@@ -151,7 +151,7 @@ public class LottaDB
     // Queued rules: also db.Rules.StatusAsync(), RetryAsync(rule), DiscardAsync(rule), BackfillAsync(rule)
     Task<int> DrainAsync(int? max = null, CancellationToken ct = default);
 
-    // Maintain
+    // Materialize
     Task RebuildIndex(CancellationToken ct = default);
 }
 ```
@@ -239,19 +239,19 @@ Handlers that produce objects which trigger further handlers are tracked by type
 
 All changes across a handler chain (root save + handler-triggered saves) are aggregated into a single `ObjectResult` via `AsyncLocal`. The root caller receives the complete set of changes and any handler errors.
 
-## Queued Rules (`.Update`, `.Then`)
+## Queued Rules (`.ModifyQueued`, `.DoQueued`)
 
-`.Do` runs inside the save, under the write lease. `.Update` and `.Then` are for work too slow for that. The verb says what kind of work it is: `.Update` changes the object itself, `.Then` does something outside the database.
+`.Do` runs inside the save, under the write lease. `.ModifyQueued` and `.DoQueued` are for work too slow for that. The verb says what kind of work it is: `.ModifyQueued` changes the object itself, `.DoQueued` does something outside the database.
 
 ```csharp
-opts.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);   // rule "Note/summarize", named after the method
-opts.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).Then(NotifyFollowers);
+opts.Rules.When<Note>(n => Changed(n.Content)).ModifyQueued(Summarize);   // rule "Note/summarize", named after the method
+opts.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).DoQueued(NotifyFollowers);
 ```
 
 - **One queue per object type.** A save sends one small message to the queue of the object's concrete type: the key, the ETag and the names of the rules the save matched. The object itself is read when the rules run.
-- **A pump per database** runs the rules later, outside the write lease, `MaxConcurrency` objects at a time. For each message it runs the `Update` rules, then the `Then` rules.
+- **A pump per database** runs the rules later, outside the write lease, `MaxConcurrency` objects at a time. For each message it runs the `ModifyQueued` rules, then `MaterializeQueued`, then the `DoQueued` rules.
 - **`Changed(...)`** in a filter compares the save with the version it replaces. An object LottaDB handed out carries the JSON it was loaded with, so nothing extra is stored.
-- **`.Update`** hands the handler a copy and writes it back with a conditional write. If the object changed meanwhile, the result is applied to the newer version when the `Changed(...)` inputs are the same, and dropped otherwise.
+- **`.ModifyQueued`** hands the handler a copy and writes it back with a conditional write. If the object changed meanwhile, the result is applied to the newer version when the `Changed(...)` inputs are the same, and dropped otherwise.
 - **Failures are per rule.** A rule that throws is retried by itself: the message is replaced in place by one listing only the rules still to do, with their attempt counts. A rule that keeps failing is set aside in the type's poison queue.
 - **All state is in the queues.** There are no rows per rule or per object.
 

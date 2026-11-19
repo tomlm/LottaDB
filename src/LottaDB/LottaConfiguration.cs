@@ -12,10 +12,12 @@ public class LottaConfiguration : ILottaConfiguration
     internal Dictionary<Type, object> StorageConfigurations { get; } = new();
     internal List<OnRegistration> OnRegistrations { get; } = new();
     internal BlobUploadHandler? UploadHandler { get; private set; }
-    /// <summary>The named rules (<c>Update</c>, <c>Maintain</c>, <c>Then</c>), in the order they were registered.</summary>
+    /// <summary>The named rules (<c>DoQueued</c>, <c>ModifyQueued</c>, <c>Materialize</c>, and the delayed <c>Do</c> and <c>Modify</c>), in the order they were registered.</summary>
     internal List<QueuedRule> QueuedRules { get; } = new();
     internal List<RuleRegistration> RuleRegistrations { get; } = new();
-    /// <summary>The schedules (<c>Rules.Every(...).Then(...)</c>), in the order they were registered.</summary>
+    /// <summary>The in-save <c>Modify</c> actions, in the order they were registered: run before an object's row is written.</summary>
+    internal List<ModifyRule> ModifyRules { get; } = new();
+    /// <summary>The schedules (<c>Rules.Every(...).Do(...)</c>), in the order they were registered.</summary>
     internal List<ScheduleSpec> Schedules { get; } = new();
     /// <summary>How many schedules were started with <c>Every</c> and not yet given their work.</summary>
     internal int SchedulesWithoutWork { get; set; }
@@ -121,13 +123,13 @@ public class LottaConfiguration : ILottaConfiguration
     internal void CheckRules()
     {
         if (SchedulesWithoutWork > 0)
-            throw new InvalidOperationException("A schedule has no work: follow Rules.Every(...) with .Then(handler).");
+            throw new InvalidOperationException("A schedule has no work: follow Rules.Every(...) with .Do(handler).");
         if (RuleRegistrations.FirstOrDefault(r => r.Actions == 0) is { } rule)
         {
             var name = rule.ObjectType.Name;
             throw new InvalidOperationException(rule.Deleted
                 ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler)."
-                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .Update(handler), .Maintain(projection) or .Then(handler).");
+                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .DoQueued(handler), .Modify(handler), .ModifyQueued(handler) or .Materialize(projection).");
         }
     }
 
@@ -163,7 +165,7 @@ public class LottaConfiguration : ILottaConfiguration
     }
 
     /// <summary>
-    /// Registers a queued action of a rule (<c>Update</c> or <c>Then</c>), checking its name. The
+    /// Registers a queued action of a rule (<c>DoQueued</c>, <c>ModifyQueued</c>, or a delayed <c>Do</c> or <c>Modify</c>), checking its name. The
     /// rule's identity is the type and the name, <c>Note/summarize</c>, and must be unique.
     /// </summary>
     /// <param name="after">How long after the save the rule runs; null for as soon as it can.</param>
@@ -179,24 +181,46 @@ public class LottaConfiguration : ILottaConfiguration
     }
 
     /// <summary>
-    /// Registers a <c>Maintain</c> rule, checking its name. It is kept with the queued rules, by
-    /// the same identity, because it can be run from the queue (a refresh, a backfill, or
-    /// <c>.Queued()</c>); until <c>.Queued()</c> is called it also runs inside the save.
+    /// Registers a <c>Materialize</c> rule, checking its name. It is kept with the queued rules, by
+    /// the same identity, because it is also run from the queue: for a refresh or a backfill,
+    /// and for every save when it is <paramref name="queued"/>.
     /// </summary>
     /// <param name="project">Produces the objects the rule keeps for one source object.</param>
-    internal QueuedRule AddMaintainRule<T>(string name, Internal.RuleFilter<T> filter, Func<T, RuleContext, CancellationToken, Task<List<object>>> project)
+    /// <param name="queued">True for <c>MaterializeQueued</c>: a save queues the projection instead of running it.</param>
+    internal QueuedRule AddMaterializeRule<T>(string name, Internal.RuleFilter<T> filter, Func<T, RuleContext, CancellationToken, Task<List<object>>> project, bool queued = false)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(project);
-        return AddQueuedRule(RuleVerb.Maintain, name, filter,
-            static (_, _, _) => Task.CompletedTask,   // a Maintain rule is run through Project
-            (entity, context, cancellationToken) => project((T)entity, context, cancellationToken));
+        return AddQueuedRule(RuleVerb.Materialize, name, filter,
+            static (_, _, _) => Task.CompletedTask,   // a Materialize rule is run through Project
+            (entity, context, cancellationToken) => project((T)entity, context, cancellationToken),
+            inSave: !queued);
     }
 
-    private QueuedRule AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter,
-        Func<object, RuleContext, CancellationToken, Task> invoke,
-        Func<object, RuleContext, CancellationToken, Task<List<object>>>? project)
-        where T : class, new()
+    /// <summary>
+    /// Registers the queued action of a rule of deletes (<c>WhenDeleted(...).DoQueued</c>),
+    /// checking its name. Its filter is checked once, in the delete: the object cannot change
+    /// afterwards.
+    /// </summary>
+    internal QueuedRule AddDeletedRule<T>(string name, Func<T, bool>? filter, RuleHandler<T> handler) where T : class, new()
+    {
+        var rule = new QueuedRule
+        {
+            Id = NewRuleId<T>(name),
+            Name = name,
+            ObjectType = typeof(T),
+            Verb = RuleVerb.Do,
+            Order = QueuedRules.Count,
+            Invoke = (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken),
+            OnSave = filter == null ? null : entity => filter((T)entity),
+            OnDelete = true,
+        };
+        QueuedRules.Add(rule);
+        return rule;
+    }
+
+    /// <summary>Checks a new rule's name and gives its identity: <c>Note/summarize</c>.</summary>
+    private string NewRuleId<T>(string name)
     {
         ThrowIfOpened();
         if (name is null || !Internal.RuleQueueNames.IsValidRuleName(name))
@@ -205,6 +229,16 @@ public class LottaConfiguration : ILottaConfiguration
         var id = $"{typeof(T).Name}/{name}";
         if (QueuedRules.Any(r => r.Id == id))
             throw new ArgumentException($"A rule '{id}' is already registered. Give one of the two another name.", nameof(name));
+        return id;
+    }
+
+    private QueuedRule AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter,
+        Func<object, RuleContext, CancellationToken, Task> invoke,
+        Func<object, RuleContext, CancellationToken, Task<List<object>>>? project,
+        bool inSave = false)
+        where T : class, new()
+    {
+        var id = NewRuleId<T>(name);
 
         var onSave = filter.OnSave;
         var rest = filter.Rest;
@@ -218,7 +252,7 @@ public class LottaConfiguration : ILottaConfiguration
             Order = QueuedRules.Count,
             Invoke = invoke,
             Project = project,
-            Inline = project != null,
+            InSave = inSave,
             OnSave = onSave == null ? null : entity => onSave((T)entity),
             Rest = rest == null ? null : entity => rest((T)entity),
             // Captured while T is known: the objects the index says the filter is true for.
@@ -236,7 +270,7 @@ public class LottaConfiguration : ILottaConfiguration
     /// Set the blob upload handler. Replacement semantics: last one wins.
     /// Call with no arguments to use the default handler (extension-based mime type detection,
     /// text content extraction for known text formats).
-    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.Update(...)</c> or <c>.Then(...)</c> for additional processing after
+    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.ModifyQueued(...)</c> or <c>.DoQueued(...)</c> for additional processing after
     /// upload (CSAM scanning, thumbnails, etc.): uploading saves the blob's record, which fires them.
     /// Automatically registers all BlobFile types for storage.
     /// </summary>

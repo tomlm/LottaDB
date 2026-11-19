@@ -1,11 +1,20 @@
 # Rules: the design, and what comes next
 
+> **Names as built.** This document keeps the names used while the design was worked out. Two changed afterwards, and two things were added or removed; [Rules-Design.md](Rules-Design.md) has the API as it is.
+>
+> | In this document | As built |
+> | --- | --- |
+> | `Then` | `DoQueued`; plain `Do` after `After`, `At` and `Every` |
+> | `Modify` | `ModifyQueued`; plain `Modify` after `After` and `At` |
+> | `.Materialize(...).Queued()` | `MaterializeQueued(...)` |
+> | (not in this document) | `Modify` in the save: changes the object before it is written |
+
 Status: the design for rules in 6.0, with its reasoning. What is built is described in [Rules-Design.md](Rules-Design.md).
 
 | Build step | State |
 | --- | --- |
-| 1. Per-type queue, `Then`, `Update`, `Changed(...)`, `RuleContext` | Built |
-| 2. `Maintain`, `RefreshWhen`, backfill for projections | Built |
+| 1. Per-type queue, `Then`, `Modify`, `Changed(...)`, `RuleContext` | Built |
+| 2. `Materialize`, `RefreshWhen`, backfill for projections | Built |
 | 3. `After`, `At` | Built |
 | 4. `Every` | Built |
 
@@ -18,8 +27,8 @@ This design replaces `.Queue` with a few verbs, one for each kind of deferred wo
 | Verb | Kind of work | Example |
 | --- | --- | --- |
 | `Do` | Quick work inside the save | Update a counter field |
-| `Update` | Slow work that changes the object itself | Embeddings, summaries, classification |
-| `Maintain` | Other objects kept in sync with this one (projections) | Mention links, a `NoteView` joined to `Actor` |
+| `Modify` | Slow work that changes the object itself | Embeddings, summaries, classification |
+| `Materialize` | Other objects kept in sync with this one (projections) | Mention links, a `NoteView` joined to `Actor` |
 | `Then` | Side effects outside the database | Email, webhooks, Graph writes |
 
 Timing is separate from the verb:
@@ -55,7 +64,7 @@ A rule is **event, condition, action**, the model active databases use:
 | --- | --- |
 | Event | `When<T>` (saved) or `WhenDeleted<T>` (deleted) |
 | Condition | The expression filter: `When<Note>(n => Changed(n.Content))` |
-| Action | `Do`, `Update`, `Maintain`, `Then` |
+| Action | `Do`, `Modify`, `Materialize`, `Then` |
 | Timing | `After`, `At` (optional) |
 
 They are called rules, not triggers, because they never roll back the save: a rule that fails is retried or reported, and the object stays saved.
@@ -70,9 +79,9 @@ using static Lotta.Rule;
 // Fires in the save where IsPublished turns true, not on later edits
 config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).Then(NotifyFollowers);
 
-// Runs only when its inputs change; this also tells Update what its inputs are
-config.Rules.When<Note>(n => Changed(n.Content)).Update(Summarize);
-config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).Update(Classify);
+// Runs only when its inputs change; this also tells Modify what its inputs are
+config.Rules.When<Note>(n => Changed(n.Content)).Modify(Summarize);
+config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).Modify(Classify);
 ```
 
 - **Meaning:** "any of these values differs in this save from the version that was loaded".
@@ -86,11 +95,11 @@ config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).Update(Classify);
 
 ## The verbs
 
-### `Update`: change the object in the background
+### `Modify`: change the object in the background
 
 ```csharp
 config.Rules.When<Note>(n => Changed(n.Content))
-    .Update(async (note, context, ct) =>
+    .Modify(async (note, context, ct) =>
     {
         note.Vector = await embedder.EmbedAsync(note.Content, ct);
     });
@@ -105,25 +114,25 @@ config.Rules.When<Note>(n => Changed(n.Content))
   - **Outputs changed by someone else,** say a user edited the field by hand: the result is dropped, and the user's edit wins.
   - **No `Changed(...)` in the filter:** LottaDB does not know the inputs, so any save in the meantime drops the result.
 - **Frequent saves don't starve it.** Saves that don't touch the inputs no longer throw the work away.
-- **Its own write doesn't trigger it again.** The write changes the outputs, not the inputs, so `Changed(n.Content)` is false. Two `Update` rules can't ping-pong for the same reason, and a nondeterministic summary isn't regenerated because some other field changed.
-- **May read other objects** through `context.Db`, for example a list of categories while classifying. It writes only its own object; keeping other objects in sync is `Maintain`'s job.
+- **Its own write doesn't trigger it again.** The write changes the outputs, not the inputs, so `Changed(n.Content)` is false. Two `Modify` rules can't ping-pong for the same reason, and a nondeterministic summary isn't regenerated because some other field changed.
+- **May read other objects** through `context.Db`, for example a list of categories while classifying. It writes only its own object; keeping other objects in sync is `Materialize`'s job.
 - **No conflict loop.** The function runs once per run; it is not called again on a write conflict, unlike a `ChangeAsync` lambda.
 
-| | `ChangeAsync` | `Update` |
+| | `ChangeAsync` | `Modify` |
 | --- | --- | --- |
 | Function | Synchronous | `async`: model calls, HTTP |
 | Runs | Under the write lease | Outside any lock |
 | On a conflict | Calls your function again on the new version | Applies the result to the newer version if its inputs are unchanged; otherwise drops it |
 | Gets | The object | A copy of the object, and `RuleContext` |
 
-Today the same work takes a handler that calls `ChangeAsync` and compares fields by hand to avoid writing a stale result. `Update` does that for you.
+Today the same work takes a handler that calls `ChangeAsync` and compares fields by hand to avoid writing a stale result. `Modify` does that for you.
 
-### `Maintain`: keep other objects in sync (projections)
+### `Materialize`: keep other objects in sync (projections)
 
 ```csharp
 // One view per note (return null for none)
 config.Rules.When<Note>()
-    .Maintain(async (note, context, ct) =>
+    .Materialize(async (note, context, ct) =>
     {
         var author = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
         return author == null ? null : new NoteView { Id = $"nv-{note.NoteId}", AuthorDisplay = author.DisplayName, Content = note.Content };
@@ -132,7 +141,7 @@ config.Rules.When<Note>()
 
 // Many objects per note
 config.Rules.When<Note>()
-    .Maintain(note => note.Mentions.Select(m => new Link { Id = $"{note.NoteId}->{m}", From = note.NoteId, To = m }))
+    .Materialize(note => note.Mentions.Select(m => new Link { Id = $"{note.NoteId}->{m}", From = note.NoteId, To = m }))
     .Queued();
 ```
 
@@ -211,13 +220,13 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 
 ### A run, in phases
 
-1. **`Update` rules.**
-2. **Queued `Maintain` rules.**
+1. **`Modify` rules.**
+2. **Queued `Materialize` rules.**
 3. **`Then` rules.**
 
-When a rule saves the object its run is for (an `Update` write-back, for one), the run reads the object again and carries on, so the later phases run on the updated object, not a stale one. That save queues neither the rule that made it nor the rules the run has yet to do; it does queue the ones that already ran, if it matches them.
+When a rule saves the object its run is for (an `Modify` write-back, for one), the run reads the object again and carries on, so the later phases run on the updated object, not a stale one. That save queues neither the rule that made it nor the rules the run has yet to do; it does queue the ones that already ran, if it matches them.
 
-The first draft stopped the run after an `Update` wrote, and let the write's own message do the rest. Carrying on is simpler: no second message, and no marker in it for the rule to skip.
+The first draft stopped the run after an `Modify` wrote, and let the write's own message do the rest. Carrying on is simpler: no second message, and no marker in it for the rule to skip.
 
 ### Failures, one rule at a time
 
@@ -237,7 +246,7 @@ All retry state lives in the message itself. Example: object `X1` has rules A, B
 Replacing is one storage operation. Sending a new message and deleting the old one would be two, and a crash between them would leave both.
 
 - **A rule that reaches its attempt limit** goes to the type's poison queue as `(type, key, rule, error)`, where it can be retried or discarded. It is then removed from the message; when no rules are left, the message is deleted.
-- **A stale message still runs.** Suppose `e7` changed `Content` and queued `summarize`, then `e8` changed only the tags and queued nothing for `summarize`. Dropping the `e7` message would lose the summary. So a message whose ETag no longer matches the object is not dropped: its listed rules run on the object as it is now. `Update`'s write-back check keeps that safe, and a rule listed by two messages may run twice, which rules must tolerate anyway. ETags are opaque, so only equality is checked.
+- **A stale message still runs.** Suppose `e7` changed `Content` and queued `summarize`, then `e8` changed only the tags and queued nothing for `summarize`. Dropping the `e7` message would lose the summary. So a message whose ETag no longer matches the object is not dropped: its listed rules run on the object as it is now. `Modify`'s write-back check keeps that safe, and a rule listed by two messages may run twice, which rules must tolerate anyway. ETags are opaque, so only equality is checked.
 - **A crash during a run** leaves the message as it was. It becomes visible again when its lease runs out, and every rule in it runs again: at-least-once delivery. A later optimisation could update the message after each successful rule, so a crash repeats only the unfinished ones. That costs one more storage call per rule, so it is not the default.
 - **Poison records are the only other storage.** There are no bookkeeping rows, per rule or per object.
 
@@ -246,7 +255,7 @@ Replacing is one storage operation. Sending a new message and deleting the old o
 A retry names rules, so every queued rule needs a name that stays the same across builds and deploys.
 
 - **Identity is `(type, name)`,** for example `Note/summarize`. Names only have to be unique within a type.
-- **The default comes from the method group:** `.Update(Summarize)` is named `summarize`, taken from the argument's source text (`[CallerArgumentExpression]`).
+- **The default comes from the method group:** `.Modify(Summarize)` is named `summarize`, taken from the argument's source text (`[CallerArgumentExpression]`).
 - **A lambda must be named:** `.Then("notify", async (note, context, ct) => ...)`. An unnamed lambda throws at startup.
 - **Inline `Do` needs no name.**
 - **Ruled out:** identity from position ("the second rule on `Note`") or from a hash of the code. Both change silently when code is edited or reordered, and a waiting retry would run the wrong rule.
@@ -266,7 +275,7 @@ Work that is not "an object changed" is modelled as an object:
 
 ```csharp
 config.Rules.When<SyncJob>(j => j.State == JobState.Pending)
-    .Update(RunSyncJob);
+    .Modify(RunSyncJob);
 
 await db.SaveAsync(new SyncJob { Folder = "Inbox" });
 ```
@@ -293,8 +302,8 @@ Search indexing stays inline, so a search inside a rule already sees the change 
 
 Each step is usable on its own:
 
-1. Per-type queue, with `Then` and `Update`.
-2. `Maintain`, `RefreshWhen` and `Backfill`.
+1. Per-type queue, with `Then` and `Modify`.
+2. `Materialize`, `RefreshWhen` and `Backfill`.
 3. `After` and `At`.
 4. `Every`.
 
@@ -302,8 +311,8 @@ From the first draft of 6.0, the grammar, expression filters, `Do`, `db.Rules`, 
 
 ## Hard parts
 
-- **At least once, everywhere.** Every verb can run twice, so `Update` and `Maintain` are safe to repeat by design, and `Then` gets an idempotency key.
-- **The `Update` guard.** The ETag check, applying a result to a newer version when its inputs are unchanged, and reading the object again after a write so later phases see the new object.
+- **At least once, everywhere.** Every verb can run twice, so `Modify` and `Materialize` are safe to repeat by design, and `Then` gets an idempotency key.
+- **The `Modify` guard.** The ETag check, applying a result to a newer version when its inputs are unchanged, and reading the object again after a write so later phases see the new object.
 - **`Changed` on unloaded objects.** The extra read when an object is saved without having been loaded, only for types with `Changed` rules.
 - **Projection diffs.** The cost of each diff on objects that produce many views.
 - **Concurrency.** Two runs for the same object must not overlap.
@@ -313,12 +322,12 @@ From the first draft of 6.0, the grammar, expression filters, `Do`, `db.Rules`, 
 
 - **Handler shape:** `(item, RuleContext context, ct)` for every verb, including `Do`.
 - **`RuleContext`:** `Db`, `Rule`, `Attempt`, `IdempotencyKey`. Key and ETag come from the item (`GetKey()`, `GetETag()`), the names the existing API uses.
-- **`Update`:** edits a copy; written only if changed, conditional on the copy's ETag; may read other objects through `context.Db`.
-- **`Maintain`:** inline by default even when it reads other objects; `.Queued()` for heavy projections.
+- **`Modify`:** edits a copy; written only if changed, conditional on the copy's ETag; may read other objects through `context.Db`.
+- **`Materialize`:** inline by default even when it reads other objects; `.Queued()` for heavy projections.
 - **`Every`:** `TimeSpan` and cron with a time zone (UTC by default) in the first version.
 - **`StatusAsync()`:** per rule (running, poisoned, last error), plus approximate waiting counts per type.
 - **Messages carry the ETag,** compared for equality only, and the rules that matched at save time. A stale message runs its rules on the current object rather than being dropped.
-- **`Changed(...)` in filters** for edge-triggering and for declaring `Update`'s inputs: compared with the loaded version at save time, no per-rule or per-object state.
+- **`Changed(...)` in filters** for edge-triggering and for declaring `Modify`'s inputs: compared with the loaded version at save time, no per-rule or per-object state.
 - **Queues per concrete type,** running rules for the type and its base types.
 - **`RefreshWhen` always queued.** Projections assume one writing instance for now.
 - **Delays beyond 7 days are chained.**

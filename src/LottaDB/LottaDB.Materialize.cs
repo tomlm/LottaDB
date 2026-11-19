@@ -5,7 +5,7 @@ using Lotta.Internal;
 
 namespace Lotta;
 
-// Maintain rules (When<T>().Maintain(projection)): objects kept in step with a source object.
+// Materialize rules (When<T>().Materialize(projection)): objects kept in step with a source object.
 //
 // The source's row remembers what it produced: a _produced value beside the object (not in it)
 // lists, per rule, the keys of the objects made from it. Each produced object's row is marked the
@@ -27,8 +27,8 @@ public partial class LottaDB
         public Exception? Error;
     }
 
-    /// <summary>The work of the <c>Maintain</c> rules for the sources one batch of a <c>SaveManyAsync</c> wrote, gathered to be done together.</summary>
-    private sealed class MaintainBatch(IEnumerable<string> sourceKeys)
+    /// <summary>The work of the <c>Materialize</c> rules for the sources one batch of a <c>SaveManyAsync</c> wrote, gathered to be done together.</summary>
+    private sealed class MaterializeBatch(IEnumerable<string> sourceKeys)
     {
         /// <summary>The keys of the objects the batch wrote.</summary>
         public HashSet<string> SourceKeys { get; } = new(sourceKeys, StringComparer.Ordinal);
@@ -37,31 +37,31 @@ public partial class LottaDB
     }
 
     /// <summary>Set while the rules of a <c>SaveManyAsync</c> batch run.</summary>
-    private readonly AsyncLocal<MaintainBatch?> _maintainBatch = new();
+    private readonly AsyncLocal<MaterializeBatch?> _materializeBatch = new();
 
     /// <summary>
     /// Runs the rules of the objects one batch of a <c>SaveManyAsync</c> wrote, then writes what
-    /// their <c>Maintain</c> rules produce together: one read and a few batched writes for the
+    /// their <c>Materialize</c> rules produce together: one read and a few batched writes for the
     /// whole batch, not one of each per object.
     /// </summary>
     private async Task RunBatchHandlersAsync(List<(object entity, Type type)> pending, IEnumerable<string> keys,
         List<ObjectChange> changes, List<Exception> errors, CancellationToken cancellationToken)
     {
-        var batch = new MaintainBatch(keys);
-        _maintainBatch.Value = batch;
+        var batch = new MaterializeBatch(keys);
+        _materializeBatch.Value = batch;
         try
         {
             await RunPendingHandlersAsync(pending, TriggerKind.Saved, changes, errors, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _maintainBatch.Value = null;
+            _materializeBatch.Value = null;
         }
         if (batch.Work.Count > 0)
-            await WriteMaintainAsync(batch.Work, changes, errors, batched: true, cancellationToken).ConfigureAwait(false);
+            await WriteMaterializeAsync(batch.Work, changes, errors, batched: true, cancellationToken).ConfigureAwait(false);
     }
 
-    private readonly ConcurrentDictionary<Type, QueuedRule[]> _maintainRulesByType = new();
+    private readonly ConcurrentDictionary<Type, QueuedRule[]> _materializeRulesByType = new();
 
     /// <summary>How many rows are read by key at the same time.</summary>
     private const int ReadsAtOnce = 16;
@@ -72,22 +72,22 @@ public partial class LottaDB
     /// <summary>What marks an object as produced by a rule from one source object: <c>Note/note-view n42</c>.</summary>
     private static string SourceStamp(string ruleId, string sourceKey) => $"{ruleId} {sourceKey}";
 
-    /// <summary>The <c>Maintain</c> rules that apply to a concrete type.</summary>
-    private QueuedRule[] MaintainRulesFor(Type type) =>
-        _maintainRulesByType.GetOrAdd(type, t => [.. QueuedRulesFor(t).Where(r => r.Verb == RuleVerb.Maintain)]);
+    /// <summary>The <c>Materialize</c> rules that apply to a concrete type.</summary>
+    private QueuedRule[] MaterializeRulesFor(Type type) =>
+        _materializeRulesByType.GetOrAdd(type, t => [.. QueuedRulesFor(t).Where(r => r.Verb == RuleVerb.Materialize)]);
 
     /// <summary>
     /// Before a source object's row is written: runs the projections of the rules that run inside
     /// the save, and puts on the object the list of keys its row is to carry, so the one write
     /// records it. What is to be saved and deleted for it is kept on the object until
-    /// <see cref="MaintainInSaveAsync"/> applies it, after the write. Called under the object's lock.
+    /// <see cref="MaterializeInSaveAsync"/> applies it, after the write. Called under the object's lock.
     /// </summary>
     /// <param name="known">What the stored row lists, when the caller has just read it; null to find out here.</param>
-    private async Task PrepareMaintainAsync(object entity, string key, IReadOnlyDictionary<string, string[]>? known, CancellationToken cancellationToken)
+    private async Task PrepareMaterializeAsync(object entity, string key, IReadOnlyDictionary<string, string[]>? known, CancellationToken cancellationToken)
     {
         if (entity is JsonDocument)
             return;
-        var rules = MaintainRulesFor(entity.GetType());
+        var rules = MaterializeRulesFor(entity.GetType());
         if (rules.Length == 0)
             return;
 
@@ -104,7 +104,7 @@ public partial class LottaDB
         foreach (var rule in rules)
         {
             // A rule that runs from the queue leaves the list as it is until its run.
-            if (!rule.Inline)
+            if (!rule.InSave)
                 continue;
             var plan = new PendingViews { Previous = previous.GetValueOrDefault(rule.Id) ?? [] };
             try
@@ -125,7 +125,7 @@ public partial class LottaDB
             SetKeys(ref next, previous, rule.Id, plan);
         }
         entity.SetProduced(next ?? previous);
-        entity.SetPendingMaintain(pending);
+        entity.SetPendingMaterialize(pending);
     }
 
     /// <summary>Notes in <paramref name="next"/> the keys a rule now produces, when they differ from the ones listed before.</summary>
@@ -162,13 +162,13 @@ public partial class LottaDB
     }
 
     /// <summary>
-    /// The part a <c>Maintain</c> rule has in every save and delete of the type it is for, after
-    /// the row is written. On a save, applies what <see cref="PrepareMaintainAsync"/> worked out.
+    /// The part a <c>Materialize</c> rule has in every save and delete of the type it is for, after
+    /// the row is written. On a save, applies what <see cref="PrepareMaterializeAsync"/> worked out.
     /// On a delete, deletes what the object's row listed for the rule, however the rule runs.
     /// Called inside the save or delete, which holds the object's lock, so the result is part of
     /// its changes and errors.
     /// </summary>
-    internal Task MaintainInSaveAsync(QueuedRule rule, object entity, TriggerKind kind, CancellationToken cancellationToken)
+    internal Task MaterializeInSaveAsync(QueuedRule rule, object entity, TriggerKind kind, CancellationToken cancellationToken)
     {
         var key = AsyncKeyOf(entity);
         if (kind == TriggerKind.Deleted)
@@ -176,20 +176,20 @@ public partial class LottaDB
             var keys = entity.GetProduced()?.GetValueOrDefault(rule.Id);
             return keys is null or { Length: 0 }
                 ? Task.CompletedTask
-                : ApplyMaintainAsync(rule, key, new PendingViews { Previous = keys }, cancellationToken);
+                : ApplyMaterializeAsync(rule, key, new PendingViews { Previous = keys }, cancellationToken);
         }
 
-        if (entity.GetPendingMaintain() is not { } pending || !pending.Remove(rule.Id, out var plan))
+        if (entity.GetPendingMaterialize() is not { } pending || !pending.Remove(rule.Id, out var plan))
             return Task.CompletedTask;
-        return plan.Error != null ? Task.FromException(plan.Error) : ApplyMaintainAsync(rule, key, plan, cancellationToken);
+        return plan.Error != null ? Task.FromException(plan.Error) : ApplyMaterializeAsync(rule, key, plan, cancellationToken);
     }
 
     /// <summary>
-    /// Runs a <c>Maintain</c> rule from the queue. The object is read again under its lock, so the
+    /// Runs a <c>Materialize</c> rule from the queue. The object is read again under its lock, so the
     /// projection sees what is stored and no save of the object can come between the projection
     /// and the writes: a refresh can then never overwrite the result of a newer save.
     /// </summary>
-    private async Task RunMaintainAsync(QueuedRule rule, object entity, int attempt, string? etag, CancellationToken cancellationToken)
+    private async Task RunMaterializeAsync(QueuedRule rule, object entity, int attempt, string? etag, CancellationToken cancellationToken)
     {
         var key = AsyncKeyOf(entity);
         using var writerLease = await AcquireWriterAsync(cancellationToken).ConfigureAwait(false);
@@ -215,7 +215,7 @@ public partial class LottaDB
             stored.SetProduced(next);
             await RewriteRowAsync(stored, key, cancellationToken).ConfigureAwait(false);
         }
-        await ApplyMaintainAsync(rule, key, plan, cancellationToken).ConfigureAwait(false);
+        await ApplyMaterializeAsync(rule, key, plan, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -249,15 +249,15 @@ public partial class LottaDB
     /// Inside a <c>SaveManyAsync</c> of the source this is put off to the end of the batch, so the
     /// objects of all its sources are read and written together. The caller holds the source's lock.
     /// </summary>
-    private Task ApplyMaintainAsync(QueuedRule rule, string sourceKey, PendingViews plan, CancellationToken cancellationToken)
+    private Task ApplyMaterializeAsync(QueuedRule rule, string sourceKey, PendingViews plan, CancellationToken cancellationToken)
     {
-        if (_maintainBatch.Value is { } batch && batch.SourceKeys.Contains(sourceKey))
+        if (_materializeBatch.Value is { } batch && batch.SourceKeys.Contains(sourceKey))
         {
             batch.Work.Add((rule, sourceKey, plan));
             return Task.CompletedTask;
         }
         // Inside a save, what these writes change and what goes wrong in them is part of that save's result.
-        return WriteMaintainAsync([(rule, sourceKey, plan)], _chainChanges.Value, _chainErrors.Value, batched: false, cancellationToken);
+        return WriteMaterializeAsync([(rule, sourceKey, plan)], _chainChanges.Value, _chainErrors.Value, batched: false, cancellationToken);
     }
 
     /// <summary>
@@ -272,7 +272,7 @@ public partial class LottaDB
     /// (a key that belongs to another) is then noted in <paramref name="errors"/> and the others
     /// carry on. False to throw it.
     /// </param>
-    private async Task WriteMaintainAsync(IReadOnlyList<(QueuedRule Rule, string SourceKey, PendingViews Plan)> work,
+    private async Task WriteMaterializeAsync(IReadOnlyList<(QueuedRule Rule, string SourceKey, PendingViews Plan)> work,
         List<ObjectChange>? changes, List<Exception>? errors, bool batched, CancellationToken cancellationToken)
     {
         var keys = work.SelectMany(w => w.Plan.Views.Keys.Concat(w.Plan.Previous)).Distinct(StringComparer.Ordinal).ToList();
@@ -355,18 +355,18 @@ public partial class LottaDB
     /// <summary>
     /// Before an object is deleted: makes sure the object in hand says what its row lists as
     /// produced, so the delete can remove it. An object that was not loaded is read first, and
-    /// only for types that have <c>Maintain</c> rules.
+    /// only for types that have <c>Materialize</c> rules.
     /// </summary>
     private async Task NoteProducedAsync(object entity, string key, CancellationToken cancellationToken)
     {
-        if (entity is JsonDocument || entity.GetProduced() != null || MaintainRulesFor(entity.GetType()).Length == 0)
+        if (entity is JsonDocument || entity.GetProduced() != null || MaterializeRulesFor(entity.GetType()).Length == 0)
             return;
         var (stored, _) = await _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken).ConfigureAwait(false);
         entity.SetProduced(stored?.GetProduced() ?? ObjectMetadata.NothingProduced);
     }
 
     /// <summary>
-    /// Queues a <c>Maintain</c> rule for every source object a condition is true for: the part
+    /// Queues a <c>Materialize</c> rule for every source object a condition is true for: the part
     /// <c>RefreshWhen</c> has in every save and delete of the type the projection reads. The
     /// objects are found through the search index when it can express the condition, and by
     /// reading every object when it cannot.

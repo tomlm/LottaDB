@@ -35,21 +35,21 @@ public class ObjectMetadata
     internal object? Previous { get; set; }
 
     /// <summary>
-    /// On an object a <c>Maintain</c> rule produced: the rule and the key of the object it was
+    /// On an object a <c>Materialize</c> rule produced: the rule and the key of the object it was
     /// produced from (<c>Note/note-view n42</c>). Stored beside the object, not in it.
     /// </summary>
     internal string? Source { get; set; }
 
     /// <summary>
-    /// On an object that <c>Maintain</c> rules produce other objects from: the keys of those
+    /// On an object that <c>Materialize</c> rules produce other objects from: the keys of those
     /// objects, per rule, as its stored row lists them. Null when not known (the object was not
     /// read from its row); <see cref="NothingProduced"/> when the row lists none. Never changed
     /// in place.
     /// </summary>
     internal IReadOnlyDictionary<string, string[]>? Produced { get; set; }
 
-    /// <summary>During a save: what the object's <c>Maintain</c> rules are to write once its row is written, per rule.</summary>
-    internal Dictionary<string, LottaDB.PendingViews>? PendingMaintain { get; set; }
+    /// <summary>During a save: what the object's <c>Materialize</c> rules are to write once its row is written, per rule.</summary>
+    internal Dictionary<string, LottaDB.PendingViews>? PendingMaterialize { get; set; }
 
     /// <summary>The row lists nothing produced.</summary>
     internal static readonly IReadOnlyDictionary<string, string[]> NothingProduced = new Dictionary<string, string[]>();
@@ -139,7 +139,7 @@ public static class ObjectExtensions
         return _table.TryGetValue(obj, out var meta) ? meta.Schema : null;
     }
 
-    /// <summary>Marks an object as produced by a <c>Maintain</c> rule from one source object; null for none.</summary>
+    /// <summary>Marks an object as produced by a <c>Materialize</c> rule from one source object; null for none.</summary>
     internal static void SetSource(this object obj, string? source)
     {
         if (source == null && !_table.TryGetValue(obj, out _))
@@ -163,15 +163,15 @@ public static class ObjectExtensions
     internal static IReadOnlyDictionary<string, string[]>? GetProduced(this object obj) =>
         _table.TryGetValue(obj, out var meta) ? meta.Produced : null;
 
-    internal static void SetPendingMaintain(this object obj, Dictionary<string, LottaDB.PendingViews>? pending)
+    internal static void SetPendingMaterialize(this object obj, Dictionary<string, LottaDB.PendingViews>? pending)
     {
         if (pending == null && !_table.TryGetValue(obj, out _))
             return;
-        _table.GetOrCreateValue(obj).PendingMaintain = pending;
+        _table.GetOrCreateValue(obj).PendingMaterialize = pending;
     }
 
-    internal static Dictionary<string, LottaDB.PendingViews>? GetPendingMaintain(this object obj) =>
-        _table.TryGetValue(obj, out var meta) ? meta.PendingMaintain : null;
+    internal static Dictionary<string, LottaDB.PendingViews>? GetPendingMaterialize(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.PendingMaterialize : null;
 
     /// <summary>
     /// Notes, for the length of a save, the JSON of the version the save replaces (null for a new

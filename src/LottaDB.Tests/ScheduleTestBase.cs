@@ -1,7 +1,7 @@
 namespace Lotta.Tests;
 
 /// <summary>
-/// Tests for schedules: <c>Rules.Every(...).Then(...)</c>. The intervals are real, and short. Except
+/// Tests for schedules: <c>Rules.Every(...).Do(...)</c>. The intervals are real, and short. Except
 /// where a test says otherwise, schedules are run by hand with <see cref="LottaDB.DrainAsync"/>.
 /// </summary>
 public abstract class ScheduleTestBase : LottaTestBase
@@ -16,7 +16,7 @@ public abstract class ScheduleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.Every(TimeSpan.FromHours(1)).Then("tick", (context, _) =>
+            opts.Rules.Every(TimeSpan.FromHours(1)).Do("tick", (context, _) =>
             {
                 Assert.Equal("tick", context.Rule);
                 ran++;
@@ -60,7 +60,7 @@ public abstract class ScheduleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.Every(TimeSpan.FromHours(1)).Then("sync", (_, _) =>
+            opts.Rules.Every(TimeSpan.FromHours(1)).Do("sync", (_, _) =>
             {
                 ran++;
                 return fail ? throw new InvalidOperationException("the service is down") : Task.CompletedTask;
@@ -93,7 +93,7 @@ public abstract class ScheduleTestBase : LottaTestBase
         var db = await CreateDbAsync(opts =>
         {
             opts.QueueMode = QueueMode.Manual;
-            opts.Rules.Every(TimeSpan.FromHours(1)).Then("hourly", (_, _) => { ran++; return Task.CompletedTask; });
+            opts.Rules.Every(TimeSpan.FromHours(1)).Do("hourly", (_, _) => { ran++; return Task.CompletedTask; });
         }, cancellationToken: ct);
         await db.DrainAsync(cancellationToken: ct);
 
@@ -117,7 +117,7 @@ public abstract class ScheduleTestBase : LottaTestBase
         var saved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.Every(TimeSpan.FromSeconds(1)).Then("beat", async (context, token) =>
+            opts.Rules.Every(TimeSpan.FromSeconds(1)).Do("beat", async (context, token) =>
             {
                 // The handler has the database, like any rule's.
                 await context.Db.SaveAsync(new Note { NoteId = "beat", Content = $"{++ran}" }, token);
@@ -140,12 +140,12 @@ public class ScheduleRegistrationTests
     public void ASchedule_IsNamedAfterItsMethod_OrByHand()
     {
         var config = new LottaConfiguration();
-        config.Rules.Every(TimeSpan.FromHours(24)).Then(NightlyCleanupAsync);
-        config.Rules.Every("*/5 * * * *").Then("poll", (_, _) => Task.CompletedTask);
+        config.Rules.Every(TimeSpan.FromHours(24)).Do(NightlyCleanupAsync);
+        config.Rules.Every("*/5 * * * *").Do("poll", (_, _) => Task.CompletedTask);
 
         Assert.Equal(["schedule/nightly-cleanup", "schedule/poll"], config.Schedules.Select(s => s.Id));
-        Assert.Throws<ArgumentException>(() => config.Rules.Every(TimeSpan.FromHours(1)).Then("poll", (_, _) => Task.CompletedTask));
-        Assert.Throws<ArgumentException>(() => config.Rules.Every(TimeSpan.FromHours(1)).Then((_, _) => Task.CompletedTask));
+        Assert.Throws<ArgumentException>(() => config.Rules.Every(TimeSpan.FromHours(1)).Do("poll", (_, _) => Task.CompletedTask));
+        Assert.Throws<ArgumentException>(() => config.Rules.Every(TimeSpan.FromHours(1)).Do((_, _) => Task.CompletedTask));
     }
 
     [Fact]
@@ -171,9 +171,9 @@ public class ScheduleRegistrationTests
     {
         var config = new LottaConfiguration();
         var pacific = TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time");
-        config.Rules.Every("0 2 * * *", pacific).Then("nightly", (_, _) => Task.CompletedTask);
-        config.Rules.Every("0 2 * * *").Then("nightly-utc", (_, _) => Task.CompletedTask);
-        config.Rules.Every("30 0 2 * * *").Then("with-seconds", (_, _) => Task.CompletedTask);
+        config.Rules.Every("0 2 * * *", pacific).Do("nightly", (_, _) => Task.CompletedTask);
+        config.Rules.Every("0 2 * * *").Do("nightly-utc", (_, _) => Task.CompletedTask);
+        config.Rules.Every("30 0 2 * * *").Do("with-seconds", (_, _) => Task.CompletedTask);
 
         // Noon UTC on a winter day, when Pacific time is eight hours behind.
         var from = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);

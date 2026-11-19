@@ -34,6 +34,11 @@ public partial class LottaDB : IDisposable
     internal string DatabaseId => _databaseId;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
+    /// <summary>
+    /// Deleted objects that queued rules are still to run for, in a partition of their own so that
+    /// no read or query of the database's objects sees them. See <see cref="EnqueueDeletedAsync"/>.
+    /// </summary>
+    private readonly TableStorageAdapter _tombstones;
     private LuceneDirectory _directory;
 
     /// <summary>Returns the underlying Lucene directory (for testing/diagnostics).</summary>
@@ -128,6 +133,7 @@ public partial class LottaDB : IDisposable
         _databaseId = databaseId;
         _config = config;
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
+        _tombstones = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: $"{databaseId}~deleted~");
         _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
@@ -731,6 +737,7 @@ public partial class LottaDB : IDisposable
             string newETag;
             // The JSON this object had when it was last loaded or saved; the write below replaces it.
             var jsonBefore = entity is JsonDocument ? null : entity.GetJson();
+            List<Exception>? updateErrors = null;
 
             if (entity is JsonDocument jsonDoc)
             {
@@ -760,8 +767,10 @@ public partial class LottaDB : IDisposable
                 var meta = GetMeta(entity.GetType());
                 // For rules that ask Changed(...): what this save replaces.
                 await NotePreviousAsync(entity, key, jsonBefore, cancellationToken);
-                // For Maintain rules: what the object produces now, so this write records it.
-                await PrepareMaintainAsync(entity, key, known: null, cancellationToken);
+                // In-save Modify actions change the object before it is written.
+                updateErrors = await RunModifiesAsync(entity, cancellationToken);
+                // For Materialize rules: what the object produces now, so this write records it.
+                await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
 
                 var existingETag = entity.GetETag();
                 if (existingETag != null)
@@ -790,6 +799,8 @@ public partial class LottaDB : IDisposable
             var changes = _chainChanges.Value ??= new List<ObjectChange>();
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
+            if (updateErrors != null)
+                errors.AddRange(updateErrors);
 
             await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
 
@@ -840,7 +851,7 @@ public partial class LottaDB : IDisposable
         using var writerLease = await AcquireWriterAsync(cancellationToken);
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
-            // For Maintain rules: what the object produced, which goes with it.
+            // For Materialize rules: what the object produced, which goes with it.
             await NoteProducedAsync(entity, key, cancellationToken);
             await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
 
@@ -985,8 +996,10 @@ public partial class LottaDB : IDisposable
                 // For rules that ask Changed(...): what this change replaces.
                 if (TracksChanges(mutated!.GetType()))
                     mutated.SetPrevious(jsonBefore);
-                // For Maintain rules: what the object produces now, so this write records it.
-                await PrepareMaintainAsync(mutated, key, current.GetProduced() ?? ObjectMetadata.NothingProduced, cancellationToken);
+                // In-save Modify actions change the object before it is written.
+                var updateErrors = await RunModifiesAsync(mutated, cancellationToken);
+                // For Materialize rules: what the object produces now, so this write records it.
+                await PrepareMaterializeAsync(mutated, key, current.GetProduced() ?? ObjectMetadata.NothingProduced, cancellationToken);
                 try
                 {
                     newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
@@ -1008,6 +1021,8 @@ public partial class LottaDB : IDisposable
                 var changes = _chainChanges.Value ??= new List<ObjectChange>();
                 var errors = _chainErrors.Value ??= new List<Exception>();
                 changes.Add(change);
+                if (updateErrors != null)
+                    errors.AddRange(updateErrors);
 
                 await RunHandlersAsync(mutated, mutated.GetType(), TriggerKind.Saved, errors, cancellationToken);
                 await EnqueueAsync(mutated, key, errors, cancellationToken);
@@ -1641,7 +1656,7 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Rules added to the open database, inline only: <c>db.Rules.When&lt;T&gt;().Do(handler)</c>
-    /// returns a handle, and disposing it removes the rule. Queued rules (<c>.Update</c>, <c>.Then</c>) can only be
+    /// returns a handle, and disposing it removes the rule. Queued rules (<c>.DoQueued</c>, <c>.ModifyQueued</c>) can only be
     /// added in the configuration (<see cref="ILottaConfiguration.Rules"/>).
     /// </summary>
     public LiveRuleSet Rules => _liveRules ??= new LiveRuleSet(this);
@@ -1930,7 +1945,7 @@ public partial class LottaDB : IDisposable
         return fullPath.StartsWith(dbPrefix) ? fullPath.Substring(dbPrefix.Length) : fullPath;
     }
 
-    // === Maintain ===
+    // === Materialize ===
 
     /// <summary>
     /// Deletes all documents from the Lucene index without touching Table Storage.
@@ -1959,6 +1974,7 @@ public partial class LottaDB : IDisposable
 
         // 1. Delete all rows in this database's partition
         await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
+        await _tombstones.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
@@ -1992,6 +2008,7 @@ public partial class LottaDB : IDisposable
         using (var writerLease = await AcquireWriterAsync(cancellationToken))
         {
             await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+            await _tombstones.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
             lock (_lock)
             {
                 var writer = RequireWriter();
@@ -2068,8 +2085,11 @@ public partial class LottaDB : IDisposable
                         meta.SetKey(entity, key);
                     // For rules that ask Changed(...): what this save replaces.
                     await NotePreviousAsync(entity, key, entity.GetJson(), cancellationToken);
-                    // For Maintain rules: what the object produces now, so this write records it.
-                    await PrepareMaintainAsync(entity, key, known: null, cancellationToken);
+                    // In-save Modify actions change the object before it is written.
+                    if (await RunModifiesAsync(entity, cancellationToken) is { } updateErrors)
+                        allErrors.AddRange(updateErrors);
+                    // For Materialize rules: what the object produces now, so this write records it.
+                    await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
                     action = _tableAdapter.CreateUpsertAction(key, entity, meta);
                     entity.SetSchema(entity.GetType().Name);
                 }
@@ -2157,7 +2177,7 @@ public partial class LottaDB : IDisposable
             foreach (var entity in entities)
             {
                 var item = GetDeleteTruple(entity);
-                // For Maintain rules: what the object produced, which goes with it.
+                // For Materialize rules: what the object produced, which goes with it.
                 await NoteProducedAsync(entity, item.Item3, cancellationToken);
                 yield return item;
             }
@@ -2336,6 +2356,9 @@ public partial class LottaDB : IDisposable
         await WalkAsync(builtIn: true);
         if (!builtInOnly)
             await WalkAsync(builtIn: false);
+        // After the rules that run inside the delete, as a save queues its rules after its own.
+        if (!builtInOnly && kind == TriggerKind.Deleted)
+            await EnqueueDeletedAsync(entity, errors, cancellationToken);
 
         async Task WalkAsync(bool builtIn)
         {

@@ -69,7 +69,7 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Factory for creating a <see cref="QueueServiceClient"/>, or null when the storage provider
-    /// has no queue storage. Queued rules (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>) need one.
+    /// has no queue storage. Queued rules (<c>When&lt;T&gt;().DoQueued(...)</c>, <c>.ModifyQueued(...)</c>) need one.
     /// </summary>
     public Func<QueueServiceClient>? QueueServiceClientFactory { get; set; }
 
@@ -117,7 +117,7 @@ public class LottaCatalog : IDisposable
 
     /// <summary>
     /// Register this catalog's storage provider, including queue storage, which queued rules
-    /// (<c>When&lt;T&gt;().Update(...)</c>, <c>.Then(...)</c>) run from.
+    /// (<c>When&lt;T&gt;().DoQueued(...)</c>, <c>.ModifyQueued(...)</c>) run from.
     /// </summary>
     /// <param name="provider">Provider name, used in error messages.</param>
     /// <param name="tableServiceClientFactory">Sets <see cref="TableServiceClientFactory"/>.</param>
@@ -293,7 +293,7 @@ public class LottaCatalog : IDisposable
         // Before the database is built: building it creates an index that would then be left behind.
         if (config.QueuedRules.Count > 0 && QueueServiceClientFactory == null)
             throw new NotSupportedException(
-                $"Queued rules (.Update, .Then) need queue storage, which {StorageProvider ?? "this catalog's"} storage does not provide. " +
+                $"Queued rules (.DoQueued, .ModifyQueued, .Materialize, .After, .At) need queue storage, which {StorageProvider ?? "this catalog's"} storage does not provide. " +
                 $"Use .Do for inline rules, or give the catalog queue storage: every built-in Use…() provider " +
                 $"has it, and UseStorage has an overload that takes a queue client factory.");
         var db = new LottaDB(this, databaseId, config);

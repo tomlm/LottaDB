@@ -251,7 +251,7 @@ internal static class EntityMapper
 
     /// <summary>
     /// Add standard metadata fields to a Lucene Document (Type, ETag, Schema), and for an object
-    /// a <c>Maintain</c> rule produced, what it was produced from.
+    /// a <c>Materialize</c> rule produced, what it was produced from.
     /// </summary>
     public static void AddMetadataToLuceneDocument(Document document, string typeName, string etag, string schema, string? source = null)
     {

@@ -39,14 +39,14 @@ internal static partial class RuleQueueNames
     }
 
     /// <summary>
-    /// The rule name for <c>.Then(handler)</c> or <c>.Update(handler)</c>, made from the source
+    /// The rule name for <c>.DoQueued(handler)</c> or <c>.ModifyQueued(handler)</c>, made from the source
     /// text of the handler argument (<c>[CallerArgumentExpression]</c>): its last identifier,
     /// without an <c>Async</c> suffix, in kebab case. <c>Summarize</c> gives <c>summarize</c>,
     /// <c>handlers.NotifyFollowersAsync</c> gives <c>notify-followers</c>, and
     /// <c>Handle&lt;Note&gt;</c> gives <c>handle</c>.
     /// </summary>
     /// <param name="expression">The source text of the handler argument.</param>
-    /// <param name="verb">The method the handler was given to, for the message: <c>Then</c>.</param>
+    /// <param name="verb">The method the handler was given to, for the message: <c>DoQueued</c>.</param>
     /// <exception cref="ArgumentException">
     /// The text is not an identifier or a member access (a lambda, a call, a cast), or the name
     /// made from it is not a valid rule name.
@@ -71,7 +71,7 @@ internal static partial class RuleQueueNames
     }
 
     /// <summary>
-    /// The rule name for <c>.Maintain(projection)</c>. A method is named as for the other verbs
+    /// The rule name for <c>.Materialize(projection)</c>. A method is named as for the other verbs
     /// (<c>ProjectNote</c> gives <c>project-note</c>). A lambda is named after the type it
     /// produces, in kebab case: <c>NoteView</c>, or a collection of them, gives <c>note-view</c>.
     /// </summary>
@@ -81,7 +81,7 @@ internal static partial class RuleQueueNames
     public static string ProjectionName(string? expression, Type produced)
     {
         if (MemberAccess().IsMatch(WithoutTypeArguments(expression)))
-            return RuleNameFromExpression(expression, "Maintain");
+            return RuleNameFromExpression(expression, "Materialize");
 
         var element = produced.GetInterfaces().Append(produced)
             .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
@@ -90,7 +90,7 @@ internal static partial class RuleQueueNames
         if (!IsValidRuleName(name))
             throw new ArgumentException(
                 $"The rule name '{name}', made from the type '{element.Name}' the projection produces, is not a rule name: it needs 3 to 40 " +
-                "lower-case letters and digits, with single hyphens between them. Name the rule instead: .Maintain(\"rule-name\", projection).", "projection");
+                "lower-case letters and digits, with single hyphens between them. Name the rule instead: .Materialize(\"rule-name\", projection).", "projection");
         return name;
     }
 

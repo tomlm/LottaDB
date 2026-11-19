@@ -54,7 +54,7 @@ public class StorageProviderRegistrationTests
         var refused = await Assert.ThrowsAsync<NotSupportedException>(() => catalog.GetDatabaseAsync("db", opts =>
         {
             opts.Store<Actor>();
-            opts.Rules.When<Actor>().Then("describe", (_, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("describe", (_, _, _) => Task.CompletedTask);
         }, ct));
         Assert.Contains("Memory", refused.Message);
 

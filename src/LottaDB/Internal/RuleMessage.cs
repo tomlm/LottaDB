@@ -59,6 +59,15 @@ internal sealed class RuleMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? Due { get; set; }
 
+    /// <summary>
+    /// For the rules of a delete (<c>WhenDeleted(...).DoQueued</c>): the key of the tombstone, the
+    /// row that keeps the object as it was until its rules have run. The message owns it, and
+    /// removes it when no rule is left. Null for the rules of a save.
+    /// </summary>
+    [JsonPropertyName("tombstone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Tombstone { get; set; }
+
     /// <summary>How many runs of the rule have failed.</summary>
     public int AttemptsOf(string rule) => Attempts != null && Attempts.TryGetValue(rule, out var count) ? count : 0;
 
@@ -112,6 +121,14 @@ internal sealed class PoisonRecord
     [JsonPropertyName("attempts")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int Attempts { get; set; }
+
+    /// <summary>
+    /// For a rule of a delete: the key of a tombstone of its own, which keeps the object as it was
+    /// so the work can be retried. Removed when the work is discarded, or run after a retry.
+    /// </summary>
+    [JsonPropertyName("tombstone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Tombstone { get; set; }
 
     public string ToText() => JsonSerializer.Serialize(this);
 

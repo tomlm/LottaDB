@@ -18,7 +18,7 @@ public delegate Task ScheduleHandler(RuleContext context, CancellationToken canc
 
 /// <summary>
 /// A schedule, as <see cref="RuleSet.Every(TimeSpan)"/> starts it. Give it its work with
-/// <see cref="Then(string, ScheduleHandler)"/>; a schedule with no work makes opening the database throw.
+/// <see cref="Do(string, ScheduleHandler)"/>; a schedule with no work makes opening the database throw.
 /// </summary>
 public sealed class ScheduleBuilder
 {
@@ -46,7 +46,7 @@ public sealed class ScheduleBuilder
     /// </param>
     /// <param name="handler">The work to do.</param>
     /// <exception cref="ArgumentException">The name is not a valid rule name, or is already used for a schedule.</exception>
-    public ScheduleBuilder Then(string name, ScheduleHandler handler)
+    public ScheduleBuilder Do(string name, ScheduleHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         _config.AddSchedule(name, _next, handler);
@@ -62,9 +62,9 @@ public sealed class ScheduleBuilder
     /// <param name="handler">A method. A lambda has no name, so give one with the other overload.</param>
     /// <param name="handlerExpression">Filled in by the compiler with the source text of <paramref name="handler"/>.</param>
     /// <exception cref="ArgumentException"><paramref name="handler"/> is not a method name, or the name made from it is not valid or is already used.</exception>
-    public ScheduleBuilder Then(ScheduleHandler handler,
+    public ScheduleBuilder Do(ScheduleHandler handler,
         [CallerArgumentExpression(nameof(handler))] string? handlerExpression = null)
-        => Then(RuleQueueNames.RuleNameFromExpression(handlerExpression, nameof(Then)), handler);
+        => Do(RuleQueueNames.RuleNameFromExpression(handlerExpression, nameof(Do)), handler);
 }
 
 /// <summary>

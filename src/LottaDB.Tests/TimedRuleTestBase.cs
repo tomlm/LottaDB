@@ -38,12 +38,12 @@ public abstract class TimedRuleTestBase : LottaTestBase
         {
             opts.QueueMode = QueueMode.Manual;
             opts.MaxConcurrency = 1;
-            opts.Rules.When<Note>()
-                .Then("now", (note, _, _) => { ran.Add($"now:{note.NoteId}"); return Task.CompletedTask; })
-                .After(delay)
-                .Then("later", (note, _, _) => { later.Add((note.Content, DateTimeOffset.UtcNow)); return Task.CompletedTask; })
-                .After(TimeSpan.FromHours(1))
-                .Then("much-later", (note, _, _) => { ran.Add("much-later"); return Task.CompletedTask; });
+            var rule = opts.Rules.When<Note>()
+                .DoQueued("now", (note, _, _) => { ran.Add($"now:{note.NoteId}"); return Task.CompletedTask; });
+            rule.After(delay)
+                .Do("later", (note, _, _) => { later.Add((note.Content, DateTimeOffset.UtcNow)); return Task.CompletedTask; });
+            rule.After(TimeSpan.FromHours(1))
+                .Do("much-later", (note, _, _) => { ran.Add("much-later"); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         var saved = DateTimeOffset.UtcNow;
@@ -52,7 +52,7 @@ public abstract class TimedRuleTestBase : LottaTestBase
 
         await DrainUntil(db, () => later.Count >= 2, ct);
 
-        // The rule before After ran at once, for each save. The ones after it each had a message of their own.
+        // The action with no delay ran at once, for each save. The delayed ones each had a message of their own.
         Assert.Equal(["now:n1", "now:n1"], ran);
         // Each save started a wait of its own, and each run sees the note as it is when its time comes.
         Assert.Equal(["edited", "edited"], later.Select(run => run.Content));
@@ -72,7 +72,7 @@ public abstract class TimedRuleTestBase : LottaTestBase
             opts.MaxConcurrency = 1;
             opts.Rules.When<Note>(note => note.Domain == "pending")
                 .After(TimeSpan.FromSeconds(1))
-                .Then("remind", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .Do("remind", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         await db.SaveAsync(new Note { NoteId = "n1", Domain = "pending" }, ct);
@@ -96,7 +96,7 @@ public abstract class TimedRuleTestBase : LottaTestBase
             opts.MaxConcurrency = 1;
             opts.Rules.When<Actor>()
                 .At(actor => actor.LastSeenAt == default ? null : actor.LastSeenAt)
-                .Then("expire", (actor, _, _) => { ran.Add((actor.Username, DateTimeOffset.UtcNow)); return Task.CompletedTask; });
+                .Do("expire", (actor, _, _) => { ran.Add((actor.Username, DateTimeOffset.UtcNow)); return Task.CompletedTask; });
         }, cancellationToken: ct);
 
         // No time: nothing is queued. A time already past: as soon as it can be.
@@ -131,7 +131,7 @@ public abstract class TimedRuleTestBase : LottaTestBase
             opts.QueueMode = QueueMode.Manual;
             opts.Rules.When<Note>()
                 .After(TimeSpan.FromDays(30))
-                .Then("much-later", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
+                .Do("much-later", (note, _, _) => { ran.Add(note.NoteId); return Task.CompletedTask; });
         }, cancellationToken: ct);
         await db.SaveAsync(new Note { NoteId = "n1" }, ct);
 
@@ -153,21 +153,28 @@ public abstract class TimedRuleTestBase : LottaTestBase
 public class TimedRuleRegistrationTests
 {
     [Fact]
-    public void AfterAndAt_DelayThenAndUpdate_ButNotDoOrMaintain()
+    public void AfterAndAt_DelayTheDoAndModifyThatFollow()
     {
         var config = new LottaConfiguration();
         static Task Nothing(Note note, RuleContext context, CancellationToken ct) => Task.CompletedTask;
+        static Task Remind(Note note, RuleContext context, CancellationToken ct) => Task.CompletedTask;
 
-        config.Rules.When<Note>().After(TimeSpan.FromDays(3)).Then("remind", Nothing).Update("tidy", Nothing);
-        config.Rules.When<Note>().At(note => note.Published).Then("publish", Nothing);
-        config.Rules.When<Note>().Then("at-once", Nothing);
+        config.Rules.When<Note>().After(TimeSpan.FromDays(3)).Do(Remind).Modify("tidy", Nothing);
+        config.Rules.When<Note>().At(note => note.Published).Do("publish", Nothing);
+        config.Rules.When<Note>().DoQueued("at-once", Nothing);
 
+        Assert.Equal(["Note/remind", "Note/tidy", "Note/publish", "Note/at-once"], config.QueuedRules.Select(r => r.Id));
+        Assert.Equal([RuleVerb.Do, RuleVerb.Modify, RuleVerb.Do, RuleVerb.Do], config.QueuedRules.Select(r => r.Verb));
         Assert.Equal([TimeSpan.FromDays(3), TimeSpan.FromDays(3), null, null], config.QueuedRules.Select(r => r.After));
         Assert.Equal([false, false, true, false], config.QueuedRules.Select(r => r.At != null));
 
-        Assert.Throws<InvalidOperationException>(() => config.Rules.When<Note>().After(TimeSpan.FromDays(1)).Do(Nothing));
-        Assert.Throws<InvalidOperationException>(() => config.Rules.When<Note>().At(note => note.Published).Maintain(note => new NoteView { Id = note.NoteId }));
+        // A delayed action runs from the queue, so a lambda needs a name like any queued rule.
+        Assert.Throws<ArgumentException>(() => config.Rules.When<Note>().After(TimeSpan.FromDays(1)).Do((_, _, _) => Task.CompletedTask));
         Assert.Throws<ArgumentOutOfRangeException>(() => config.Rules.When<Note>().After(TimeSpan.FromSeconds(-1)));
+        // After or At with nothing following is a rule with no action.
+        var empty = new LottaConfiguration();
+        empty.Rules.When<Note>().After(TimeSpan.FromDays(1));
+        Assert.Throws<InvalidOperationException>(empty.CheckRules);
     }
 
     [Fact]
