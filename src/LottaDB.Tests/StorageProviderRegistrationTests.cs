@@ -41,7 +41,7 @@ public class StorageProviderRegistrationTests
     }
 
     [Fact]
-    public async Task OnAsync_WithoutQueueStorage_ThrowsNotSupported_AndTheDatabaseStillOpensWithoutIt()
+    public async Task AQueuedRule_WithoutQueueStorage_ThrowsNotSupported_AndTheDatabaseStillOpensWithoutIt()
     {
         var ct = TestContext.Current.CancellationToken;
         // Tables, blobs and Lucene Directory objects, but no queues.
@@ -54,7 +54,7 @@ public class StorageProviderRegistrationTests
         var refused = await Assert.ThrowsAsync<NotSupportedException>(() => catalog.GetDatabaseAsync("db", opts =>
         {
             opts.Store<Actor>();
-            opts.OnAsync<Actor>("describe", (_, _, _, _) => Task.CompletedTask);
+            opts.Rules.When<Actor>().DoQueued("describe", (_, _, _) => Task.CompletedTask);
         }, ct));
         Assert.Contains("Memory", refused.Message);
 
@@ -63,11 +63,13 @@ public class StorageProviderRegistrationTests
         var db = await catalog.GetDatabaseAsync("db", opts =>
         {
             opts.Store<Actor>();
-            opts.On<Actor>((_, _, _, _) => { inline++; return Task.CompletedTask; });
+            opts.Rules.When<Actor>().Do((_, _, _) => { inline++; return Task.CompletedTask; });
         }, ct);
         await db.SaveAsync(new Actor { Username = "alice" }, ct);
         Assert.Equal(1, inline);
-        Assert.Empty(await db.GetHandlerStatusAsync(ct));
+        var status = await db.Rules.StatusAsync(ct);
+        Assert.Empty(status.Rules);
+        Assert.Empty(status.Types);
         Assert.Equal(0, await db.DrainAsync(cancellationToken: ct));
     }
 

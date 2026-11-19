@@ -1,0 +1,470 @@
+# Rules
+
+Status: as built in 6.0, for every built-in storage provider: Memory, SQLite, FileSystem, Lucene and Azure. Rules replace `On<T>` and `OnAsync<T>`. The reasoning behind the design, and the parts not built yet, are in [Rules-Next.md](Rules-Next.md).
+
+## Summary
+
+A rule says what to do when an object is saved or deleted. Rules are like database triggers, except that they never roll back the save: a rule that fails is reported or retried, and the object stays saved.
+
+A rule is **event, condition, action**:
+
+| Part | API |
+| --- | --- |
+| Event | `When<T>` (saved), `WhenDeleted<T>` (deleted), `Every` (a schedule) |
+| Condition | An optional expression filter: `When<Note>(n => n.IsPublished)` |
+| Action | `Do`, `DoQueued`, `Modify`, `ModifyQueued`, `Materialize`, `MaterializeQueued` |
+
+The action's name says two things. The verb is the kind of work; `Queued` means it runs from the queue instead of inside the save. LottaDB owns the queues, the pump, retries and status.
+
+| Kind of work | In the save | Queued |
+| --- | --- | --- |
+| Run a task: the object is input only | `Do` | `DoQueued` |
+| Change the object: the handler edits it, LottaDB stores it | `Modify` | `ModifyQueued` |
+| Keep derived objects: the projection returns what should exist | `Materialize` | `MaterializeQueued` |
+
+| | In the save | Queued |
+| --- | --- | --- |
+| Runs | Under the write lease; the save waits for it | Later, outside the write lease |
+| On failure | Reported in the save's `ObjectResult.Errors` | Retried with back-off, then set aside |
+| Name | None | Required |
+
+After `.After(delay)` or `.At(item => time)` the actions are `Do` and `Modify`; both run from the queue when the time comes. After `Every(...)` the action is `Do`.
+
+```csharp
+using static Lotta.Rule;
+
+config.Rules.When<Note>().Modify(StampModifiedAt);                            // in the save, before the write
+config.Rules.When<Note>().Do(RefreshAuthorStats);                             // in the save, after the write
+config.Rules.When<Note>(n => Changed(n.Content)).ModifyQueued(Summarize);     // rule "Note/summarize"
+config.Rules.When<Note>().Materialize(note => new NoteView { Id = $"nv-{note.NoteId}", Content = note.Content });   // rule "Note/note-view"
+config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished)
+      .DoQueued("notify", async (note, context, ct) =>
+          await mail.SendAsync(note, idempotencyKey: context.IdempotencyKey, ct));
+config.Rules.When<Invite>(i => Changed(i.SentAt) && !i.Accepted).After(TimeSpan.FromDays(3)).Do(SendReminder);
+config.Rules.Every("0 2 * * *").Do(NightlyCleanup);
+config.Rules.WhenDeleted<Note>().Do(RemoveFeedView);
+
+static async Task Summarize(Note note, RuleContext context, CancellationToken ct)
+{
+    note.Summary = await model.SummarizeAsync(note.Content, ct);   // edits a copy; LottaDB writes it back
+}
+```
+
+## Registration
+
+```csharp
+public delegate Task RuleHandler<in T>(T item, RuleContext context, CancellationToken cancellationToken);
+
+// config.Rules (RuleSet)
+RuleBuilder<T>        When<T>(Expression<Func<T, bool>>? filter = null);
+DeletedRuleBuilder<T> WhenDeleted<T>(Expression<Func<T, bool>>? filter = null);
+ScheduleBuilder       Every(TimeSpan interval);
+ScheduleBuilder       Every(string cron, TimeZoneInfo? timeZone = null);
+
+// RuleBuilder<T>: each verb returns the builder, so one rule can have several actions
+RuleBuilder<T> Do(RuleHandler<T> handler);
+RuleBuilder<T> DoQueued(string name, RuleHandler<T> handler);
+RuleBuilder<T> DoQueued(RuleHandler<T> handler);       // named after the method
+RuleBuilder<T> Modify(RuleHandler<T> handler);
+RuleBuilder<T> ModifyQueued(string name, RuleHandler<T> handler);
+RuleBuilder<T> ModifyQueued(RuleHandler<T> handler);   // named after the method
+DelayedRuleBuilder<T> After(TimeSpan delay);
+DelayedRuleBuilder<T> At(Func<T, DateTimeOffset?> time);
+
+// DelayedRuleBuilder<T>: what runs when the time comes, from the queue
+DelayedRuleBuilder<T> Do(string name, RuleHandler<T> handler);
+DelayedRuleBuilder<T> Do(RuleHandler<T> handler);       // named after the method
+DelayedRuleBuilder<T> Modify(string name, RuleHandler<T> handler);
+DelayedRuleBuilder<T> Modify(RuleHandler<T> handler);   // named after the method
+
+// Materialize: projection is (item) or (item, context, ct), returning TView?, IEnumerable<TView> or a Task of either
+MaterializeBuilder<T> Materialize<TView>(string name, projection);
+MaterializeBuilder<T> Materialize<TView>(projection);  // named after the method, or the type a lambda produces
+MaterializeBuilder<T> MaterializeQueued<TView>(string name, projection);
+MaterializeBuilder<T> MaterializeQueued<TView>(projection);
+
+// MaterializeBuilder<T>
+MaterializeBuilder<T> RefreshWhen<TOther>(Func<TOther, Expression<Func<T, bool>>> sources);
+MaterializeBuilder<T> RefreshWhen<TOther>(Expression<Func<TOther, bool>>? when, Func<TOther, Expression<Func<T, bool>>> sources);
+
+// ScheduleBuilder: handler is (RuleContext context, CancellationToken ct)
+ScheduleBuilder Do(string name, ScheduleHandler handler);
+ScheduleBuilder Do(ScheduleHandler handler);   // named after the method
+
+// DeletedRuleBuilder<T>
+DeletedRuleBuilder<T> Do(RuleHandler<T> handler);
+DeletedRuleBuilder<T> DoQueued(string name, RuleHandler<T> handler);
+DeletedRuleBuilder<T> DoQueued(RuleHandler<T> handler);   // named after the method
+
+// db.Rules (LiveRuleSet): inline only; Do returns an IDisposable that removes the rule
+LiveRule<T>        When<T>(Expression<Func<T, bool>>? filter = null);
+LiveDeletedRule<T> WhenDeleted<T>(Expression<Func<T, bool>>? filter = null);
+```
+
+- **A rule registers when `When` is called.** A rule with no action makes opening the database throw `InvalidOperationException` naming the type.
+- **Rules are read when the database opens.** Adding to one after that throws `InvalidOperationException`.
+- **A rule for a base type also fires for derived types,** from every save path: `When<BlobFile>` fires for an uploaded `BlobPhoto`.
+- **`JsonDocument` objects** are not given to queued rules.
+- **Deletes have one kind of work, in both forms:** `WhenDeleted<T>(filter).Do(...)` inside the delete, and `.DoQueued(...)` from the queue. Both are given the object as it was. There is no `Modify` (nothing is left to change) and no `Materialize` (what the object produced is deleted with it).
+- **A queued delete rule runs on a tombstone.** A run cannot read a deleted object, and a queue message is too small to carry one (64 KB on Azure storage, against 1 MB for a table row). So the delete keeps the object aside:
+  - **In the delete,** after the row is removed and the in-delete rules have run, the object is written as a row under a key of its own (a GUID) in a partition beside the database's (`{database}~deleted~`). No read, query, search or backfill looks there, and the object's key is free at once.
+  - **One message** lists the delete's queued rules, as for a save, and names the tombstone. The filters were checked in the delete and are not checked again.
+  - **A run** reads the tombstone and gives each rule the object as it was, under its original key and ETag.
+  - **When no rule is left,** the message is deleted and the tombstone with it.
+  - **A rule set aside** is given a tombstone of its own (a copy), named in its set-aside record. `RetryAsync` hands it to the new message; `DiscardAsync` removes it. Each tombstone thus has exactly one owner, a message or a record, and nothing is counted.
+  - **A crash** between writing the tombstone and sending the message leaves a tombstone nobody names. It is never read and is removed when the database is reset or deleted.
+  - A delete rule cannot be backfilled.
+
+### Handlers
+
+Every verb takes the same handler shape, `(item, context, cancellationToken)`.
+
+| `RuleContext` member | What it is |
+| --- | --- |
+| `Db` | The database the rule runs on |
+| `Rule` | The rule's name, such as `summarize`; empty for `Do` and `Modify`, which have none |
+| `Attempt` | 1 on the first run, 2 on the first retry, and so on; always 1 in the save |
+| `IdempotencyKey` | A hash of the type, key, ETag and rule; the same on every retry |
+
+The item carries its key and ETag like any object LottaDB hands out: `item.GetKey()`, `item.GetETag()`.
+
+### Rule names
+
+A retry names the rule to run again, so every rule that can run from a queue (`DoQueued`, `ModifyQueued`, `Materialize`, `MaterializeQueued`, and `Do` and `Modify` after `After` or `At`) needs a name that stays the same across builds.
+
+- **Identity is the type and the name:** `Note/summarize`. Names are unique within a type, whatever the verb.
+- **A name** is 3 to 40 lower-case letters and digits, with single hyphens between them.
+- **The default comes from the method:** `.ModifyQueued(Summarize)` is `summarize`, `handlers.NotifyFollowersAsync` is `notify-followers`, `Handle<Note>` is `handle`. It is taken from the source text of the argument (`[CallerArgumentExpression]`).
+- **A lambda must be named:** `.DoQueued("notify", async (note, context, ct) => ...)`. Without a name it throws `ArgumentException` when the rule is registered.
+- **A `Materialize` lambda is named after the type it produces:** `NoteView`, or a collection of them, gives `note-view`. Two lambdas producing one type for one source type must be named.
+- **`Do` and `Modify` in the save have no name.**
+
+### Filters
+
+The filter says which objects the rule is for. Without one, every object of the type. It is an expression, compiled once.
+
+| Verb | When the filter is checked |
+| --- | --- |
+| `Do`, `Modify` | Before the handler, in the save |
+| `DoQueued`, `ModifyQueued` | In the save: false queues nothing. Again when the rule runs, on the object as it is then: false skips the rule, which is not counted as a run |
+| `Materialize` | In the save, and when a refresh or backfill runs it; false (apart from its `Changed(...)` parts) deletes what the object produced |
+
+- **Quick and pure:** it runs inside the save, under the write lease, so it should look only at the object.
+- **When it throws** in a save, the error goes into the save's `Errors` and the save still happens. When a queued rule comes up, it counts as a failed run.
+
+### `Changed(...)`
+
+A plain filter is true for every save while its condition holds. To react to a change, a filter uses `Changed(...)` (`using static Lotta.Rule;`):
+
+```csharp
+config.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).DoQueued(NotifyFollowers);
+config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).ModifyQueued(Classify);
+```
+
+- **Meaning:** any of these values differs in this save from the version the save replaces.
+- **No extra storage.** An object LottaDB handed out carries the JSON it was loaded with, so a save has both versions. Nothing is stored per rule or per object.
+- **A new object** counts as changed.
+- **An object saved without having been loaded** (`new Note { NoteId = "n1" }` for a key that exists) has no loaded version. For types that have a `Changed` rule, the save reads the stored version first.
+- **Works with every verb,** inline `Do` and live rules included.
+- **When a queued rule runs,** `Changed(...)` is taken to be true: the old values are gone by then. The rest of the filter is checked on the object as it is.
+- **It also names a `ModifyQueued` rule's inputs** (see below).
+- **A marker, not a function.** Called anywhere but a rule filter, it throws. `Changed()` with no values, and `Changed` in a `WhenDeleted` filter, throw when the rule is registered.
+
+## The verbs
+
+### `Do`: run a task in the save
+
+- Runs after the object is written and indexed, so a search inside the handler already sees the change. The built-in index handlers run before any rule, for the object's type and its base types.
+- What it saves is part of the save's `ObjectResult.Changes`; what it throws is in `ObjectResult.Errors`.
+- A chain of `Do` rules stops when it reaches a type already being handled in the chain.
+- On an open database: `using var rule = db.Rules.When<Note>().Do(Refresh);`
+
+### `DoQueued`: run a task from the queue
+
+- `Do`, queued: for email, webhooks, calls to other services, and anything too slow for the save to wait for.
+- Delivered **at least once**: retried with back-off, then set aside.
+- `context.IdempotencyKey` is the same on every retry, so an outside service can drop duplicates.
+- Changes the handler makes to the object are not stored.
+
+### `Modify`: change the object in the save
+
+```csharp
+config.Rules.When<Note>().Modify((note, context, ct) =>
+{
+    note.ModifiedAt = DateTimeOffset.UtcNow;
+    return Task.CompletedTask;
+});
+```
+
+- **Runs before the object is written,** on the caller's own object. The one write stores what the handler changed, and the caller sees it when the save returns.
+- **Runs first.** `Modify` actions run in the order registered, before the write and so before any `Do` or `Materialize`, which see the object as changed.
+- **On every save path:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, and the write a `ModifyQueued` makes.
+- **`Changed(...)`** in its filter compares what the caller is saving with the version it replaces.
+- **A handler that throws** is reported in the save's `Errors`. The object is still saved, as the handler left it.
+- **The handler must not change the object's key.**
+- No name, no queue, no retry.
+
+### `ModifyQueued`: change the object from the queue
+
+- **The handler edits a copy** and returns nothing. LottaDB compares the copy with the original afterwards and writes only if something changed.
+- **Runs outside the write lease,** so slow work never blocks other writes.
+- **The handler is called once per run.** It is not called again on a write conflict, unlike a `ChangeAsync` lambda.
+- **It may read other objects** through `context.Db`.
+
+The write-back is conditional on the ETag the copy was made from. If someone else saved the object meanwhile:
+
+| What happened meanwhile | The result |
+| --- | --- |
+| Nothing | Written |
+| A save that left the `Changed(...)` values alone, and did not touch the properties the handler set | The handler's properties are applied to the newer version, with a conditional write (repeated on another conflict, up to 10 times) |
+| A save that changed a `Changed(...)` value | Dropped: that save queued a fresh run |
+| A save that changed a property the handler set | Dropped: the other writer's value stands |
+| The filter has no `Changed(...)` | Dropped: LottaDB does not know the inputs |
+
+"The properties the handler set" are the top-level properties that differ between the original and the copy.
+
+### `Materialize`: keep other objects in step
+
+```csharp
+// One view per note, built with a read of another object
+config.Rules.When<Note>()
+    .Materialize(ProjectNoteView)                                             // rule "Note/project-note-view"
+    .RefreshWhen<Actor>(actor => note => note.AuthorId == actor.Username);
+
+// Several objects per note
+config.Rules.When<Note>()
+    .Materialize(note => note.Mentions.Select(m => new Link { Id = $"{note.NoteId}->{m}", From = note.NoteId, To = m }));   // rule "Note/link"
+
+static async Task<NoteView?> ProjectNoteView(Note note, RuleContext context, CancellationToken ct)
+{
+    var author = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
+    return author == null ? null : new NoteView { Id = $"nv-{note.NoteId}", AuthorDisplay = author.DisplayName, Content = note.Content };
+}
+```
+
+The projection returns what should exist for the object: one object, a collection, or null for nothing. It may be synchronous `(item)` or asynchronous `(item, context, ct)`.
+
+- **Each run compares.** LottaDB finds what the object produced before, saves what is new or different, and deletes what is no longer produced. An object that is the same is not written again.
+- **Inside the save.** What it saves and deletes is in the save's `Changes`; what it throws is in `Errors`. A refresh or a backfill runs the projection from the queue, with retries like `DoQueued`.
+- **`MaterializeQueued` is the same rule run from the queue,** for a projection too slow for the save to wait for, such as one that walks a graph. The save queues the projection instead of running it; what the object produces is there shortly after, and a projection that throws is retried, then set aside. Deleting the object still deletes what it produced inside the delete.
+- **Deleting the object deletes what it produced,** inside the delete.
+- **The filter says which objects have a projection.** When it becomes false for an object, what the object produced is deleted. A filter that is false only in its `Changed(...)` part skips the run and deletes nothing.
+- **Name the projection's inputs with `Changed(...)`** to skip it on saves that leave them alone: `When<Note>(n => Changed(n.Content, n.AuthorId)).Materialize(...)`. Without it, the projection runs on every save of the object.
+- **You choose the keys.** A produced object is stored under its own `[Key]`, which the projection sets and keeps the same from run to run.
+- **One owner per object.** Producing a key that another object or another rule owns is an error. An object saved by hand, or left by a rule that no longer exists, is taken over.
+- **A projection cannot produce objects of the type it is for.**
+- **Produced objects are ordinary objects:** their own rules run when they are saved and deleted.
+
+**Ownership** is recorded on both sides, beside the objects (next to `_type` and the ETag), never in their JSON:
+
+| Where | What | Example |
+| --- | --- | --- |
+| The source's row | `_produced`: the keys it produced, per rule | `{"Note/tags": ["n1#a", "n1#b"]}` |
+| Each produced object's row | `_source`: the rule and the source's key | `Note/tags n1` |
+
+A run needs no search:
+
+1. The keys the projection returns are compared with the keys the source's row lists.
+2. Those rows are read by key, to skip the ones that are already the same and to check that nobody else owns them.
+3. New and changed objects are saved in a batch. Keys that are listed and no longer produced are deleted, if they are still this source's.
+
+**`SaveManyAsync` does this once per batch, not once per source.** The rules of the batch's objects run first, then what all of them produce is read and written together, so a later rule of the same object does not yet see what it produced. Measured in Symplist on SQLite (3,000 items producing 6,031 passages, four runs each): 312 to 450 items a second, against 396 to 439 for the hand-written code it replaced.
+
+- **In a save,** the projection runs before the source's row is written, so the one write records the new list. An object saved without having been loaded is read first, to learn what it listed.
+- **Every write of a source keeps its list:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, a `ModifyQueued` rule's write-back, and saves of objects loaded through the search index.
+- **A run from the queue** that changes which keys are produced writes the source's row again to record it. The object is unchanged, no rule runs and nothing is queued, but the source gets a new ETag.
+- **A delete** removes the keys the deleted row listed.
+
+**`RefreshWhen<TOther>(other => item => ...)`** runs the projection again when an object it reads changes.
+
+- Every save or delete of a `TOther` evaluates the condition and queues the rule for each object it is true for.
+- **Say which saves matter** with a first argument: `.RefreshWhen<Actor>(actor => Changed(actor.DisplayName), actor => note => note.AuthorId == actor.Username)`. A save that leaves the name alone then queues nothing. A delete always refreshes.
+- The objects are found through the search index when it can express the condition (`[Queryable]` properties compared with values), and by reading every object when it cannot.
+- **A refresh runs from the queue,** not inside the other object's save: one actor can have thousands of notes.
+- A run from the queue takes the object's lock and reads it again before projecting, so a refresh never overwrites the result of a newer save.
+
+**`db.Rules.BackfillAsync(rule)`** runs a projection again for every stored object its filter is true for, for example after its code changes.
+
+## Timing: `After` and `At`
+
+```csharp
+config.Rules.When<Invite>(i => Changed(i.SentAt) && !i.Accepted)
+    .After(TimeSpan.FromDays(3))
+    .Do(SendReminder);                     // accepted in the meantime: nothing is sent
+
+config.Rules.When<Session>()
+    .At(s => s.ExpiresAt)
+    .Do(EndSession);
+```
+
+`After` and `At` return a `DelayedRuleBuilder<T>` with two actions: `Do`, which behaves like `DoQueued`, and `Modify`, which behaves like `ModifyQueued`. Both run from the queue when the time comes; they have no `Queued` in the name because nothing delayed can run inside the save. Neither `Materialize` nor `MaterializeQueued` can be delayed.
+
+| | When it runs | When the time comes |
+| --- | --- | --- |
+| `After(delay)` | `delay` after the save that matched the filter | The filter is checked again, without its `Changed(...)` parts; false drops the work |
+| `At(item => time)` | At the time the object gives in that save; a time already past runs as soon as it can; null queues nothing | The filter is checked again, and the time is read again: a later time waits for it, null drops the work |
+
+- **Every matching save starts a wait of its own.** So an `After` filter usually names the change that starts it with `Changed(...)`; without it, each save of an unaccepted invite would schedule another reminder.
+- **A delayed rule has a message of its own,** with the time in it (`"due"`), hidden until then. The rules of the save that are not delayed go in the usual message.
+- **Waits longer than 7 days** (the longest a queue hides a message) are made in steps: the message comes up, is not due yet, and is hidden again with nothing run.
+- **A changed `At` time.** A save that gives a new time queues a new message; the old one comes up at the old time, finds the later time, and waits for it too. So the action can run more than once for one time, like any queued rule.
+- **Failures** are retried and set aside like any queued rule.
+- **`BackfillAsync` and `RetryAsync`** run an `After` rule at once, since there is no save to count from. An `At` rule still waits for the object's time.
+
+## Schedules: `Every`
+
+```csharp
+config.Rules.Every(TimeSpan.FromHours(24)).Do(SyncWithGraph);              // schedule "sync-with-graph"
+
+config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time"))
+    .Do(NightlyCleanup);                                                   // 02:00 local time, every day
+
+static async Task NightlyCleanup(RuleContext context, CancellationToken ct) { ... }
+```
+
+A schedule is work done at times, for no object. Its handler is `(RuleContext context, CancellationToken ct)`.
+
+- **Times.** A `TimeSpan`, or a cron expression of five fields (six with seconds first), in a time zone (UTC when none is given). Cron expressions are parsed by the Cronos package.
+- **Names.** Like queued rules: from the method, or given for a lambda, unique among schedules. Status lists a schedule as `schedule/nightly-cleanup`.
+- **One stored record per schedule:** a `RuleSchedule` under the key `RuleSchedule.KeyOf(name)`, with `NextRun`, `LastRun` and `LastError`. It is an ordinary object: `await db.GetAsync<RuleSchedule>(RuleSchedule.KeyOf("nightly-cleanup"))`.
+- **One process runs each time.** A process claims a run by moving `NextRun` on with an ETag-conditional write; the others see the conflict, or the new time, and do nothing.
+- **The first run** is when the schedule's time first comes round after it is first seen, not at once.
+- **Missed times run once.** After downtime the work runs one time, and the next time is counted from then.
+- **A run that fails** is recorded in `LastError` (in the record and in `StatusAsync`) and is not retried: the work runs again at the next time.
+- **`context.IdempotencyKey`** is the same for one scheduled time. `context.Attempt` is always 1.
+- **Running.** With `QueueMode.Auto` a loop runs schedules while the database is open, looking at the records at least every 30 seconds. With `QueueMode.Manual`, `DrainAsync` runs the ones whose time has come, before the queued rules; each counts as a run.
+- **A changed schedule** takes effect when the database opens with it: a stored time later than the new schedule gives is moved up.
+- Schedules need no queue storage.
+
+## Queues underneath
+
+### One queue per type
+
+- A save sends **one message** to the queue of the object's **concrete type**, listing the rules the save matched: `{ "key": "n1", "etag": "e7", "rules": ["Note/summarize", "Note/notify"] }`.
+- Saving a `BlobPhoto` uses the `BlobPhoto` queue and lists rules for `BlobPhoto` and for its base types.
+- The message never holds the object. The object is read when the rules run.
+- A save that matches no queued rule sends nothing. `Materialize` rules run inside the save and are not in the message; a refresh or a backfill sends a message of its own for them. `MaterializeQueued` rules are in the message like any queued rule.
+- Besides the queues, the only stored state is the tombstones of deletes whose queued rules have yet to run (see above). There are no rows per rule, and none per object beyond the ownership values a materialize rule keeps on the rows it writes.
+
+### A run
+
+The pump takes a message, reads the object once, and runs the listed rules one after another:
+
+1. **`ModifyQueued` rules** (and delayed `Modify`), in the order registered.
+2. **`MaterializeQueued` rules,** and `Materialize` rules a refresh or backfill listed, so what they produce is made from the updated object.
+3. **`DoQueued` rules** (and delayed `Do`), in the order registered.
+
+- **A rule's own save does not queue it again.** When a rule saves the object its run is for (a `ModifyQueued` write-back, or a handler calling `SaveAsync`), that save queues neither the rule itself nor the rules the run has yet to do. Rules that already ran are queued if the save matches them.
+- **Later rules see the saved object.** After such a save, the run reads the object again before the next rule.
+- **A missing object** (deleted since, or replaced by an object of another type) ends the run and deletes the message.
+- **Two runs for the same object never overlap** within a database.
+
+### Failures, one rule at a time
+
+All retry state is in the message. Example: rules A, B and C are listed, and B throws.
+
+1. A and C are done. The message is **replaced in place**, in one `UpdateMessage` call, by one that lists only B:
+
+   ```json
+   { "key": "X1", "etag": "e7", "rules": ["Note/b"], "attempts": { "Note/b": 1 }, "lastError": { "Note/b": "timeout calling model" } }
+   ```
+
+2. It is hidden for `RuleRetryDelay`, doubling with each failure, up to five minutes.
+3. When it comes up again, only B runs. Success deletes the message.
+
+- **A rule that fails `RuleMaxAttempts` times** is set aside in the type's poison queue as `(type, key, etag, rule, error, attempts)`, and removed from the message. The other rules carry on.
+- **A stale message still runs.** A message whose ETag no longer matches the object runs its rules on the object as it is now. Dropping it could lose work: a later save that did not change a rule's inputs queued nothing for it.
+- **A crash during a run** leaves the message as it was. It comes up again when its lease runs out, and every rule in it runs again.
+- **A renamed or removed rule.** A message naming a rule the configuration does not have reruns all of the type's queued rules for that object. That costs at most one extra run, and loses no work.
+- **A message that cannot be read** is moved to the poison queue as it is.
+
+### Loop prevention
+
+- A rule's own save does not queue the rule again (above).
+- `Changed(...)` keeps a `ModifyQueued` from being triggered by saves that leave its inputs alone, another rule's write included.
+- A write that changes nothing queues nothing. `ChangeAsync` whose lambda leaves the object as it is writes nothing at all; `SaveAsync` of an object unchanged since it was loaded writes, but queues nothing.
+- **`MaxQueueHops`** (default 16) is the backstop. A save made more than that many queued rules deep is set aside without running.
+
+## Settings
+
+| `config.` | Default | What it is |
+| --- | --- | --- |
+| `QueueMode` | `Auto` | `Manual` runs queued rules only in `DrainAsync` |
+| `MaxConcurrency` | 4 | How many objects are worked on at once |
+| `RuleMaxAttempts` | 5 | Runs of a rule for an object before it is set aside |
+| `RuleRetryDelay` | 2 s | The wait before the second run; doubles each time, up to 5 minutes |
+| `RuleTimeout` | 5 min | How long one run of a rule may take |
+| `MaxQueueHops` | 16 | How long a chain of queued rules may get |
+
+There is no priority. Several objects are worked on at once, so slow work does not hold up fast work.
+
+## The pump
+
+- One per open, writable database that has queued rules. It starts when the catalog has fully opened the database and kept it, never for a read-only one.
+- It looks at the type queues in turn, so none is starved.
+- A run holds its message with a lease (the smaller of `RuleTimeout` and 60 seconds), renewed while it runs. A run that loses its lease is stopped and nothing is recorded; the message comes up again.
+- A rule that outlasts `RuleTimeout` has its token cancelled and counts as failed.
+- **Disposing the database** cancels the runs in progress and waits up to 10 seconds in all for them to end. A run stopped this way, or by cancelling a drain, counts no failure and its message is given back at once.
+- **A run that finds the write lock held by another process** (`WriteLockUnavailableException`) counts no failure. Its message is hidden for the retry delay, doubling each time, so it does not spin while the lock is held.
+- Delivery is at least once.
+
+The catalog hands out a database only once it is fully open. If opening fails, the half-open database is disposed and the next `GetDatabaseAsync` opens it again. An open still in progress when the catalog is disposed or deleted keeps nothing and starts no pump.
+
+## Operating it
+
+You see rules, not queues.
+
+| Method | What it does |
+| --- | --- |
+| `db.Rules.StatusAsync()` | Per rule: runs in progress, set-aside count, last error. Per type: messages waiting and set aside (approximate) |
+| `db.Rules.RetryAsync(rule)` | Puts a rule's set-aside work back in its queue; returns how many |
+| `db.Rules.DiscardAsync(rule)` | Deletes a rule's set-aside work; returns how many |
+| `db.Rules.BackfillAsync(rule)` | Queues a rule for every stored object its filter is true for; returns how many |
+| `db.DrainAsync(max)` | Runs what is ready now; returns how many rules were run, failed runs included |
+
+- **`rule`** is a full identity (`Note/summarize`), or just the name (`summarize`) when only one rule has it.
+- **Waiting work is counted per type,** not per rule: each message lists its rules, so a count per rule would mean reading every message.
+- **Set-aside work under a name no rule has** (after a rename) shows in `StatusAsync` with `Orphaned = true`. `RetryAsync` and `DiscardAsync` accept its full identity.
+- **A queue for a type that has no rules any more** shows with `Orphaned = true`. Its work is listed, not run.
+- **`DrainAsync`** cannot be called from inside a handler or a save. Work waiting out a retry delay is not ready and is left. With `max`, objects are worked on one at a time.
+
+`BackfillAsync` is how work is redone after a handler changes, or how a new rule is run for objects that already exist.
+
+- **With a filter the index can express** (`[Queryable]` properties compared with constants), it asks the search index for the matching objects.
+- **Otherwise** (no filter, a type that is not searchable, a filter comparing two fields or calling a method) it reads every object in the database.
+- `Changed(...)` is taken to be true.
+- Every candidate is checked again with the compiled filter before it is queued.
+
+## Storage
+
+- `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)` takes a queue factory. Every built-in `Use…()` provider passes one.
+- A `DoQueued`, `ModifyQueued`, `Materialize` or `MaterializeQueued` rule on a catalog with no queue storage throws `NotSupportedException` when the database is opened, before anything is created.
+- **Queue names** are `l{catalog hash}{database hash}-{type}-{hash}` and `…-poison`: `note-view-k3x9aa`. The type's full name, the catalog and the database are in each queue's metadata.
+- A type's queue is made the first time work is queued for the type. Opening the database finds the queues left by earlier runs.
+- **FileSystem** needs `Iciclecreek.Azure.Storage.FileSystem` 2.1.0 or later.
+- **Lucene:** each queue is a Lucene `Directory` of its own (`queues/{queue}`) with a file per message. `LuceneDirectories.FileSystem(rootPath)` opens each `FSDirectory` by its extended path (`\\?\C:\…`), since a message's file name is about 100 characters; a factory of your own should do the same.
+- `ResetDatabaseAsync` empties the database's queues. `DeleteDatabaseAsync` and deleting the catalog delete them.
+- `RebuildSearchIndex` queues nothing.
+- **`_source`** is one extra column on objects a `Materialize` rule produced (also kept in their index documents). **`_produced`** is one extra column on objects that have produced something, split across `_produced2`, ... past 63 KB. No other object has either.
+
+## Known limits
+
+- A save in the instant before a crash may not be queued, the same window in which inline rules and indexing are lost.
+- Sends for a batch save go one at a time.
+- The set-aside count per rule is taken from the first 32 records of each poison queue.
+- Queues made by another process after this one opened the database are not run here until it is reopened.
+- "Two runs for the same object never overlap" holds within one process.
+- **`RefreshWhen` assumes one writing process.** The objects a refresh is for are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
+- **A single `SaveAsync` writes its source's objects by themselves.** To save many sources, use `SaveManyAsync`, which writes what they all produce together.
+- A queue run that changes which keys a source produces gives the source a new ETag, so a copy loaded before it gets a `ConcurrencyException` on its next conditional save.
+- A `Materialize` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
+- A backfill of a `Materialize` rule skips objects its filter is false for, so it does not clean up after them.
+- Aggregates (many objects feeding one) are not covered by `Materialize`.
+- A schedule's failed run is not retried before its next time.
+- A schedule's handler is run by the process that claims the time; if that process stops mid-run, the time is not run again.
+
+## Not built yet
+
+- Aggregates: one object kept from many (a count per author). Today a `Do` recomputes it by hand.
+- Retries for a schedule run that fails; it waits for its next time.
+

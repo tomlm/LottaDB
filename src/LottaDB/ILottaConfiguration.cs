@@ -4,15 +4,6 @@ using System.Text.Json;
 namespace Lotta;
 
 /// <summary>
-/// Handler invoked after an entity is saved or deleted.
-/// </summary>
-/// <typeparam name="T">The entity type.</typeparam>
-/// <param name="entity">The entity that was saved or deleted.</param>
-/// <param name="kind">Whether the entity was saved or deleted.</param>
-/// <param name="db">The database instance, for querying or saving related entities.</param>
-public delegate Task EntityHandler<in T>(T entity, TriggerKind kind, LottaDB db, CancellationToken cancellationToken);
-
-/// <summary>
 /// Handler invoked when a blob is uploaded. Receives the blob content and returns metadata to store.
 /// </summary>
 /// <param name="path">Blob path relative to the database (e.g. "photos/vacation.jpg").</param>
@@ -101,58 +92,56 @@ public interface ILottaConfiguration
     ILottaConfiguration Store<T>(Action<IStorageConfiguration<T>>? configure = null) where T : class, new();
 
     /// <summary>
-    /// Register a handler that runs inline after every save or delete of type <typeparamref name="T"/>.
-    /// The handler has full DB access — it can save, delete, query, or search any type.
-    /// Multiple handlers per type are allowed and run in registration order.
+    /// The database's rules: what to do when objects are saved or deleted. Start one with
+    /// <see cref="RuleSet.When{T}"/> or <see cref="RuleSet.WhenDeleted{T}"/>.
+    /// <code>
+    /// config.Rules.When&lt;Note&gt;(n =&gt; n.IsPublished).Do(UpdateFeedView).DoQueued(NotifyFollowers);
+    /// </code>
     /// </summary>
-    /// <typeparam name="T">The object type to react to.</typeparam>
-    /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
-    ILottaConfiguration On<T>(EntityHandler<T> handler) where T : class, new();
+    RuleSet Rules { get; }
 
     /// <summary>
-    /// Register a handler that runs later, from a queue, outside the save that caused it. Every
-    /// save of a <typeparamref name="T"/> (or a type derived from it) queues the handler; it is
-    /// then given the object as it is when it runs, and is retried until it succeeds or has
-    /// failed <see cref="AsyncHandlerOptions.MaxAttempts"/> times. Use it for work too slow to do
-    /// inside a save. The handler may run more than once for one save, so it must be safe to repeat.
+    /// Whether queued work runs by itself while the database is open (<see cref="QueueMode.Auto"/>,
+    /// the default), or only when <see cref="LottaDB.DrainAsync"/> is called.
     /// </summary>
-    /// <typeparam name="T">The object type to react to.</typeparam>
-    /// <param name="name">
-    /// Identifies the handler across runs of the program; its queue is named after it. 3 to 40
-    /// lower-case letters and digits, with single hyphens between them.
-    /// </param>
-    /// <param name="handler">
-    /// Receives the object, <see cref="TriggerKind.Saved"/>, the database, and a token that is
-    /// cancelled when the run outlasts <see cref="AsyncHandlerOptions.Timeout"/> (a failure), or
-    /// when the database is disposed or the <see cref="LottaDB.DrainAsync"/> running it is
-    /// cancelled (not a failure: the work stays queued).
-    /// </param>
-    /// <param name="priority">Higher runs first. Within one priority, work runs first in, first out.</param>
-    /// <param name="latest">
-    /// True when only an object's latest state matters: several saves of one object before the
-    /// handler gets to it then give one run instead of one each. False to run once for every save.
-    /// </param>
-    /// <param name="options">Retry limit and time allowed for one run.</param>
-    /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
-    ILottaConfiguration OnAsync<T>(string name, EntityHandler<T> handler, int priority = 0, bool latest = true, AsyncHandlerOptions? options = null)
-        where T : class, new();
+    public QueueMode QueueMode { get; set; }
 
     /// <summary>
-    /// Whether queued handlers run by themselves while the database is open (the default), or
-    /// only when <see cref="LottaDB.DrainAsync"/> is called.
+    /// How long a chain of queued rules triggering one another may get before the next link is
+    /// set aside as failed. Guards against rules that keep triggering each other. Default: 16.
     /// </summary>
-    public AsyncHandlerMode AsyncHandlers { get; set; }
+    public int MaxQueueHops { get; set; }
 
     /// <summary>
-    /// How long a chain of queued handlers triggering one another may get before the next link is
-    /// set aside as failed. Guards against handlers that keep triggering each other. Default: 16.
+    /// How many objects the database's queued rules are run for at once. The rules of one object
+    /// always run one after another, and two runs for the same object never overlap. Default: 4.
     /// </summary>
-    public int AsyncHandlerMaxHops { get; set; }
+    public int MaxConcurrency { get; set; }
+
+    /// <summary>
+    /// How many times a queued rule is run for an object before it is set aside as failed, to be
+    /// looked at with <c>db.Rules.StatusAsync()</c> and run again with <c>db.Rules.RetryAsync(rule)</c>.
+    /// Default: 5.
+    /// </summary>
+    public int RuleMaxAttempts { get; set; }
+
+    /// <summary>
+    /// How long a queued rule that failed waits before its second run. The wait doubles with each
+    /// further failure, up to five minutes. Default: 2 seconds.
+    /// </summary>
+    public TimeSpan RuleRetryDelay { get; set; }
+
+    /// <summary>
+    /// How long one run of a queued rule may take before its token is cancelled and the run is
+    /// counted as failed. Default: 5 minutes.
+    /// </summary>
+    public TimeSpan RuleTimeout { get; set; }
 
     /// <summary>
     /// Set the blob upload handler (replacement semantics: last one wins).
     /// Call with no arguments to use the default handler (extension-based MIME detection, text extraction).
-    /// Use <c>On&lt;BlobFile&gt;</c> for additional post-upload processing (CSAM scanning, thumbnails, etc.).
+    /// Use <c>Rules.When&lt;BlobFile&gt;().Do(...)</c>, <c>.ModifyQueued(...)</c> or <c>.DoQueued(...)</c> for additional post-upload
+    /// processing (CSAM scanning, thumbnails, etc.): uploading saves the blob's record, which fires them.
     /// </summary>
     /// <param name="handler">Handler that processes blob content and returns metadata to store.</param>
     ILottaConfiguration OnUpload(BlobUploadHandler? handler = null);

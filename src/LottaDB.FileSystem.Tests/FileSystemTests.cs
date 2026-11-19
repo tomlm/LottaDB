@@ -7,8 +7,12 @@ internal static class Tests
     internal static void Configure(LottaCatalog catalog) => catalog.UseFileSystem(TestRun.GetTempFolder());
 }
 
-public class FileSystem_AsyncHandlerTests : AsyncHandlerTestBase { public FileSystem_AsyncHandlerTests() : base(Tests.Configure) { } }
-public class FileSystem_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public FileSystem_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
+public class FileSystem_QueuedRuleTests : QueuedRuleTestBase { public FileSystem_QueuedRuleTests() : base(Tests.Configure) { } }
+public class FileSystem_MaterializeTests : MaterializeTestBase { public FileSystem_MaterializeTests() : base(Tests.Configure) { } }
+public class FileSystem_ModifyRuleTests : ModifyRuleTestBase { public FileSystem_ModifyRuleTests() : base(Tests.Configure) { } }
+public class FileSystem_ScheduleTests : ScheduleTestBase { public FileSystem_ScheduleTests() : base(Tests.Configure) { } }
+public class FileSystem_TimedRuleTests : TimedRuleTestBase { public FileSystem_TimedRuleTests() : base(Tests.Configure) { } }
+public class FileSystem_QueuedRulePumpTests : QueuedRulePumpTestBase { public FileSystem_QueuedRulePumpTests() : base(Tests.Configure) { } }
 public class FileSystem_AdHocJoinTests : AdHocJoinTestBase { public FileSystem_AdHocJoinTests() : base(Tests.Configure) { } }
 public class FileSystem_FacetTests : FacetTestBase { public FileSystem_FacetTests() : base(Tests.Configure) { } }
 public class FileSystem_JoinTests : JoinTestBase { public FileSystem_JoinTests() : base(Tests.Configure) { } }

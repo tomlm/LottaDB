@@ -48,8 +48,12 @@ public class Lucene_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class Lucene_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Lucene_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Lucene_VectorSearchTests : VectorSearchTestBase { public Lucene_VectorSearchTests() : base(Tests.Configure) { } }
 public class Lucene_WriteLockTests : WriteLockTestBase { public Lucene_WriteLockTests() : base(Tests.Configure) { } }
-public class Lucene_AsyncHandlerTests : AsyncHandlerTestBase { public Lucene_AsyncHandlerTests() : base(Tests.Configure) { } }
-public class Lucene_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public Lucene_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
+public class Lucene_QueuedRuleTests : QueuedRuleTestBase { public Lucene_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Lucene_MaterializeTests : MaterializeTestBase { public Lucene_MaterializeTests() : base(Tests.Configure) { } }
+public class Lucene_ModifyRuleTests : ModifyRuleTestBase { public Lucene_ModifyRuleTests() : base(Tests.Configure) { } }
+public class Lucene_ScheduleTests : ScheduleTestBase { public Lucene_ScheduleTests() : base(Tests.Configure) { } }
+public class Lucene_TimedRuleTests : TimedRuleTestBase { public Lucene_TimedRuleTests() : base(Tests.Configure) { } }
+public class Lucene_QueuedRulePumpTests : QueuedRulePumpTestBase { public Lucene_QueuedRulePumpTests() : base(Tests.Configure) { } }
 
 public class LuceneFileSystem_CrudTests : CrudTestBase { public LuceneFileSystem_CrudTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_ChangeAsyncTests : ChangeAsyncTestBase { public LuceneFileSystem_ChangeAsyncTests() : base(Tests.ConfigureFileSystem) { } }
@@ -61,8 +65,12 @@ public class LuceneFileSystem_JsonMetadataTests : JsonMetadataTestBase { public 
 public class LuceneFileSystem_BlobTests : BlobTestBase { public LuceneFileSystem_BlobTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public LuceneFileSystem_BlobOnUploadTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_RebuildIndexTests : RebuildIndexTestBase { public LuceneFileSystem_RebuildIndexTests() : base(Tests.ConfigureFileSystem) { } }
-public class LuceneFileSystem_AsyncHandlerTests : AsyncHandlerTestBase { public LuceneFileSystem_AsyncHandlerTests() : base(Tests.ConfigureFileSystem) { } }
-public class LuceneFileSystem_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public LuceneFileSystem_AsyncHandlerPumpTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_QueuedRuleTests : QueuedRuleTestBase { public LuceneFileSystem_QueuedRuleTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_MaterializeTests : MaterializeTestBase { public LuceneFileSystem_MaterializeTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_ModifyRuleTests : ModifyRuleTestBase { public LuceneFileSystem_ModifyRuleTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_ScheduleTests : ScheduleTestBase { public LuceneFileSystem_ScheduleTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_TimedRuleTests : TimedRuleTestBase { public LuceneFileSystem_TimedRuleTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_QueuedRulePumpTests : QueuedRulePumpTestBase { public LuceneFileSystem_QueuedRulePumpTests() : base(Tests.ConfigureFileSystem) { } }
 
 /// <summary>Cross-process write-lock contention with files in Lucene <c>Directory</c> objects as the only shared storage.</summary>
 public class Lucene_MultiProcessLockTests : MultiProcessLockTests

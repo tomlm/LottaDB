@@ -6,7 +6,7 @@ LottaDB is a .NET library that stores **POCOs in Azure Table Storage** and index
 
 Each write opens a Lucene session, adds/deletes the document, and the session disposes — triggering commit and IndexSearcher refresh. `Search<T>()` always reflects the last committed state.
 
-Reactive handlers (`On<T>`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects.
+Rules (`config.Rules.When<T>(filter).Do(...)`) run inline after each write and have full DB access — enabling materialized views, cascading updates, and side effects. `.ModifyQueued(...)` and `.DoQueued(...)` run slow work later, from a queue.
 
 ## The Database
 
@@ -145,10 +145,13 @@ public class LottaDB
     IQueryable<T> Search<T>(string? query = null);               // Lucene
     IQueryable<T> Search<T>(Expression<Func<T, bool>> predicate);// Lucene with filter
 
-    // Reactive handlers
-    IDisposable On<T>(Func<T, TriggerKind, LottaDB, Task> handler);
+    // Rules added at runtime (inline only): db.Rules.When<T>(filter).Do(handler) returns IDisposable
+    LiveRuleSet Rules { get; }
 
-    // Maintain
+    // Queued rules: also db.Rules.StatusAsync(), RetryAsync(rule), DiscardAsync(rule), BackfillAsync(rule)
+    Task<int> DrainAsync(int? max = null, CancellationToken ct = default);
+
+    // Materialize
     Task RebuildIndex(CancellationToken ct = default);
 }
 ```
@@ -196,30 +199,36 @@ opts.Store<Note>(s =>
 });
 ```
 
-## Reactive Handlers (`On<T>`)
+## Rules
 
-Handlers run inline after each save or delete. They have full DB access and can trigger further saves/deletes.
+Rules are like database triggers, except that they never roll back the save (an inline rule's exception goes into the save's `ObjectResult.Errors` and the object stays saved) and they can also queue durable work.
+
+A rule names a type, an optional filter, and one or more actions. `.Do` actions run inline after each save (`When`) or delete (`WhenDeleted`). They have full DB access and can trigger further saves/deletes.
 
 ```csharp
-opts.On<Note>(async (note, kind, db) =>
+opts.Rules.When<Note>().Do(async (note, context, ct) =>
 {
-    if (kind == TriggerKind.Deleted) return;
-    var actor = await db.GetAsync<Actor>(note.AuthorId);
-    await db.SaveAsync(new NoteView
+    var actor = await context.Db.GetAsync<Actor>(note.AuthorId, ct);
+    await context.Db.SaveAsync(new NoteView
     {
         Id = $"nv-{note.NoteId}",
         NoteId = note.NoteId,
         AuthorDisplay = actor?.DisplayName ?? "",
         Content = note.Content,
-    });
+    }, ct);
 });
+opts.Rules.WhenDeleted<Note>().Do((note, context, ct) => context.Db.DeleteAsync<NoteView>($"nv-{note.NoteId}", ct));
 ```
 
-Runtime registration returns a disposable handle:
+Every handler has the shape `(item, context, cancellationToken)`. `RuleContext` carries the database (`Db`) and, for queued rules, the rule's name, the attempt number and an idempotency key.
+
+Inline actions are adapted to the internal handler delegate the built-in index handlers use, stored per type, and run in registration order; saving a derived type runs the rules of its base types too. Built-in handlers are stored apart and run first, for every type in the hierarchy, so inside an inline rule search already reflects the change that triggered it.
+
+Rules added at runtime are inline only and return a disposable handle:
 
 ```csharp
-var handle = db.On<Actor>((actor, kind, db) => { ... });
-handle.Dispose(); // stop receiving notifications
+var handle = db.Rules.When<Actor>().Do((actor, context, ct) => { ... });
+handle.Dispose(); // remove the rule
 ```
 
 ### Cycle detection
@@ -230,19 +239,23 @@ Handlers that produce objects which trigger further handlers are tracked by type
 
 All changes across a handler chain (root save + handler-triggered saves) are aggregated into a single `ObjectResult` via `AsyncLocal`. The root caller receives the complete set of changes and any handler errors.
 
-## Queued Handlers (`OnAsync<T>`)
+## Queued Rules (`.ModifyQueued`, `.DoQueued`)
 
-`On<T>` runs inside the save, under the write lease. `OnAsync<T>` is for work too slow for that: every save sends a small message (type and key only) to a queue per handler, and a pump runs the handlers later, outside the write lease, by priority, retrying failures and setting aside what keeps failing in a poison queue.
+`.Do` runs inside the save, under the write lease. `.ModifyQueued` and `.DoQueued` are for work too slow for that. The verb says what kind of work it is: `.ModifyQueued` changes the object itself, `.DoQueued` does something outside the database.
 
 ```csharp
-opts.OnAsync<Note>("summarize", async (note, kind, db, ct) =>
-{
-    var summary = await model.SummarizeAsync(note.Content, ct);
-    await db.ChangeAsync<Note>(note.NoteId, n => { n.Summary = summary; return n; }, ct);
-}, priority: 10, latest: true);
+opts.Rules.When<Note>(n => Changed(n.Content)).ModifyQueued(Summarize);   // rule "Note/summarize", named after the method
+opts.Rules.When<Note>(n => Changed(n.IsPublished) && n.IsPublished).DoQueued(NotifyFollowers);
 ```
 
-It runs from queue storage, the third Azure Storage primitive beside tables and blobs, which the storage provider supplies. See `OnAsync-Design.md` for the behaviour in full.
+- **One queue per object type.** A save sends one small message to the queue of the object's concrete type: the key, the ETag and the names of the rules the save matched. The object itself is read when the rules run.
+- **A pump per database** runs the rules later, outside the write lease, `MaxConcurrency` objects at a time. For each message it runs the `ModifyQueued` rules, then `MaterializeQueued`, then the `DoQueued` rules.
+- **`Changed(...)`** in a filter compares the save with the version it replaces. An object LottaDB handed out carries the JSON it was loaded with, so nothing extra is stored.
+- **`.ModifyQueued`** hands the handler a copy and writes it back with a conditional write. If the object changed meanwhile, the result is applied to the newer version when the `Changed(...)` inputs are the same, and dropped otherwise.
+- **Failures are per rule.** A rule that throws is retried by itself: the message is replaced in place by one listing only the rules still to do, with their attempt counts. A rule that keeps failing is set aside in the type's poison queue.
+- **All state is in the queues.** There are no rows per rule or per object.
+
+It runs from queue storage, the third Azure Storage primitive beside tables and blobs, which the storage provider supplies. `db.Rules.StatusAsync()`, `RetryAsync`, `DiscardAsync` and `BackfillAsync` operate it by rule name. See `Rules-Design.md` for the behaviour in full, and `Rules-Next.md` for what is planned.
 
 ## Internals
 
@@ -269,7 +282,7 @@ Wraps `Azure.Data.Tables`. Each row stores `_json` (full POCO), `_type` (concret
 
 ### Storage providers
 
-Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)`, which sets the factories together and records `StorageProvider` (an overload without `queues` is for storage that has no queues; `OnAsync<T>` is then not available). A catalog has exactly one provider: a second `UseStorage` call throws, rather than silently replacing some of the first provider's factories. Setting a factory property directly is still allowed as a deliberate override. The Lucene directory factories the providers use are public in `LuceneDirectories` (`Memory`, `FileSystem`, `Azure`), so a `UseLucene` catalog can put its Lucene `Directory` objects in any of those stores.
+Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tables, blobs, queues, directories)`, which sets the factories together and records `StorageProvider` (an overload without `queues` is for storage that has no queues; queued rules are then not available). A catalog has exactly one provider: a second `UseStorage` call throws, rather than silently replacing some of the first provider's factories. Setting a factory property directly is still allowed as a deliberate override. The Lucene directory factories the providers use are public in `LuceneDirectories` (`Memory`, `FileSystem`, `Azure`), so a `UseLucene` catalog can put its Lucene `Directory` objects in any of those stores.
 
 ### Lucene storage (`UseLucene`)
 
@@ -279,11 +292,11 @@ Every `Use…()` provider funnels through `LottaCatalog.UseStorage(provider, tab
 |---|---|
 | `tables/{catalog}` | The catalog's table: a Lucene index with a document per row. |
 | `blobs/{catalog}` | The catalog's blob container: files in a Lucene `Directory`. |
-| `queues/{queue}` | One `OnAsync<T>` handler queue: a file per message in a Lucene `Directory`. |
+| `queues/{queue}` | One object type's rule queue: a file per message in a Lucene `Directory`. |
 | `tables/__registry__`, `queues/__registry__` | Which tables and queues exist. |
 | `{catalog}/{database}/Search` | A database's search index. |
 
-- It works like every other provider: the table and the blobs are the record, and the search index is written by the `On<T>` indexing handlers after the table write. `RebuildSearchIndex` clears the index and builds it again from the table.
+- It works like every other provider: the table and the blobs are the record, and the search index is written by the built-in indexing handlers after the table write. `RebuildSearchIndex` clears the index and builds it again from the table.
 - A table, blob or queue write is durable when it returns. Search index writes are durable when committed (`AutoCommitDelay`).
 - The catalog keeps one client of each kind and disposes them, with their Lucene `Directory` objects, when it is disposed or deleted. With `LuceneDirectories.Memory()` the data lives as long as the catalog does.
 - Two catalogs (or two processes) can open the same folder: the storage clients share it, and the search index has one writer at a time (see *Running Multiple Servers Against One Database* in the README).
@@ -303,13 +316,14 @@ Per-user, per-tenant database instances. Each instance = one table + one Lucene 
 
 ## Construction
 
-DI-neutral. Constructor takes dependencies directly:
+DI-neutral. A catalog takes its storage provider, and a database is opened from it with its configuration:
 
 ```csharp
-var options = new LottaConfiguration();
-options.Store<Actor>();
-options.Store<Note>();
-options.On<Note>(async (note, kind, db) => { ... });
-
-var db = new LottaDB("myapp", tableServiceClient, directory, options);
+var catalog = new LottaCatalog("myapp", c => c.UseSQLite(@"C:\data"));
+var db = await catalog.GetDatabaseAsync("default", options =>
+{
+    options.Store<Actor>();
+    options.Store<Note>();
+    options.Rules.When<Note>().Do(async (note, db, ct) => { ... });
+});
 ```

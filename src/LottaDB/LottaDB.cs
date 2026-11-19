@@ -30,8 +30,15 @@ public partial class LottaDB : IDisposable
     private readonly object _lock = new object();
     internal readonly LottaCatalog _lottaCatalog;
     private readonly string _databaseId;
+    /// <summary>The database's ID within its catalog.</summary>
+    internal string DatabaseId => _databaseId;
     private readonly LottaConfiguration _config;
     private readonly TableStorageAdapter _tableAdapter;
+    /// <summary>
+    /// Deleted objects that queued rules are still to run for, in a partition of their own so that
+    /// no read or query of the database's objects sees them. See <see cref="EnqueueDeletedAsync"/>.
+    /// </summary>
+    private readonly TableStorageAdapter _tombstones;
     private LuceneDirectory _directory;
 
     /// <summary>Returns the underlying Lucene directory (for testing/diagnostics).</summary>
@@ -93,16 +100,20 @@ public partial class LottaDB : IDisposable
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
+    // Rules' inline actions (from the configuration and db.Rules), per type, in registration order.
     private readonly ConcurrentDictionary<Type, ImmutableArray<object>> _handlers = new();
+    // The built-in index handlers (per-type Lucene, JsonDocument, JsonSchema), kept apart from rules:
+    // they run before any rule, so inside an inline rule search already reflects the change, and a
+    // live rule's handle can never remove one.
+    private readonly ConcurrentDictionary<Type, ImmutableArray<object>> _builtInHandlers = new();
     internal readonly ConcurrentDictionary<string, JsonMetadata> _schemas = new();
     private readonly ConcurrentDictionary<string, JsonDocumentMapper> _dynamicMappers = new();
-    // Cached MethodInfo for the generic RunHandlersAsync<T> overload — resolved once to avoid per-call reflection
+    // Cached MethodInfo for RunTypeHandlersAsync<T> — resolved once to avoid per-call reflection
     private static readonly System.Reflection.MethodInfo _runHandlersAsyncMethod =
-        typeof(LottaDB).GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            .First(m => m.Name == nameof(RunHandlersAsync) && m.IsGenericMethod);
+        typeof(LottaDB).GetMethod(nameof(RunTypeHandlersAsync), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
     // Compiled delegate cache: one strongly-typed trampoline per concrete entity type, built once via expression trees.
     // Eliminates both the per-call MakeGenericMethod allocation and the object[] boxing from MethodInfo.Invoke.
-    private static readonly ConcurrentDictionary<Type, Func<LottaDB, object, TriggerKind, List<Exception>, CancellationToken, Task>>
+    private static readonly ConcurrentDictionary<Type, Func<LottaDB, object, TriggerKind, bool, List<Exception>, CancellationToken, Task>>
         _runHandlersAsyncDelegateCache = new();
     // Cycle detection: tracks object keys being processed in the current call chain
     private static readonly AsyncLocal<HashSet<string>> _processing = new();
@@ -115,13 +126,14 @@ public partial class LottaDB : IDisposable
     /// </summary>
     /// <param name="catalog">The owning catalog (provides storage factories, analyzer, embedding generator).</param>
     /// <param name="databaseId">Database ID within the catalog. Used as the partition key and Lucene index subdirectory.</param>
-    /// <param name="config">Per-database configuration (registered types, On&lt;T&gt; handlers).</param>
+    /// <param name="config">Per-database configuration (registered types, rules).</param>
     internal LottaDB(LottaCatalog catalog, string databaseId, LottaConfiguration config)
     {
         _lottaCatalog = catalog;
         _databaseId = databaseId;
         _config = config;
         _tableAdapter = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: databaseId);
+        _tombstones = new TableStorageAdapter(catalog.GetTableServiceClient(), partitionKey: $"{databaseId}~deleted~");
         _directory = catalog.LuceneDirectoryFactory($"{catalog.Name}/{databaseId}/Search");
 
         // Auto-register JsonSchema if not already registered
@@ -271,7 +283,7 @@ public partial class LottaDB : IDisposable
             throw new InvalidOperationException(
                 $"Database '{_databaseId}' was opened read-only (ILottaConfiguration.ReadOnly). Writes are not permitted.");
 
-        // Reentrant call from an On<T> handler chain — the outer lease already covers us.
+        // Reentrant call from an inline handler chain — the outer lease already covers us.
         if (_writerLeaseDepth.Value > 0)
         {
             _writerLeaseDepth.Value++;
@@ -375,7 +387,7 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Scope holding one in-flight write lease. A null database means the lease was reentrant
-    /// (an On&lt;T&gt; handler chain) and the outer scope owns the real lease.
+    /// (an inline handler chain) and the outer scope owns the real lease.
     /// </summary>
     internal readonly struct WriterLease : IDisposable
     {
@@ -452,7 +464,7 @@ public partial class LottaDB : IDisposable
             });
             return Task.CompletedTask;
         });
-        _handlers.AddOrUpdate(typeof(JsonDocument),
+        _builtInHandlers.AddOrUpdate(typeof(JsonDocument),
             _ => ImmutableArray.Create<object>(jsonDocHandler),
             (_, existing) => existing.Add(jsonDocHandler));
 
@@ -489,7 +501,7 @@ public partial class LottaDB : IDisposable
                 ScheduleRefresh();
             }
         });
-        _handlers.AddOrUpdate(typeof(JsonSchema),
+        _builtInHandlers.AddOrUpdate(typeof(JsonSchema),
             _ => ImmutableArray.Create<object>(jsonSchemaHandler),
             (_, existing) => existing.Add(jsonSchemaHandler));
     }
@@ -519,19 +531,19 @@ public partial class LottaDB : IDisposable
                 var etag = entity.GetETag()
                     ?? throw new InvalidOperationException(
                         $"Cannot index {typeof(T).Name} '{key}': entity has no ETag. This is a bug — SetETag should have been called before the Lucene handler.");
-                Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name);
+                Internal.EntityMapper.AddMetadataToLuceneDocument(document, entity.GetType().FullName!, etag, typeof(T).Name, entity.GetSource());
                 return document;
             });
             return Task.CompletedTask;
         });
-        _handlers.AddOrUpdate(typeof(T),
+        _builtInHandlers.AddOrUpdate(typeof(T),
             _ => ImmutableArray.Create<object>(luceneHandler),
             (_, existing) => existing.Add(luceneHandler));
     }
 
     /// <summary>
     /// Rebuild the entire Lucene index from Azure Table Storage.
-    /// Re-indexes all registered types. Does not run On&lt;T&gt; handlers.
+    /// Re-indexes all registered types. Does not run rules.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task RebuildSearchIndex(CancellationToken cancellationToken = default)
@@ -560,7 +572,7 @@ public partial class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Replace the index document for a key — the index write the On&lt;T&gt; indexing handlers use.
+    /// Replace the index document for a key — the index write the built-in indexing handlers use.
     /// The document is built under the index lock; a null document just removes the key.
     /// </summary>
     internal void WriteIndexDocument(string key, Func<Document?> buildDocument)
@@ -606,7 +618,8 @@ public partial class LottaDB : IDisposable
             : rebuildTypeName;
         var rebuildSchema = tableEntity.TryGetValue(Internal.StorageFields.Schema, out var schemaObj) && schemaObj is string schemaStr
             ? schemaStr : schemaFallback;
-        Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema);
+        var producedFrom = tableEntity.TryGetValue(Internal.StorageFields.Source, out var sourceObj) ? sourceObj as string : null;
+        Internal.EntityMapper.AddMetadataToLuceneDocument(document, rebuildTypeName, tableEntity.ETag.ToString(), rebuildSchema, producedFrom);
         return document;
     }
 
@@ -691,7 +704,7 @@ public partial class LottaDB : IDisposable
     /// Save an object. Key extracted from [Key] attribute.
     /// If the object has an ETag (from a previous read), performs a conditional write
     /// that throws <see cref="ConcurrencyException"/> on conflict. Otherwise, performs an unconditional upsert.
-    /// Writes to table storage, then runs On&lt;T&gt; handlers (including Lucene indexing).
+    /// Writes to table storage, then runs inline handlers (Lucene indexing, then inline rules).
     /// </summary>
     /// <param name="entity">The object to save.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -724,6 +737,7 @@ public partial class LottaDB : IDisposable
             string newETag;
             // The JSON this object had when it was last loaded or saved; the write below replaces it.
             var jsonBefore = entity is JsonDocument ? null : entity.GetJson();
+            List<Exception>? updateErrors = null;
 
             if (entity is JsonDocument jsonDoc)
             {
@@ -751,6 +765,12 @@ public partial class LottaDB : IDisposable
             else
             {
                 var meta = GetMeta(entity.GetType());
+                // For rules that ask Changed(...): what this save replaces.
+                await NotePreviousAsync(entity, key, jsonBefore, cancellationToken);
+                // In-save Modify actions change the object before it is written.
+                updateErrors = await RunModifiesAsync(entity, cancellationToken);
+                // For Materialize rules: what the object produces now, so this write records it.
+                await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
 
                 var existingETag = entity.GetETag();
                 if (existingETag != null)
@@ -779,12 +799,15 @@ public partial class LottaDB : IDisposable
             var changes = _chainChanges.Value ??= new List<ObjectChange>();
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
+            if (updateErrors != null)
+                errors.AddRange(updateErrors);
 
             await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Saved, errors, cancellationToken);
 
-            // A save that left the object as it was gives queued handlers nothing new to do.
+            // A save that left the object as it was gives queued rules nothing new to do.
             if (jsonBefore == null || jsonBefore != entity.GetJson())
                 await EnqueueAsync(entity, key, errors, cancellationToken);
+            ForgetPrevious(entity);
 
             if (isRoot)
             {
@@ -800,7 +823,7 @@ public partial class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Delete an object by key. Removes from table storage, then runs On&lt;T&gt; handlers (including Lucene cleanup).
+    /// Delete an object by key. Removes from table storage, then runs inline handlers (Lucene cleanup, then inline rules).
     /// </summary>
     /// <param name="key">The unique key of the object to delete.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -828,6 +851,8 @@ public partial class LottaDB : IDisposable
         using var writerLease = await AcquireWriterAsync(cancellationToken);
         using var keyLock = await AcquireLockAsync(key, cancellationToken);
         {
+            // For Materialize rules: what the object produced, which goes with it.
+            await NoteProducedAsync(entity, key, cancellationToken);
             await _tableAdapter.DeleteAsync(_lottaCatalog.Name, key, cancellationToken);
 
             var change = new ObjectChange { Type = typeof(T), Key = key, Kind = ChangeKind.Deleted, Object = entity };
@@ -837,7 +862,8 @@ public partial class LottaDB : IDisposable
             var errors = _chainErrors.Value ??= new List<Exception>();
             changes.Add(change);
 
-            await RunHandlersAsync(entity, TriggerKind.Deleted, errors, cancellationToken);
+            // By the object's own type, so rules for the types it derives from run too, as in a save.
+            await RunHandlersAsync(entity, entity.GetType(), TriggerKind.Deleted, errors, cancellationToken);
 
             if (isRoot)
             {
@@ -854,7 +880,7 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Delete any object by key, regardless of type. Removes from table storage and Lucene index.
-    /// Runs On&lt;T&gt; handlers if the entity type is registered.
+    /// Runs inline handlers if the entity type is registered.
     /// </summary>
     /// <param name="key">The unique key of the object to delete.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -964,6 +990,16 @@ public partial class LottaDB : IDisposable
             using var keyLock = await AcquireLockAsync(key, cancellationToken);
             {
                 string newETag;
+                // What is kept beside the object stays with it when the change returns a new one.
+                if (!ReferenceEquals(mutated, current))
+                    mutated!.SetSource(current.GetSource());
+                // For rules that ask Changed(...): what this change replaces.
+                if (TracksChanges(mutated!.GetType()))
+                    mutated.SetPrevious(jsonBefore);
+                // In-save Modify actions change the object before it is written.
+                var updateErrors = await RunModifiesAsync(mutated, cancellationToken);
+                // For Materialize rules: what the object produces now, so this write records it.
+                await PrepareMaterializeAsync(mutated, key, current.GetProduced() ?? ObjectMetadata.NothingProduced, cancellationToken);
                 try
                 {
                     newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
@@ -975,6 +1011,9 @@ public partial class LottaDB : IDisposable
 
                 // Annotate the mutated entity so the Lucene handler picks up the ETag
                 Internal.EntityMapper.AnnotateAfterWrite(mutated!, key, newETag);
+                // For rules that ask Changed(...): what this change replaced.
+                if (TracksChanges(mutated!.GetType()))
+                    mutated.SetPrevious(jsonBefore);
 
                 var change = new ObjectChange { Type = mutated!.GetType(), Key = key, Kind = ChangeKind.Saved, Object = mutated };
 
@@ -982,9 +1021,12 @@ public partial class LottaDB : IDisposable
                 var changes = _chainChanges.Value ??= new List<ObjectChange>();
                 var errors = _chainErrors.Value ??= new List<Exception>();
                 changes.Add(change);
+                if (updateErrors != null)
+                    errors.AddRange(updateErrors);
 
-                await RunHandlersAsync(mutated, TriggerKind.Saved, errors, cancellationToken);
+                await RunHandlersAsync(mutated, mutated.GetType(), TriggerKind.Saved, errors, cancellationToken);
                 await EnqueueAsync(mutated, key, errors, cancellationToken);
+                ForgetPrevious(mutated);
 
                 if (isRoot)
                 {
@@ -1608,15 +1650,19 @@ public partial class LottaDB : IDisposable
         return Stopwatch.GetElapsedTime(_writerAcquiredTimestamp).TotalMilliseconds >= max;
     }
 
-    // === On<T> (runtime registration) ===
+    // === Rules added at runtime ===
+
+    private LiveRuleSet? _liveRules;
 
     /// <summary>
-    /// Register a handler at runtime. Returns a disposable — dispose to unregister.
+    /// Rules added to the open database, inline only: <c>db.Rules.When&lt;T&gt;().Do(handler)</c>
+    /// returns a handle, and disposing it removes the rule. Queued rules (<c>.DoQueued</c>, <c>.ModifyQueued</c>) can only be
+    /// added in the configuration (<see cref="ILottaConfiguration.Rules"/>).
     /// </summary>
-    /// <typeparam name="T">The object type to react to.</typeparam>
-    /// <param name="handler">Async handler receiving the object, trigger kind, and DB instance.</param>
-    /// <returns>A disposable handle. Dispose to stop receiving notifications.</returns>
-    public IDisposable On<T>(EntityHandler<T> handler) where T : class, new()
+    public LiveRuleSet Rules => _liveRules ??= new LiveRuleSet(this);
+
+    /// <summary>Adds an inline handler to the open database; disposing the handle removes it.</summary>
+    internal IDisposable AddHandler<T>(EntityHandler<T> handler) where T : class, new()
     {
         _handlers.AddOrUpdate(typeof(T),
             _ => ImmutableArray.Create<object>(handler),
@@ -1899,7 +1945,7 @@ public partial class LottaDB : IDisposable
         return fullPath.StartsWith(dbPrefix) ? fullPath.Substring(dbPrefix.Length) : fullPath;
     }
 
-    // === Maintain ===
+    // === Materialize ===
 
     /// <summary>
     /// Deletes all documents from the Lucene index without touching Table Storage.
@@ -1928,6 +1974,7 @@ public partial class LottaDB : IDisposable
 
         // 1. Delete all rows in this database's partition
         await _tableAdapter.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
+        await _tombstones.ResetPartitionAsync(_lottaCatalog.Name, cancellationToken: cancellationToken);
 
         // 2. Delete all documents from Lucene index
         lock (_lock)
@@ -1961,6 +2008,7 @@ public partial class LottaDB : IDisposable
         using (var writerLease = await AcquireWriterAsync(cancellationToken))
         {
             await _tableAdapter.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
+            await _tombstones.DeletePartitionAsync(_lottaCatalog.Name, cancellationToken);
             lock (_lock)
             {
                 var writer = RequireWriter();
@@ -2035,6 +2083,13 @@ public partial class LottaDB : IDisposable
                     key = meta.GetKey(entity);
                     if (meta.KeyMode == KeyMode.Auto && meta.SetKey != null)
                         meta.SetKey(entity, key);
+                    // For rules that ask Changed(...): what this save replaces.
+                    await NotePreviousAsync(entity, key, entity.GetJson(), cancellationToken);
+                    // In-save Modify actions change the object before it is written.
+                    if (await RunModifiesAsync(entity, cancellationToken) is { } updateErrors)
+                        allErrors.AddRange(updateErrors);
+                    // For Materialize rules: what the object produces now, so this write records it.
+                    await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
                     action = _tableAdapter.CreateUpsertAction(key, entity, meta);
                     entity.SetSchema(entity.GetType().Name);
                 }
@@ -2068,9 +2123,12 @@ public partial class LottaDB : IDisposable
                 }
                 // RunPendingHandlersAsync empties the list.
                 var saved = pendingEntities.Select(p => p.entity).ToList();
-                await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
+                await RunBatchHandlersAsync(pendingEntities, pendingEntityKeys, allChanges, allErrors, cancellationToken);
                 for (var i = 0; i < saved.Count; i++)
+                {
                     await EnqueueAsync(saved[i], pendingEntityKeys[i], allErrors, cancellationToken);
+                    ForgetPrevious(saved[i]);
+                }
                 pendingActions.Clear();
                 pendingKeys.Clear();
                 pendingEntityKeys.Clear();
@@ -2087,7 +2145,7 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Delete all objects matching a predicate. Queries table storage, deletes each match,
-    /// removes from Lucene, and runs On&lt;T&gt; handlers for each deletion.
+    /// removes from Lucene, and runs inline handlers for each deletion.
     /// </summary>
     /// <typeparam name="T">The object type.</typeparam>
     /// <param name="predicate">Filter expression — objects matching this are deleted.</param>
@@ -2104,7 +2162,7 @@ public partial class LottaDB : IDisposable
 
 
     /// <summary>
-    /// Delete multiple objects by entity. Runs On&lt;T&gt; handlers (including Lucene cleanup) for each deletion.
+    /// Delete multiple objects by entity. Runs inline handlers (including Lucene cleanup) for each deletion.
     /// </summary>
     /// <typeparam name="T">The object type.</typeparam>
     /// <param name="entities">The objects to delete.</param>
@@ -2112,13 +2170,23 @@ public partial class LottaDB : IDisposable
     /// <returns>An <see cref="ObjectResult"/> containing all deletions and any handler errors.</returns>
     public async Task<ObjectResult> DeleteManyAsync<T>(IEnumerable<T> entities, CancellationToken cancellationToken = default) where T : class
     {
-        return await DeleteManyAsyncCore(entities.Select(e => GetDeleteTruple(e))
-            .ToAsyncEnumerable(), cancellationToken);
+        return await DeleteManyAsyncCore(Items(), cancellationToken);
+
+        async IAsyncEnumerable<(object?, Type?, string)> Items()
+        {
+            foreach (var entity in entities)
+            {
+                var item = GetDeleteTruple(entity);
+                // For Materialize rules: what the object produced, which goes with it.
+                await NoteProducedAsync(entity, item.Item3, cancellationToken);
+                yield return item;
+            }
+        }
     }
 
     /// <summary>
     /// Delete multiple objects by key in bulk. Table storage writes are batched transactionally
-    /// (auto-flushed at 100 ops or on duplicate key). On&lt;T&gt; handlers (including Lucene cleanup)
+    /// (auto-flushed at 100 ops or on duplicate key). Inline handlers (including Lucene cleanup)
     /// run after each batch commit succeeds.
     /// </summary>
     /// <param name="keys">The keys of the objects to delete.</param>
@@ -2236,9 +2304,10 @@ public partial class LottaDB : IDisposable
         pending.Clear();
     }
 
-    // === On<T> handler engine ===
+    // === Inline handler engine (built-in index handlers and rules' .Do actions) ===
 
-    private async Task RunHandlersAsync<T>(T entity, TriggerKind kind,
+    /// <summary>Runs the built-in handlers, or the rules, registered for exactly <typeparamref name="T"/>.</summary>
+    private async Task RunTypeHandlersAsync<T>(T entity, TriggerKind kind, bool builtIn,
         List<Exception> errors, CancellationToken cancellationToken) where T : class, new()
     {
         // Cycle detection: if this type is already being processed in the current chain, stop.
@@ -2250,7 +2319,7 @@ public partial class LottaDB : IDisposable
 
         try
         {
-            if (!_handlers.TryGetValue(typeof(T), out var handlers)) return;
+            if (!(builtIn ? _builtInHandlers : _handlers).TryGetValue(typeof(T), out var handlers)) return;
 
             foreach (var handler in handlers)
             {
@@ -2275,47 +2344,62 @@ public partial class LottaDB : IDisposable
 
     /// <summary>
     /// Run handlers for an entity whose type is only known at runtime.
-    /// Walks the type hierarchy so handlers registered for base types also fire.
-    /// For example, saving a BlobPhoto fires On&lt;BlobPhoto&gt;, On&lt;BlobFile&gt;, etc.
+    /// Walks the type hierarchy so handlers registered for base types also fire: saving a BlobPhoto
+    /// runs the handlers for BlobPhoto, then for BlobFile. The walk is made twice, first for the
+    /// built-in index handlers of every type in the hierarchy and then for the rules, so no rule
+    /// runs before the index is written.
     /// </summary>
+    /// <param name="builtInOnly">True to write the index and run no rule: for a row written again with its object unchanged.</param>
     private async Task RunHandlersAsync(object entity, Type entityType, TriggerKind kind,
-        List<Exception> errors, CancellationToken cancellationToken)
+        List<Exception> errors, CancellationToken cancellationToken, bool builtInOnly = false)
     {
-        // Walk up the type hierarchy: BlobPhoto → BlobFile → object
-        for (var type = entityType; type != null && type != typeof(object); type = type.BaseType)
+        await WalkAsync(builtIn: true);
+        if (!builtInOnly)
+            await WalkAsync(builtIn: false);
+        // After the rules that run inside the delete, as a save queues its rules after its own.
+        if (!builtInOnly && kind == TriggerKind.Deleted)
+            await EnqueueDeletedAsync(entity, errors, cancellationToken);
+
+        async Task WalkAsync(bool builtIn)
         {
-            if (!_handlers.TryGetValue(type, out var handlers)) continue;
-
-            // For types without new() constraint (e.g. JsonDocument), invoke handlers directly
-            if (type.GetConstructor(Type.EmptyTypes) == null)
+            var table = builtIn ? _builtInHandlers : _handlers;
+            // Walk up the type hierarchy: BlobPhoto → BlobFile → object
+            for (var type = entityType; type != null && type != typeof(object); type = type.BaseType)
             {
-                foreach (var handler in handlers)
+                if (!table.TryGetValue(type, out var handlers)) continue;
+
+                // For types without new() constraint (e.g. JsonDocument), invoke handlers directly
+                if (type.GetConstructor(Type.EmptyTypes) == null)
                 {
-                    // Use dynamic dispatch to invoke the correctly-typed delegate
-                    try { await ((dynamic)handler)((dynamic)entity, kind, this, cancellationToken); }
-                    catch (Exception ex) { errors.Add(ex); }
+                    foreach (var handler in handlers)
+                    {
+                        // Use dynamic dispatch to invoke the correctly-typed delegate
+                        try { await ((dynamic)handler)((dynamic)entity, kind, this, cancellationToken); }
+                        catch (Exception ex) { errors.Add(ex); }
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            var trampoline = _runHandlersAsyncDelegateCache.GetOrAdd(type, static (t, m) =>
-            {
-                // Build: (LottaDB db, object entity, TriggerKind kind, List<Exception> errors, CancellationToken ct)
-                //            => db.RunHandlersAsync<T>((T)entity, kind, errors, ct)
-                var dbParam = Expression.Parameter(typeof(LottaDB), "db");
-                var entityParam = Expression.Parameter(typeof(object), "entity");
-                var kindParam = Expression.Parameter(typeof(TriggerKind), "kind");
-                var errorsParam = Expression.Parameter(typeof(List<Exception>), "errors");
-                var ctParam = Expression.Parameter(typeof(CancellationToken), "ct");
-                var body = Expression.Call(
-                    dbParam,
-                    m.MakeGenericMethod(t),
-                    Expression.Convert(entityParam, t),
-                    kindParam, errorsParam, ctParam);
-                return Expression.Lambda<Func<LottaDB, object, TriggerKind, List<Exception>, CancellationToken, Task>>(
-                    body, dbParam, entityParam, kindParam, errorsParam, ctParam).Compile();
-            }, _runHandlersAsyncMethod);
-            await trampoline(this, entity, kind, errors, cancellationToken);
+                var trampoline = _runHandlersAsyncDelegateCache.GetOrAdd(type, static (t, m) =>
+                {
+                    // Build: (LottaDB db, object entity, TriggerKind kind, bool builtIn, List<Exception> errors, CancellationToken ct)
+                    //            => db.RunTypeHandlersAsync<T>((T)entity, kind, builtIn, errors, ct)
+                    var dbParam = Expression.Parameter(typeof(LottaDB), "db");
+                    var entityParam = Expression.Parameter(typeof(object), "entity");
+                    var kindParam = Expression.Parameter(typeof(TriggerKind), "kind");
+                    var builtInParam = Expression.Parameter(typeof(bool), "builtIn");
+                    var errorsParam = Expression.Parameter(typeof(List<Exception>), "errors");
+                    var ctParam = Expression.Parameter(typeof(CancellationToken), "ct");
+                    var body = Expression.Call(
+                        dbParam,
+                        m.MakeGenericMethod(t),
+                        Expression.Convert(entityParam, t),
+                        kindParam, builtInParam, errorsParam, ctParam);
+                    return Expression.Lambda<Func<LottaDB, object, TriggerKind, bool, List<Exception>, CancellationToken, Task>>(
+                        body, dbParam, entityParam, kindParam, builtInParam, errorsParam, ctParam).Compile();
+                }, _runHandlersAsyncMethod);
+                await trampoline(this, entity, kind, builtIn, errors, cancellationToken);
+            }
         }
     }
 

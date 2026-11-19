@@ -301,8 +301,8 @@ public class LuceneStorageTests
         using var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root)));
         var db = await OpenAsync(catalog, c =>
         {
-            c.AsyncHandlers = AsyncHandlerMode.Manual;
-            c.OnAsync<Actor>("greet", (_, _, _, _) => Task.CompletedTask);
+            c.QueueMode = QueueMode.Manual;
+            c.Rules.When<Actor>().DoQueued("greet", (_, _, _) => Task.CompletedTask);
         });
         Assert.Empty((await db.SaveAsync(new Actor { Username = "gina", DisplayName = "Gina" }, ct)).Errors);
         await db.UploadBlobAsync("a.txt", "hello", cancellationToken: ct);
@@ -310,8 +310,11 @@ public class LuceneStorageTests
 
         Assert.NotEmpty(FilesIn(root, "tables", name));
         Assert.NotEmpty(FilesIn(root, "blobs", name));
-        // The queue's name is a hash of the catalog and the database, then the handler's name.
-        var queue = Assert.Single(System.IO.Directory.GetDirectories(LuceneDirectories.ExtendedPath(Path.Combine(root, "queues")), "*-greet"));
+        // The queue's name is a hash of the catalog and the database, then the object type's name
+        // and a hash of its full name. Beside it is the queue its failed work is set aside in.
+        var queue = Assert.Single(
+            System.IO.Directory.GetDirectories(LuceneDirectories.ExtendedPath(Path.Combine(root, "queues")), "*-actor-*"),
+            folder => !folder.EndsWith("-poison", StringComparison.Ordinal));
         var message = Assert.Single(System.IO.Directory.GetFiles(queue));   // the message for the save
         Assert.True(message.Length - @"\\?\".Length > 260, $"the test folder is not deep enough to show anything ({message.Length})");
         Assert.NotEmpty(FilesIn(root, name, "db", "Search"));
@@ -326,8 +329,8 @@ public class LuceneStorageTests
         var ran = new List<string>();
         void Configure(ILottaConfiguration c)
         {
-            c.AsyncHandlers = AsyncHandlerMode.Manual;
-            c.OnAsync<Actor>("greet", (actor, _, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
+            c.QueueMode = QueueMode.Manual;
+            c.Rules.When<Actor>().DoQueued("greet", (actor, _, _) => { ran.Add(actor.Username); return Task.CompletedTask; });
         }
 
         using (var catalog = new LottaCatalog(name, c => c.UseLucene(LuceneDirectories.FileSystem(root))))

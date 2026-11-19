@@ -45,5 +45,9 @@ public class Azure_StoreRegistrationTests : StoreRegistrationTestBase { public A
 public class Azure_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Azure_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Azure_VectorSearchTests : VectorSearchTestBase { public Azure_VectorSearchTests() : base(Tests.Configure) { } }
 public class Azure_WriteLockTests : WriteLockTestBase { public Azure_WriteLockTests() : base(Tests.Configure) { } }
-public class Azure_AsyncHandlerTests : AsyncHandlerTestBase { public Azure_AsyncHandlerTests() : base(Tests.Configure) { } }
-public class Azure_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public Azure_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
+public class Azure_QueuedRuleTests : QueuedRuleTestBase { public Azure_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Azure_MaterializeTests : MaterializeTestBase { public Azure_MaterializeTests() : base(Tests.Configure) { } }
+public class Azure_ModifyRuleTests : ModifyRuleTestBase { public Azure_ModifyRuleTests() : base(Tests.Configure) { } }
+public class Azure_ScheduleTests : ScheduleTestBase { public Azure_ScheduleTests() : base(Tests.Configure) { } }
+public class Azure_TimedRuleTests : TimedRuleTestBase { public Azure_TimedRuleTests() : base(Tests.Configure) { } }
+public class Azure_QueuedRulePumpTests : QueuedRulePumpTestBase { public Azure_QueuedRulePumpTests() : base(Tests.Configure) { } }

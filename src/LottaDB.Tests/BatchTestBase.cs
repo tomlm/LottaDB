@@ -97,10 +97,9 @@ public abstract class BatchTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, cancellationToken) =>
+            opts.Rules.When<Note>().Do(async (note, context, cancellationToken) =>
             {
-                if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new NoteView
+                await context.Db.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,
@@ -136,10 +135,9 @@ public abstract class BatchTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, cancellationToken) =>
+            opts.Rules.When<Note>().Do(async (note, context, cancellationToken) =>
             {
-                if (kind == TriggerKind.Deleted) return;
-                await db.SaveAsync(new NoteView
+                await context.Db.SaveAsync(new NoteView
                 {
                     Id = $"nv-{note.NoteId}",
                     NoteId = note.NoteId,
@@ -213,10 +211,9 @@ public abstract class BatchTestBase : LottaTestBase
         int deleteCount = 0;
         var db = await CreateDbAsync(opts =>
         {
-            opts.On<Actor>(async (actor, kind, db, cancellationToken) =>
+            opts.Rules.WhenDeleted<Actor>().Do(async (actor, context, cancellationToken) =>
             {
-                if (kind == TriggerKind.Deleted)
-                    Interlocked.Increment(ref deleteCount);
+                Interlocked.Increment(ref deleteCount);
             });
         }, cancellationToken: ct);
 

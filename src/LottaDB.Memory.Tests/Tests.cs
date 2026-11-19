@@ -43,5 +43,9 @@ public class Memory_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class Memory_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public Memory_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class Memory_VectorSearchTests : VectorSearchTestBase { public Memory_VectorSearchTests() : base(Tests.Configure) { } }
 public class Memory_WriteLockTests : WriteLockTestBase { public Memory_WriteLockTests() : base(Tests.Configure) { } }
-public class Memory_AsyncHandlerTests : AsyncHandlerTestBase { public Memory_AsyncHandlerTests() : base(Tests.Configure) { } }
-public class Memory_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public Memory_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
+public class Memory_QueuedRuleTests : QueuedRuleTestBase { public Memory_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Memory_MaterializeTests : MaterializeTestBase { public Memory_MaterializeTests() : base(Tests.Configure) { } }
+public class Memory_ModifyRuleTests : ModifyRuleTestBase { public Memory_ModifyRuleTests() : base(Tests.Configure) { } }
+public class Memory_ScheduleTests : ScheduleTestBase { public Memory_ScheduleTests() : base(Tests.Configure) { } }
+public class Memory_TimedRuleTests : TimedRuleTestBase { public Memory_TimedRuleTests() : base(Tests.Configure) { } }
+public class Memory_QueuedRulePumpTests : QueuedRulePumpTestBase { public Memory_QueuedRulePumpTests() : base(Tests.Configure) { } }

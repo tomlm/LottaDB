@@ -26,6 +26,19 @@ internal static class StorageFields
     /// <summary>The schema name. POCO = type name, POJO = JsonSchema name.</summary>
     public const string Schema = "Schema";
 
+    /// <summary>
+    /// On an object a <c>Materialize</c> rule produced: the rule and the key of the object it was
+    /// produced from, <c>Note/note-view n42</c>. Absent on every other object.
+    /// </summary>
+    public const string Source = "_source";
+
+    /// <summary>
+    /// On an object that <c>Materialize</c> rules produce other objects from: the keys of those
+    /// objects, per rule, as JSON (<c>{"Note/tags":["n1#a","n1#b"]}</c>). Split across
+    /// <c>_produced</c>, <c>_produced2</c>, ... when long. Absent on every other object.
+    /// </summary>
+    public const string Produced = "_produced";
+
     // ── Lucene fields ──
 
     /// <summary>Composite free-text search field built from all analyzed string properties.</summary>

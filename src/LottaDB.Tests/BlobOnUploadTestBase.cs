@@ -273,11 +273,11 @@ public abstract class BlobOnUploadTestBase : LottaTestBase
         {
             config.OnUpload();
 
-            config.On<BlobFile>(async (file, kind, db, _) =>
+            config.Rules.When<BlobFile>().Do(async (file, context, _) =>
             {
                 firedTypes.Add("BlobFile");
             });
-            config.On<BlobPhoto>(async (photo, kind, db, _) =>
+            config.Rules.When<BlobPhoto>().Do(async (photo, context, _) =>
             {
                 firedTypes.Add("BlobPhoto");
             });
@@ -301,7 +301,7 @@ public abstract class BlobOnUploadTestBase : LottaTestBase
         {
             config.OnUpload();
 
-            config.On<BlobFile>(async (file, kind, db, _) =>
+            config.Rules.When<BlobFile>().Do(async (file, context, _) =>
             {
                 received = file;
             });
@@ -323,7 +323,7 @@ public abstract class BlobOnUploadTestBase : LottaTestBase
         {
             config.OnUpload();
 
-            config.On<BlobMusic>(async (music, kind, db, _) =>
+            config.Rules.When<BlobMusic>().Do(async (music, context, _) =>
             {
                 fired = true;
             });

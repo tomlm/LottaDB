@@ -9,16 +9,14 @@ public abstract class CascadingViewTestBase : LottaTestBase
     {
         return await CreateDbAsync(opts =>
         {
-            opts.On<Note>(async (note, kind, db, _) =>
+            opts.Rules.WhenDeleted<Note>().Do(async (note, context, _) =>
+                await context.Db.DeleteAsync<NoteView>($"nv-{note.NoteId}"));
+
+            opts.Rules.When<Note>().Do(async (note, context, _) =>
             {
-                if (kind == TriggerKind.Deleted)
-                {
-                    await db.DeleteAsync<NoteView>($"nv-{note.NoteId}");
-                    return;
-                }
-                var actor = await db.GetAsync<Actor>(note.AuthorId);
+                var actor = await context.Db.GetAsync<Actor>(note.AuthorId);
                 if (actor == null) return;
-                await db.SaveAsync(new NoteView
+                await context.Db.SaveAsync(new NoteView
                 {
                     Domain = note.Domain,
                     Id = $"nv-{note.NoteId}",
@@ -31,21 +29,24 @@ public abstract class CascadingViewTestBase : LottaTestBase
                 });
             });
 
-            opts.On<Actor>(async (actor, kind, db, _) =>
+            opts.Rules.WhenDeleted<Actor>().Do(async (actor, context, _) =>
             {
-                var affected = db.Search<NoteView>()
+                var affected = context.Db.Search<NoteView>()
+                    .Where(v => v.AuthorUsername == actor.Username).ToList();
+                foreach (var view in affected)
+                    await context.Db.DeleteAsync<NoteView>(view.Id);
+            });
+
+            opts.Rules.When<Actor>().Do(async (actor, context, _) =>
+            {
+                var affected = context.Db.Search<NoteView>()
                     .Where(v => v.AuthorUsername == actor.Username).ToList();
                 foreach (var view in affected)
                 {
-                    if (kind == TriggerKind.Deleted)
-                    {
-                        await db.DeleteAsync<NoteView>(view.Id);
-                        continue;
-                    }
                     var noteKey = view.NoteId;
-                    var note = await db.GetAsync<Note>(noteKey);
+                    var note = await context.Db.GetAsync<Note>(noteKey);
                     if (note == null) continue;
-                    await db.SaveAsync(new NoteView
+                    await context.Db.SaveAsync(new NoteView
                     {
                         Domain = note.Domain,
                         Id = view.Id,
@@ -58,14 +59,12 @@ public abstract class CascadingViewTestBase : LottaTestBase
                 }
             });
 
-            opts.On<NoteView>(async (nv, kind, db, _) =>
+            opts.Rules.WhenDeleted<NoteView>().Do(async (nv, context, _) =>
+                await context.Db.DeleteAsync<FeedEntry>($"fe-{nv.Id}"));
+
+            opts.Rules.When<NoteView>().Do(async (nv, context, _) =>
             {
-                if (kind == TriggerKind.Deleted)
-                {
-                    await db.DeleteAsync<FeedEntry>($"fe-{nv.Id}");
-                    return;
-                }
-                await db.SaveAsync(new FeedEntry
+                await context.Db.SaveAsync(new FeedEntry
                 {
                     Domain = nv.Domain,
                     Id = $"fe-{nv.Id}",

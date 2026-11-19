@@ -24,6 +24,35 @@ public class ObjectMetadata
 
     /// <summary>The matched or assigned schema name for JSON documents.</summary>
     public string? Schema { get; set; }
+
+    /// <summary>
+    /// During a save of a type that has <see cref="Rule.Changed"/> rules: the JSON of the version
+    /// the save replaces. Null for a new object, and outside a save.
+    /// </summary>
+    internal string? PreviousJson { get; set; }
+
+    /// <summary><see cref="PreviousJson"/> as an object, made the first time a rule asks.</summary>
+    internal object? Previous { get; set; }
+
+    /// <summary>
+    /// On an object a <c>Materialize</c> rule produced: the rule and the key of the object it was
+    /// produced from (<c>Note/note-view n42</c>). Stored beside the object, not in it.
+    /// </summary>
+    internal string? Source { get; set; }
+
+    /// <summary>
+    /// On an object that <c>Materialize</c> rules produce other objects from: the keys of those
+    /// objects, per rule, as its stored row lists them. Null when not known (the object was not
+    /// read from its row); <see cref="NothingProduced"/> when the row lists none. Never changed
+    /// in place.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string[]>? Produced { get; set; }
+
+    /// <summary>During a save: what the object's <c>Materialize</c> rules are to write once its row is written, per rule.</summary>
+    internal Dictionary<string, LottaDB.PendingViews>? PendingMaterialize { get; set; }
+
+    /// <summary>The row lists nothing produced.</summary>
+    internal static readonly IReadOnlyDictionary<string, string[]> NothingProduced = new Dictionary<string, string[]>();
 }
 
 /// <summary>
@@ -108,5 +137,72 @@ public static class ObjectExtensions
     public static string? GetSchema<T>(this T obj) where T : class
     {
         return _table.TryGetValue(obj, out var meta) ? meta.Schema : null;
+    }
+
+    /// <summary>Marks an object as produced by a <c>Materialize</c> rule from one source object; null for none.</summary>
+    internal static void SetSource(this object obj, string? source)
+    {
+        if (source == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).Source = source;
+    }
+
+    /// <summary>The rule and source object that produced this object (<c>Note/note-view n42</c>); null when no rule did.</summary>
+    internal static string? GetSource(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.Source : null;
+
+    /// <summary>Notes the keys of the objects made from this one, per rule, as its row lists them (or is about to).</summary>
+    internal static void SetProduced(this object obj, IReadOnlyDictionary<string, string[]>? produced)
+    {
+        if (produced == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).Produced = produced;
+    }
+
+    /// <summary>The keys of the objects made from this one, per rule; null when not known.</summary>
+    internal static IReadOnlyDictionary<string, string[]>? GetProduced(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.Produced : null;
+
+    internal static void SetPendingMaterialize(this object obj, Dictionary<string, LottaDB.PendingViews>? pending)
+    {
+        if (pending == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).PendingMaterialize = pending;
+    }
+
+    internal static Dictionary<string, LottaDB.PendingViews>? GetPendingMaterialize(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.PendingMaterialize : null;
+
+    /// <summary>
+    /// Notes, for the length of a save, the JSON of the version the save replaces (null for a new
+    /// object), so that <see cref="Rule.Changed"/> can compare the two.
+    /// </summary>
+    internal static void SetPrevious(this object obj, string? json)
+    {
+        // Nothing to forget on an object nothing was noted for.
+        if (json == null && !_table.TryGetValue(obj, out _))
+            return;
+        var meta = _table.GetOrCreateValue(obj);
+        meta.PreviousJson = json;
+        meta.Previous = null;
+    }
+
+    /// <summary>The version the save in progress replaces, as an object of the same type; null when there is none.</summary>
+    internal static object? GetPrevious(this object obj)
+    {
+        if (!_table.TryGetValue(obj, out var meta) || meta.PreviousJson == null)
+            return null;
+        if (meta.Previous == null)
+        {
+            try
+            {
+                meta.Previous = System.Text.Json.JsonSerializer.Deserialize(meta.PreviousJson, obj.GetType());
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;   // stored as something this type cannot read: nothing to compare with
+            }
+        }
+        return meta.Previous;
     }
 }

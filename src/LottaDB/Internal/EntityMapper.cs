@@ -22,6 +22,10 @@ internal static class EntityMapper
         var entity = new TableEntity(partitionKey, TableStorageAdapter.EncodeKey(key));
         entity[StorageFields.Type] = obj.GetType().FullName!;
         entity[StorageFields.Schema] = obj.GetType().Name;
+        if (obj.GetSource() is { } source)
+            entity[StorageFields.Source] = source;
+        if (obj.GetProduced() is { Count: > 0 } produced)
+            SetProduced(entity, produced);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
         obj.SetJson(Encoding.UTF8.GetString(bytes));
@@ -67,6 +71,28 @@ internal static class EntityMapper
         return entity;
     }
 
+    /// <summary>Writes the keys an object's rules produced as JSON, in as many columns as its length takes.</summary>
+    private static void SetProduced(TableEntity entity, IReadOnlyDictionary<string, string[]> produced)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(produced);
+        var column = 1;
+        for (var offset = 0; offset < bytes.Length; offset += TableEntityExtensions.MaxPropertySize, column++)
+        {
+            var length = Math.Min(TableEntityExtensions.MaxPropertySize, bytes.Length - offset);
+            entity[column == 1 ? StorageFields.Produced : $"{StorageFields.Produced}{column}"] = bytes.AsSpan(offset, length).ToArray();
+        }
+    }
+
+    /// <summary>The keys a row lists as produced from its object, per rule; <see cref="ObjectMetadata.NothingProduced"/> when it lists none.</summary>
+    private static IReadOnlyDictionary<string, string[]> GetProduced(TableEntity entity)
+    {
+        if (!entity.TryGetValue(StorageFields.Produced, out var first) || first is not byte[] bytes)
+            return ObjectMetadata.NothingProduced;
+        for (var column = 2; entity.TryGetValue($"{StorageFields.Produced}{column}", out var more) && more is byte[] chunk; column++)
+            bytes = [.. bytes, .. chunk];
+        return JsonSerializer.Deserialize<Dictionary<string, string[]>>(bytes) ?? ObjectMetadata.NothingProduced;
+    }
+
     // ── From Table Storage ──
 
     /// <summary>
@@ -103,6 +129,10 @@ internal static class EntityMapper
                 obj.SetKey(key);
                 obj.SetETag(etag);
                 obj.SetSchema(schema ?? concreteType.Name);
+                if (entity.TryGetValue(StorageFields.Source, out var source) && source is string producedFrom)
+                    obj.SetSource(producedFrom);
+                // Read from its row, so what it produced is known, even when that is nothing.
+                obj.SetProduced(GetProduced(entity));
             }
             return obj;
         }
@@ -164,6 +194,7 @@ internal static class EntityMapper
         if (etag != null) obj.SetETag(etag);
         if (keyValue != null) obj.SetKey(keyValue);
         obj.SetSchema(schema ?? obj.GetType().Name);
+        obj.SetSource(source.Get(StorageFields.Source));
         if (obj is BlobFile bf && db != null) bf.Database = db;
         return obj;
     }
@@ -190,6 +221,7 @@ internal static class EntityMapper
         if (keyValue != null) obj.SetKey(keyValue);
         var schema = source.Get(StorageFields.Schema);
         obj.SetSchema(schema ?? obj.GetType().Name);
+        obj.SetSource(source.Get(StorageFields.Source));
         if (obj is BlobFile bf && db != null) bf.Database = db;
         return obj;
     }
@@ -218,10 +250,14 @@ internal static class EntityMapper
     }
 
     /// <summary>
-    /// Add standard metadata fields to a Lucene Document (Type, ETag, Schema).
+    /// Add standard metadata fields to a Lucene Document (Type, ETag, Schema), and for an object
+    /// a <c>Materialize</c> rule produced, what it was produced from.
     /// </summary>
-    public static void AddMetadataToLuceneDocument(Document document, string typeName, string etag, string schema)
+    public static void AddMetadataToLuceneDocument(Document document, string typeName, string etag, string schema, string? source = null)
     {
+        // Indexed as one term, so everything a source owns is found with one query.
+        if (source != null)
+            document.Add(new StringField(StorageFields.Source, source, Field.Store.YES));
         // Only add if not already set (JsonDocumentMapper sets these in ToDocument)
         if (document.Get(StorageFields.Type) == null)
             document.Add(new StringField(StorageFields.Type, typeName, Field.Store.YES));

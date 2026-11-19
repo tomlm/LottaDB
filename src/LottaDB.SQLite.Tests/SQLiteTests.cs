@@ -44,5 +44,9 @@ public class SQLite_StoreRegistrationTests : StoreRegistrationTestBase { public 
 public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public SQLite_ToAsyncEnumerableTests() : base(Tests.Configure) { } }
 public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Tests.Configure) { } }
 public class SQLite_WriteLockTests : WriteLockTestBase { public SQLite_WriteLockTests() : base(Tests.Configure) { } }
-public class SQLite_AsyncHandlerTests : AsyncHandlerTestBase { public SQLite_AsyncHandlerTests() : base(Tests.Configure) { } }
-public class SQLite_AsyncHandlerPumpTests : AsyncHandlerPumpTestBase { public SQLite_AsyncHandlerPumpTests() : base(Tests.Configure) { } }
+public class SQLite_QueuedRuleTests : QueuedRuleTestBase { public SQLite_QueuedRuleTests() : base(Tests.Configure) { } }
+public class SQLite_MaterializeTests : MaterializeTestBase { public SQLite_MaterializeTests() : base(Tests.Configure) { } }
+public class SQLite_ModifyRuleTests : ModifyRuleTestBase { public SQLite_ModifyRuleTests() : base(Tests.Configure) { } }
+public class SQLite_ScheduleTests : ScheduleTestBase { public SQLite_ScheduleTests() : base(Tests.Configure) { } }
+public class SQLite_TimedRuleTests : TimedRuleTestBase { public SQLite_TimedRuleTests() : base(Tests.Configure) { } }
+public class SQLite_QueuedRulePumpTests : QueuedRulePumpTestBase { public SQLite_QueuedRulePumpTests() : base(Tests.Configure) { } }

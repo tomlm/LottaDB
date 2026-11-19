@@ -225,7 +225,7 @@ public abstract class ChangeAsyncTestBase : LottaTestBase
 
         var handlerCalls = new List<string>();
         var handlerLock = new object();
-        using var handle = db.On<Actor>((a, _, _, _) =>
+        using var handle = db.Rules.When<Actor>().Do((a, _, _) =>
         {
             if (a.Username == username)
                 lock (handlerLock) handlerCalls.Add(a.DisplayName);
