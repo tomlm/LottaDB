@@ -224,9 +224,9 @@ config.Rules.Every("0 2 * * *", TimeZoneInfo.FindSystemTimeZoneById("Pacific Sta
 2. **Queued `Materialize` rules.**
 3. **`Then` rules.**
 
-When a rule saves the object its run is for (an `Modify` write-back, for one), the run reads the object again and carries on, so the later phases run on the updated object, not a stale one. That save queues neither the rule that made it nor the rules the run has yet to do; it does queue the ones that already ran, if it matches them.
+When a rule saves the object its run is for (a `Modify` write-back, for one), the run reads the object again and carries on, so the later phases run on the updated object, not a stale one. That save queues neither the rule that made it nor the rules the run has yet to do; it does queue the ones that already ran, if it matches them.
 
-The first draft stopped the run after an `Modify` wrote, and let the write's own message do the rest. Carrying on is simpler: no second message, and no marker in it for the rule to skip.
+The first draft stopped the run after a `Modify` wrote, and let the write's own message do the rest. Carrying on is simpler: no second message, and no marker in it for the rule to skip.
 
 ### Failures, one rule at a time
 

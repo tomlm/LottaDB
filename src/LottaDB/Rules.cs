@@ -44,15 +44,16 @@ public sealed class RuleContext
     /// <summary>The database the rule runs on, to query, save or delete anything.</summary>
     public LottaDB Db { get; }
 
-    /// <summary>The rule's name, such as <c>summarize</c>; empty for an inline <c>Do</c>, which has none.</summary>
+    /// <summary>The rule's name, such as <c>summarize</c>; empty for an in-save <c>Do</c> or <c>Modify</c>, which have none.</summary>
     public string Rule { get; }
 
-    /// <summary>1 on the first run, 2 on the first retry, and so on. Always 1 for <c>Do</c>.</summary>
+    /// <summary>1 on the first run, 2 on the first retry, and so on. Always 1 for an in-save <c>Do</c> or <c>Modify</c>.</summary>
     public int Attempt { get; }
 
     /// <summary>
     /// A key made from the object's type, key and ETag at the save that caused the run, and the
-    /// rule's name. It is the same on every retry of that work, so an outside service given it can
+    /// rule's name. For a delete of an object that had no ETag, an id made in the delete takes the
+    /// ETag's place. It is the same on every retry of that work, so an outside service given it can
     /// drop duplicates.
     /// </summary>
     public string IdempotencyKey => _idempotencyKey ??= MakeIdempotencyKey();
@@ -177,8 +178,9 @@ public sealed class RuleSet
 
     /// <summary>
     /// Start a rule for deletes of <typeparamref name="T"/> (and of types derived from it). Give it
-    /// an action with <c>.Do(handler)</c>, which runs inside the delete and is given the object as
-    /// it was. A rule with no action makes opening the database throw.
+    /// an action with <c>.Do(handler)</c>, which runs inside the delete, or <c>.DoQueued(handler)</c>,
+    /// which runs later, from the queue. Both are given the object as it was. A rule with no action
+    /// makes opening the database throw.
     /// </summary>
     /// <typeparam name="T">The object type to react to.</typeparam>
     /// <param name="filter">Which deletes the rule is for, looking at the deleted object; null for all.</param>
@@ -812,8 +814,8 @@ public sealed class DelayedRuleBuilder<T> where T : class, new()
 
 /// <summary>
 /// A rule for deletes of <typeparamref name="T"/> (and of types derived from it), made by
-/// <see cref="RuleSet.WhenDeleted{T}"/>. Give it an action with <see cref="Do"/>; a
-/// rule with no action makes opening the database throw.
+/// <see cref="RuleSet.WhenDeleted{T}"/>. Give it an action with <c>Do</c> (inside the delete) or
+/// <c>DoQueued</c> (later, from the queue); a rule with no action makes opening the database throw.
 /// </summary>
 /// <typeparam name="T">The object type the rule is for.</typeparam>
 public sealed class DeletedRuleBuilder<T> where T : class, new()
@@ -1037,7 +1039,7 @@ internal sealed class QueuedRule
     /// </summary>
     public Func<LottaDB, System.Collections.IEnumerable>? FindIndexed { get; init; }
 
-    /// <summary>The values named by <c>Changed(...)</c> in the filter: an <c>Modify</c> rule's inputs.</summary>
+    /// <summary>The values named by <c>Changed(...)</c> in the filter: a <c>Modify</c> rule's inputs.</summary>
     public Func<object, object?>[] Inputs { get; init; } = [];
 
     /// <summary>Whether the filter uses <c>Changed(...)</c>.</summary>

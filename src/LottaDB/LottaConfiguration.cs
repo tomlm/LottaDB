@@ -128,8 +128,8 @@ public class LottaConfiguration : ILottaConfiguration
         {
             var name = rule.ObjectType.Name;
             throw new InvalidOperationException(rule.Deleted
-                ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler)."
-                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .DoQueued(handler), .Modify(handler), .ModifyQueued(handler) or .Materialize(projection).");
+                ? $"A rule for deletes of {name} has no action: follow Rules.WhenDeleted<{name}>(...) with .Do(handler) or .DoQueued(handler)."
+                : $"A rule for saves of {name} has no action: follow Rules.When<{name}>(...) with .Do(handler), .DoQueued(handler), .Modify(handler), .ModifyQueued(handler), .Materialize(projection) or .MaterializeQueued(projection).");
         }
     }
 

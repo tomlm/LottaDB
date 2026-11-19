@@ -68,6 +68,16 @@ internal sealed class RuleMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Tombstone { get; set; }
 
+    /// <summary>
+    /// For the rules of a delete: an id made once, in the delete, and kept by every message and
+    /// set-aside record that comes of it. It marks the message as one for the rules of a delete,
+    /// and stands in for the ETag in <see cref="RuleContext.IdempotencyKey"/> when the deleted
+    /// object had none. Null for the rules of a save.
+    /// </summary>
+    [JsonPropertyName("deleted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Deleted { get; set; }
+
     /// <summary>How many runs of the rule have failed.</summary>
     public int AttemptsOf(string rule) => Attempts != null && Attempts.TryGetValue(rule, out var count) ? count : 0;
 
@@ -129,6 +139,11 @@ internal sealed class PoisonRecord
     [JsonPropertyName("tombstone")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Tombstone { get; set; }
+
+    /// <summary>For a rule of a delete: the delete's id, as in <see cref="RuleMessage.Deleted"/>. Null for a rule of a save.</summary>
+    [JsonPropertyName("deleted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Deleted { get; set; }
 
     public string ToText() => JsonSerializer.Serialize(this);
 

@@ -26,7 +26,7 @@ internal sealed class RuleFilter<T> where T : class
     /// <summary><see cref="RestExpression"/>, compiled.</summary>
     public Func<T, bool>? Rest { get; init; }
 
-    /// <summary>The values named in <c>Changed(...)</c>: what an <c>ModifyQueued</c> rule reads.</summary>
+    /// <summary>The values named in <c>Changed(...)</c>: what a <c>ModifyQueued</c> rule reads.</summary>
     public Func<T, object?>[] Inputs { get; init; } = [];
 
     /// <summary>Whether the filter uses <c>Changed(...)</c>.</summary>

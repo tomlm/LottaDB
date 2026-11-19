@@ -1981,6 +1981,90 @@ public abstract class QueuedRuleTestBase : LottaTestBase
         await db.DeleteAsync<Note>("n1", ct);
         Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
     }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_GivesTheObjectAsAReadWould_SoABlobFileCanStillReachItsBlob()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        string? content = null;
+        LottaDB? database = null;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.OnUpload();
+            opts.Rules.WhenDeleted<BlobFile>().DoQueued("archive", async (blob, _, token) =>
+            {
+                database = blob.Database;
+                using var stream = await blob.DownloadAsync(token);
+                content = new StreamReader(stream!).ReadToEnd();
+            });
+        }, cancellationToken: ct);
+
+        await db.UploadBlobAsync("docs/readme.txt", "Hello world", cancellationToken: ct);
+        await db.DeleteAsync<BlobFile>("docs/readme.txt", ct);   // the metadata only; the blob stays
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+
+        Assert.Same(db, database);
+        Assert.Equal("Hello world", content);
+    }
+
+    [Fact]
+    public async Task WhenDeleted_DoQueued_ForAnObjectThatWasNeverLoaded_HasNoETag_AndOneIdempotencyKeyThroughARetry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fail = true;
+        var seen = new List<(string? ETag, string Key)>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.RuleRetryDelay = TimeSpan.Zero;
+            opts.RuleMaxAttempts = 1;
+            opts.Rules.WhenDeleted<Note>().DoQueued("unpublish", (note, context, _) =>
+            {
+                seen.Add((note.GetETag(), context.IdempotencyKey));
+                return fail ? throw new InvalidOperationException("service down") : Task.CompletedTask;
+            });
+        }, cancellationToken: ct);
+
+        await db.SaveAsync(new Note { NoteId = "n1", Content = "hello" }, ct);
+        // Deleted through an object made by hand, which carries no ETag.
+        Assert.Empty((await db.DeleteAsync(new Note { NoteId = "n1", Content = "hello" }, ct)).Errors);
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));   // fails, and is set aside
+
+        fail = false;
+        Assert.Equal(1, await db.Rules.RetryAsync("unpublish", ct));
+        Assert.Equal(1, await db.DrainAsync(cancellationToken: ct));
+
+        Assert.Equal(2, seen.Count);
+        Assert.All(seen, s => Assert.Null(s.ETag));                    // never the tombstone's own
+        Assert.Single(seen.Select(s => s.Key).Distinct());             // the same work, every time
+    }
+
+    [Fact]
+    public async Task SetAsideWorkOfADelete_WhoseObjectIsGone_NeverRunsTheRulesOfASave()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ran = new List<string>();
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().DoQueued("index", (note, _, _) => { ran.Add($"index:{note.NoteId}"); return Task.CompletedTask; });
+            opts.Rules.WhenDeleted<Note>().DoQueued("unpublish", (note, _, _) => { ran.Add($"unpublish:{note.NoteId}"); return Task.CompletedTask; });
+        }, cancellationToken: ct);
+        await db.SaveAsync(new Note { NoteId = "n1" }, ct);
+        await db.DrainAsync(cancellationToken: ct);
+        ran.Clear();
+
+        // A rule of a delete set aside with no tombstone left: the object it was for is gone.
+        await QueuesOf<Note>(db.DatabaseId).Poison.SendMessageAsync(
+            new PoisonRecord { Type = typeof(Note).FullName!, Key = "n1", Rule = "Note/unpublish", Deleted = "d1", Error = "failed", Attempts = 5 }.ToText(), ct);
+
+        Assert.Equal(1, await db.Rules.RetryAsync("unpublish", ct));
+        await db.DrainAsync(cancellationToken: ct);
+
+        Assert.Empty(ran);                                             // n1 exists, but its save rules are not this work's
+        Assert.Equal(0, await WaitingOf<Note>(db, ct));
+    }
 }
 
 /// <summary>

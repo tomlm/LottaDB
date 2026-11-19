@@ -167,7 +167,7 @@ config.Rules.When<Mail>(m => Changed(m.Subject, m.Body)).ModifyQueued(Classify);
 - **An object saved without having been loaded** (`new Note { NoteId = "n1" }` for a key that exists) has no loaded version. For types that have a `Changed` rule, the save reads the stored version first.
 - **Works with every verb,** inline `Do` and live rules included.
 - **When a queued rule runs,** `Changed(...)` is taken to be true: the old values are gone by then. The rest of the filter is checked on the object as it is.
-- **It also names an `ModifyQueued` rule's inputs** (see below).
+- **It also names a `ModifyQueued` rule's inputs** (see below).
 - **A marker, not a function.** Called anywhere but a rule filter, it throws. `Changed()` with no values, and `Changed` in a `WhenDeleted` filter, throw when the rule is registered.
 
 ## The verbs
@@ -198,7 +198,7 @@ config.Rules.When<Note>().Modify((note, context, ct) =>
 
 - **Runs before the object is written,** on the caller's own object. The one write stores what the handler changed, and the caller sees it when the save returns.
 - **Runs first.** `Modify` actions run in the order registered, before the write and so before any `Do` or `Materialize`, which see the object as changed.
-- **On every save path:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, and the write an `ModifyQueued` makes.
+- **On every save path:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, and the write a `ModifyQueued` makes.
 - **`Changed(...)`** in its filter compares what the caller is saving with the version it replaces.
 - **A handler that throws** is reported in the save's `Errors`. The object is still saved, as the handler left it.
 - **The handler must not change the object's key.**
@@ -271,7 +271,7 @@ A run needs no search:
 **`SaveManyAsync` does this once per batch, not once per source.** The rules of the batch's objects run first, then what all of them produce is read and written together, so a later rule of the same object does not yet see what it produced. Measured in Symplist on SQLite (3,000 items producing 6,031 passages, four runs each): 312 to 450 items a second, against 396 to 439 for the hand-written code it replaced.
 
 - **In a save,** the projection runs before the source's row is written, so the one write records the new list. An object saved without having been loaded is read first, to learn what it listed.
-- **Every write of a source keeps its list:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, an `ModifyQueued` rule's write-back, and saves of objects loaded through the search index.
+- **Every write of a source keeps its list:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, a `ModifyQueued` rule's write-back, and saves of objects loaded through the search index.
 - **A run from the queue** that changes which keys are produced writes the source's row again to record it. The object is unchanged, no rule runs and nothing is queued, but the source gets a new ETag.
 - **A delete** removes the keys the deleted row listed.
 
@@ -344,7 +344,7 @@ A schedule is work done at times, for no object. Its handler is `(RuleContext co
 - Saving a `BlobPhoto` uses the `BlobPhoto` queue and lists rules for `BlobPhoto` and for its base types.
 - The message never holds the object. The object is read when the rules run.
 - A save that matches no queued rule sends nothing. `Materialize` rules run inside the save and are not in the message; a refresh or a backfill sends a message of its own for them. `MaterializeQueued` rules are in the message like any queued rule.
-- The queues are the only stored state. There are no rows per rule or per object.
+- Besides the queues, the only stored state is the tombstones of deletes whose queued rules have yet to run (see above). There are no rows per rule, and none per object beyond the ownership values a materialize rule keeps on the rows it writes.
 
 ### A run
 
@@ -354,7 +354,7 @@ The pump takes a message, reads the object once, and runs the listed rules one a
 2. **`MaterializeQueued` rules,** and `Materialize` rules a refresh or backfill listed, so what they produce is made from the updated object.
 3. **`DoQueued` rules** (and delayed `Do`), in the order registered.
 
-- **A rule's own save does not queue it again.** When a rule saves the object its run is for (an `ModifyQueued` write-back, or a handler calling `SaveAsync`), that save queues neither the rule itself nor the rules the run has yet to do. Rules that already ran are queued if the save matches them.
+- **A rule's own save does not queue it again.** When a rule saves the object its run is for (a `ModifyQueued` write-back, or a handler calling `SaveAsync`), that save queues neither the rule itself nor the rules the run has yet to do. Rules that already ran are queued if the save matches them.
 - **Later rules see the saved object.** After such a save, the run reads the object again before the next rule.
 - **A missing object** (deleted since, or replaced by an object of another type) ends the run and deletes the message.
 - **Two runs for the same object never overlap** within a database.
@@ -381,7 +381,7 @@ All retry state is in the message. Example: rules A, B and C are listed, and B t
 ### Loop prevention
 
 - A rule's own save does not queue the rule again (above).
-- `Changed(...)` keeps an `ModifyQueued` from being triggered by saves that leave its inputs alone, another rule's write included.
+- `Changed(...)` keeps a `ModifyQueued` from being triggered by saves that leave its inputs alone, another rule's write included.
 - A write that changes nothing queues nothing. `ChangeAsync` whose lambda leaves the object as it is writes nothing at all; `SaveAsync` of an object unchanged since it was loaded writes, but queues nothing.
 - **`MaxQueueHops`** (default 16) is the backstop. A save made more than that many queued rules deep is set aside without running.
 
