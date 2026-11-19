@@ -27,10 +27,44 @@ public partial class LottaDB
         public Exception? Error;
     }
 
+    /// <summary>The work of the <c>Maintain</c> rules for the sources one batch of a <c>SaveManyAsync</c> wrote, gathered to be done together.</summary>
+    private sealed class MaintainBatch(IEnumerable<string> sourceKeys)
+    {
+        /// <summary>The keys of the objects the batch wrote.</summary>
+        public HashSet<string> SourceKeys { get; } = new(sourceKeys, StringComparer.Ordinal);
+
+        public List<(QueuedRule Rule, string SourceKey, PendingViews Plan)> Work { get; } = [];
+    }
+
+    /// <summary>Set while the rules of a <c>SaveManyAsync</c> batch run.</summary>
+    private readonly AsyncLocal<MaintainBatch?> _maintainBatch = new();
+
+    /// <summary>
+    /// Runs the rules of the objects one batch of a <c>SaveManyAsync</c> wrote, then writes what
+    /// their <c>Maintain</c> rules produce together: one read and a few batched writes for the
+    /// whole batch, not one of each per object.
+    /// </summary>
+    private async Task RunBatchHandlersAsync(List<(object entity, Type type)> pending, IEnumerable<string> keys,
+        List<ObjectChange> changes, List<Exception> errors, CancellationToken cancellationToken)
+    {
+        var batch = new MaintainBatch(keys);
+        _maintainBatch.Value = batch;
+        try
+        {
+            await RunPendingHandlersAsync(pending, TriggerKind.Saved, changes, errors, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _maintainBatch.Value = null;
+        }
+        if (batch.Work.Count > 0)
+            await WriteMaintainAsync(batch.Work, changes, errors, batched: true, cancellationToken).ConfigureAwait(false);
+    }
+
     private readonly ConcurrentDictionary<Type, QueuedRule[]> _maintainRulesByType = new();
 
-    /// <summary>Up to this many rows are read by key one at a time; more are read with one query per hundred.</summary>
-    private const int MaxPointReads = 4;
+    /// <summary>How many rows are read by key at the same time.</summary>
+    private const int ReadsAtOnce = 16;
 
     /// <summary>How the last refresh found the objects to run again: "index" or "scan". For tests.</summary>
     internal string? LastRefreshPath { get; private set; }
@@ -212,81 +246,110 @@ public partial class LottaDB
     /// <summary>
     /// Brings the stored objects in line with what one rule produces for one source object: saves
     /// what is new or different, and deletes what the source produced before and no longer does.
-    /// The rows concerned are read by key, in one batch, and written in batches. The caller holds
-    /// the source's lock.
+    /// Inside a <c>SaveManyAsync</c> of the source this is put off to the end of the batch, so the
+    /// objects of all its sources are read and written together. The caller holds the source's lock.
     /// </summary>
-    private async Task ApplyMaintainAsync(QueuedRule rule, string sourceKey, PendingViews plan, CancellationToken cancellationToken)
+    private Task ApplyMaintainAsync(QueuedRule rule, string sourceKey, PendingViews plan, CancellationToken cancellationToken)
     {
-        var stamp = SourceStamp(rule.Id, sourceKey);
-        var gone = plan.Previous.Where(key => !plan.Views.ContainsKey(key)).ToList();
-        if (plan.Views.Count == 0 && gone.Count == 0)
+        if (_maintainBatch.Value is { } batch && batch.SourceKeys.Contains(sourceKey))
+        {
+            batch.Work.Add((rule, sourceKey, plan));
+            return Task.CompletedTask;
+        }
+        // Inside a save, what these writes change and what goes wrong in them is part of that save's result.
+        return WriteMaintainAsync([(rule, sourceKey, plan)], _chainChanges.Value, _chainErrors.Value, batched: false, cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes what rules produce for one or more source objects. The rows concerned are read by
+    /// key, new and changed objects are saved in batches, and the ones no longer produced are
+    /// deleted in batches.
+    /// </summary>
+    /// <param name="changes">Where the writes' changes are noted; null to leave them out.</param>
+    /// <param name="errors">Where errors of the written objects' own rules are noted; null to throw them.</param>
+    /// <param name="batched">
+    /// True when this is the work of several sources: a source whose objects cannot be written
+    /// (a key that belongs to another) is then noted in <paramref name="errors"/> and the others
+    /// carry on. False to throw it.
+    /// </param>
+    private async Task WriteMaintainAsync(IReadOnlyList<(QueuedRule Rule, string SourceKey, PendingViews Plan)> work,
+        List<ObjectChange>? changes, List<Exception>? errors, bool batched, CancellationToken cancellationToken)
+    {
+        var keys = work.SelectMany(w => w.Plan.Views.Keys.Concat(w.Plan.Previous)).Distinct(StringComparer.Ordinal).ToList();
+        if (keys.Count == 0)
             return;
 
+        // Read by key, a few at a time: a table has no read of several keys at once, and a query
+        // with one condition per key is far slower than the reads it would save.
         var stored = new Dictionary<string, object>(StringComparer.Ordinal);
-        var keys = plan.Views.Keys.Concat(gone).ToList();
-        if (keys.Count <= MaxPointReads)
+        foreach (var some in keys.Chunk(ReadsAtOnce))
         {
-            // A few rows are read quicker one by one than with a query.
-            foreach (var key in keys)
+            var reads = some.Select(key => _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken)).ToArray();
+            await Task.WhenAll(reads).ConfigureAwait(false);
+            for (var n = 0; n < some.Length; n++)
             {
-                var (found, _) = await _tableAdapter.GetAsync(_lottaCatalog.Name, key, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (found != null)
-                    stored[key] = found;
-            }
-        }
-        else
-        {
-            await foreach (var found in _tableAdapter.GetManyAsync(_lottaCatalog.Name, keys, cancellationToken: cancellationToken).ConfigureAwait(false))
-            {
-                if (found?.GetKey() is { } key)
-                    stored[key] = found;
+                if (reads[n].Result.Item1 is { } found)
+                    stored[some[n]] = found;
             }
         }
 
         var changed = new List<object>();
-        foreach (var (key, view) in plan.Views)
+        var deletes = new List<(object?, Type?, string)>();
+        // The keys claimed so far in this batch, so two of its sources cannot both take one.
+        var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (rule, sourceKey, plan) in work)
         {
-            if (stored.TryGetValue(key, out var existing))
+            var stamp = SourceStamp(rule.Id, sourceKey);
+            var save = new List<object>();
+            try
             {
-                var owner = existing.GetSource();
-                if (owner == stamp)
+                foreach (var (key, view) in plan.Views)
                 {
-                    if (existing.GetType() == view.GetType()
-                        && JsonSerializer.Serialize(existing, existing.GetType()) == JsonSerializer.Serialize(view, view.GetType()))
-                        continue;
+                    var owner = claimed.GetValueOrDefault(key) ?? (stored.TryGetValue(key, out var existing) ? existing.GetSource() : null);
+                    if (owner == stamp)
+                    {
+                        if (stored.TryGetValue(key, out var same) && same.GetType() == view.GetType()
+                            && JsonSerializer.Serialize(same, same.GetType()) == JsonSerializer.Serialize(view, view.GetType()))
+                            continue;
+                    }
+                    else if (owner != null && owner.IndexOf(' ') is > 0 and var space && _config.QueuedRules.Any(r => r.Id == owner[..space]))
+                    {
+                        throw new InvalidOperationException(
+                            $"Rule '{rule.Id}' produced '{key}' for '{sourceKey}', but that object belongs to '{owner}'. An object has one owner: give the two different keys.");
+                    }
+                    // Otherwise it is taken over: an object saved by hand, or left by a rule that no longer exists.
+                    view.SetSource(stamp);
+                    save.Add(view);
                 }
-                else if (owner != null && owner.IndexOf(' ') is > 0 and var space && _config.QueuedRules.Any(r => r.Id == owner[..space]))
-                {
-                    throw new InvalidOperationException(
-                        $"Rule '{rule.Id}' produced '{key}' for '{sourceKey}', but that object belongs to '{owner}'. An object has one owner: give the two different keys.");
-                }
-                // Otherwise it is taken over: an object saved by hand, or left by a rule that no longer exists.
             }
-            view.SetSource(stamp);
-            changed.Add(view);
+            catch (InvalidOperationException e) when (batched && errors != null)
+            {
+                errors.Add(e);
+                continue;   // nothing of this source's is written
+            }
+            foreach (var key in plan.Views.Keys)
+                claimed[key] = stamp;
+            changed.AddRange(save);
+            // Only what is still this source's: a key it lists but another object has since taken is left alone.
+            deletes.AddRange(plan.Previous
+                .Where(key => !plan.Views.ContainsKey(key) && stored.TryGetValue(key, out var existing) && existing.GetSource() == stamp)
+                .Select(key => ((object?)stored[key], (Type?)stored[key].GetType(), key)));
         }
 
-        // Inside a save, what these writes change and what goes wrong in them is part of that save's result.
-        var chainChanges = _chainChanges.Value;
-        var chainErrors = _chainErrors.Value;
         var failures = new List<Exception>();
         void Note(ObjectResult result)
         {
-            chainChanges?.AddRange(result.Changes);
-            (chainErrors ?? failures).AddRange(result.Errors);
+            changes?.AddRange(result.Changes);
+            (errors ?? failures).AddRange(result.Errors);
         }
 
         if (changed.Count > 0)
             Note(await SaveManyAsync(changed, cancellationToken).ConfigureAwait(false));
-
-        // Only what is still this source's: a key it lists but another object has since taken is left alone.
-        var deletes = gone.Where(key => stored.TryGetValue(key, out var existing) && existing.GetSource() == stamp)
-            .Select(key => ((object?)stored[key], (Type?)stored[key].GetType(), key)).ToList();
         if (deletes.Count > 0)
             Note(await DeleteManyAsyncCore(deletes.ToAsyncEnumerable(), cancellationToken).ConfigureAwait(false));
 
         if (failures.Count > 0)
-            throw new AggregateException($"Rule '{rule.Id}' wrote what '{sourceKey}' produces, but rules of the objects written failed.", failures);
+            throw new AggregateException("What the rules produce was written, but rules of the objects written failed.", failures);
     }
 
     /// <summary>

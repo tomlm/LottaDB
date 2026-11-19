@@ -215,6 +215,8 @@ A run needs no search:
 2. Those rows are read by key, to skip the ones that are already the same and to check that nobody else owns them.
 3. New and changed objects are saved in a batch. Keys that are listed and no longer produced are deleted, if they are still this source's.
 
+**`SaveManyAsync` does this once per batch, not once per source.** The rules of the batch's objects run first, then what all of them produce is read and written together, so a later rule of the same object does not yet see what it produced. Measured in Symplist on SQLite (3,000 items producing 6,031 passages, four runs each): 312 to 450 items a second, against 396 to 439 for the hand-written code it replaced.
+
 - **In a save,** the projection runs before the source's row is written, so the one write records the new list. An object saved without having been loaded is read first, to learn what it listed.
 - **Every write of a source keeps its list:** `SaveAsync`, `SaveManyAsync`, `ChangeAsync`, an `Update` rule's write-back, and saves of objects loaded through the search index.
 - **A run from the queue** that changes which keys are produced writes the source's row again to record it. The object is unchanged, no rule runs and nothing is queued, but the source gets a new ETag.
@@ -405,7 +407,7 @@ You see rules, not queues.
 - Queues made by another process after this one opened the database are not run here until it is reopened.
 - "Two runs for the same object never overlap" holds within one process.
 - **`RefreshWhen` assumes one writing process.** The objects a refresh is for are found through the search index, which always includes this process's own writes but catches up with another process's only within `MaxSearchStaleness`.
-- **`Maintain` writes one source's objects at a time.** In a `SaveManyAsync` of many sources, each source's produced objects are a batch of their own. Measured on SQLite with sources producing two objects each: 150 to 300 sources a second, against about 360 for hand-written code that batches across sources.
+- **A single `SaveAsync` writes its source's objects by themselves.** To save many sources, use `SaveManyAsync`, which writes what they all produce together.
 - A queue run that changes which keys a source produces gives the source a new ETag, so a copy loaded before it gets a `ConcurrencyException` on its next conditional save.
 - A `Maintain` rule with a filter queues or runs a clean-up for every save of an object the filter is false for.
 - A backfill of a `Maintain` rule skips objects its filter is false for, so it does not clean up after them.

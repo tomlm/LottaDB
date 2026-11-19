@@ -286,6 +286,37 @@ public abstract class MaintainTestBase : LottaTestBase
     }
 
     [Fact]
+    public async Task SaveMany_WritesWhatAllItsObjectsProduce_AndOneKeyStillHasOneOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(opts =>
+        {
+            opts.QueueMode = QueueMode.Manual;
+            opts.Rules.When<Note>().Maintain("tags", ProjectTags);
+            opts.Rules.When<Note>(note => note.Domain == "shared").Maintain(note => new NoteView { Id = "shared", NoteId = note.NoteId });
+        }, cancellationToken: ct);
+
+        var notes = Enumerable.Range(0, 250).Select(n => new Note { NoteId = $"n{n}", Tags = ["a", "b"], Domain = n is 7 or 8 ? "shared" : "" }).ToList();
+        var result = await db.SaveManyAsync(notes, ct);
+
+        // Two notes of the batch produced the same key: the first has it, the second is told.
+        Assert.Contains("belongs to 'Note/note-view n7'", Assert.Single(result.Errors).Message);
+        Assert.Equal("n7", (await db.GetAsync<NoteView>("shared", ct))!.NoteId);
+        Assert.Equal(500, result.Changes.Count(c => c.Type == typeof(FeedEntry) && c.Kind == ChangeKind.Saved));
+        Assert.Equal(["a", "b"], await EntriesOf(db, "n0", ct));
+        Assert.Equal(["a", "b"], await EntriesOf(db, "n249", ct));
+
+        // Saved again in a batch: the changed ones are written, the dropped ones deleted, the rest left alone.
+        var kept = (await db.GetAsync<FeedEntry>("n1#a", ct))!.GetETag();
+        notes[0] = new Note { NoteId = "n0", Tags = ["b", "c"] };
+        result = await db.SaveManyAsync(notes, ct);
+        Assert.Equal(["b", "c"], await EntriesOf(db, "n0", ct));
+        Assert.Equal(kept, (await db.GetAsync<FeedEntry>("n1#a", ct))!.GetETag());
+        Assert.Single(result.Changes, c => c.Type == typeof(FeedEntry) && c.Kind == ChangeKind.Saved);
+        Assert.Single(result.Changes, c => c.Type == typeof(FeedEntry) && c.Kind == ChangeKind.Deleted);
+    }
+
+    [Fact]
     public async Task AnObjectSavedByHand_IsTakenOverByTheRuleThatProducesItsKey()
     {
         var ct = TestContext.Current.CancellationToken;

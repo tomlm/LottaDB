@@ -2103,7 +2103,7 @@ public partial class LottaDB : IDisposable
                 }
                 // RunPendingHandlersAsync empties the list.
                 var saved = pendingEntities.Select(p => p.entity).ToList();
-                await RunPendingHandlersAsync(pendingEntities, TriggerKind.Saved, allChanges, allErrors, cancellationToken);
+                await RunBatchHandlersAsync(pendingEntities, pendingEntityKeys, allChanges, allErrors, cancellationToken);
                 for (var i = 0; i < saved.Count; i++)
                 {
                     await EnqueueAsync(saved[i], pendingEntityKeys[i], allErrors, cancellationToken);
