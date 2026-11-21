@@ -756,16 +756,31 @@ public partial class LottaDB
                         limited = next.Limited;
                         if (next.Queue is { } queue && next.Message is { } message)
                         {
-                            held = false;
                             // A rule run in batches takes more of its queue's messages with this one,
                             // unless the drain has a limit, which is kept one message at a time.
                             // They are taken here, before the pump looks again, so it does not take them first.
+                            // The slot and the queue's place stay the pump's until the run's task exists:
+                            // if the receive throws (cancelled), they are given back here, as the run's
+                            // own finally never starts.
+                            Task<int> run;
                             if (max is null && BatchRuleOf(queue) is { } batched)
-                                running.Add(RunBatchInSlotAsync(queue, batched,
-                                    [message, .. await ReceiveMoreAsync(queue, batched, lease, cancellationToken).ConfigureAwait(false)],
-                                    lease, cancellationToken));
+                            {
+                                QueueMessage[] more;
+                                try
+                                {
+                                    more = await ReceiveMoreAsync(queue, batched, lease, cancellationToken).ConfigureAwait(false);
+                                }
+                                catch
+                                {
+                                    queue.Leave();
+                                    throw;
+                                }
+                                run = RunBatchInSlotAsync(queue, batched, [message, .. more], lease, cancellationToken);
+                            }
                             else
-                                running.Add(RunInSlotAsync(queue, message, lease, max - runs, cancellationToken));
+                                run = RunInSlotAsync(queue, message, lease, max - runs, cancellationToken);
+                            held = false;
+                            running.Add(run);
                             started = true;
                         }
                     }
