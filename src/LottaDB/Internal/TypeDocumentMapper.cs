@@ -145,9 +145,10 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     /// <c>Similar</c> until it is embedded. The model is never called here.
     /// </summary>
     /// <remarks>
-    /// The fields are those of the object's own type, not of <typeparamref name="T"/>: a save of
-    /// a derived object is indexed by the mapper of each stored type it is, and the vectors are
-    /// those of its own text (a base type's <c>_content</c> leaves out the derived type's fields).
+    /// A saved object is indexed only by the mapper of its own stored type (the Lucene handlers
+    /// of its base types pass it over), so <typeparamref name="T"/> is normally its own type. The
+    /// vectors are always those of the object's own type's fields and text (a base type's
+    /// <c>_content</c> leaves out the derived type's fields).
     /// </remarks>
     public override void MapFieldsToDocument(T source, Document target)
     {

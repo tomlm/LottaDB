@@ -1021,7 +1021,6 @@ public sealed record RuleStatus(string Rule, int Running, int Poisoned, string? 
 /// </param>
 public sealed record RuleTypeStatus(string Type, int Waiting, int Poisoned, bool Orphaned = false);
 
-/// <summary>The kinds of queued action, in the order a run does them.</summary>
 /// <summary>Which queued work is taken first when there is more ready than can run at once.</summary>
 public enum RulePriority
 {
@@ -1058,6 +1057,7 @@ public sealed record QueuedRuleOptions
     public int? MaxConcurrency { get; init; }
 }
 
+/// <summary>The kinds of queued action, in the order a run does them.</summary>
 internal enum RuleVerb
 {
     /// <summary>Changes the object itself.</summary>
