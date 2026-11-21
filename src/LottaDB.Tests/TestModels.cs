@@ -199,6 +199,9 @@ public class VectorNote
 
     [Queryable(Vector = true)]
     public string Body { get; set; } = "";
+
+    /// <summary>Not text, so not in _content: a Modify rule can count its writes here without re-embedding.</summary>
+    public int Writes { get; set; }
 }
 
 // Bare vector model for fluent-only config

@@ -378,9 +378,16 @@ public partial class LottaDB
         _asyncRun.Value = new AsyncRun(this, item.Message.Hop, item.Key) { RuleId = rule.Id };
         try
         {
+            // A fresh copy of the version that was read, with the embedded vectors put on it: the
+            // batch's copy may already have been through the in-save Modify rules (and had its
+            // JSON replaced by the batch write), so saving it would apply those rules twice.
+            var original = item.Original!;
+            var json = original.GetJson() ?? JsonSerializer.Serialize(original, original.GetType());
+            var fresh = CopyOf(json, original.GetType(), item.Key, original.GetETag(), original);
+            AddVectors(fresh, item.Copy!);
             try
             {
-                await SaveAsync(item.Copy!, cancellationToken).ConfigureAwait(false);
+                await SaveAsync(fresh, cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (ConcurrencyException)

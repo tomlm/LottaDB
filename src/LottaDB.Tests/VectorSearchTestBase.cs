@@ -407,6 +407,35 @@ public abstract class VectorSearchTestBase : LottaTestBase
     }
 
     [Fact]
+    public async Task ARefusedBatch_WritesEachObjectByItself_ApplyingItsModifyRulesOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var model = CountEmbeddings();
+        var db = await CreateDbAsync(config =>
+        {
+            config.QueueMode = QueueMode.Manual;
+            config.MaxConcurrency = 1;
+            // Not idempotent: each write of the object adds one.
+            config.Rules.When<VectorNote>().Modify((note, _, _) =>
+            {
+                note.Writes++;
+                return Task.CompletedTask;
+            });
+        }, cancellationToken: ct);
+        await SaveNotesAsync(db, 3, ct);
+        // "2" saved by someone else meanwhile: the batch's write of all three is refused, and each is written by itself.
+        model.During = () => db.ChangeAsync<VectorNote>("2", n => n.Category = "pets", ct);
+
+        while (await db.DrainAsync(cancellationToken: ct) > 0) { }
+
+        // The caller's save, then the embed rule's write, as a run for the object alone would
+        // give; the refused batch write's change is not carried into the write by itself.
+        Assert.Equal(2, (await db.GetAsync<VectorNote>("1", ct))!.Writes);
+        Assert.Equal(2, (await db.GetAsync<VectorNote>("3", ct))!.Writes);
+        Assert.Equal(3, db.Search<VectorNote>(n => n.Title.Similar("a sleeping cat")).ToList().Count);
+    }
+
+    [Fact]
     public async Task AnObjectDeletedBeforeItsBatch_IsDropped_AndTheRestEmbedded()
     {
         var ct = TestContext.Current.CancellationToken;
