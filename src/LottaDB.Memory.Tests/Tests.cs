@@ -44,6 +44,7 @@ public class Memory_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public 
 public class Memory_VectorSearchTests : VectorSearchTestBase { public Memory_VectorSearchTests() : base(Tests.Configure) { } }
 public class Memory_WriteLockTests : WriteLockTestBase { public Memory_WriteLockTests() : base(Tests.Configure) { } }
 public class Memory_QueuedRuleTests : QueuedRuleTestBase { public Memory_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Memory_RulePriorityTests : RulePriorityTestBase { public Memory_RulePriorityTests() : base(Tests.Configure) { } }
 public class Memory_MaterializeTests : MaterializeTestBase { public Memory_MaterializeTests() : base(Tests.Configure) { } }
 public class Memory_ModifyRuleTests : ModifyRuleTestBase { public Memory_ModifyRuleTests() : base(Tests.Configure) { } }
 public class Memory_ScheduleTests : ScheduleTestBase { public Memory_ScheduleTests() : base(Tests.Configure) { } }

@@ -288,6 +288,9 @@ public class LottaCatalog : IDisposable
 
         var config = new LottaConfiguration();
         configure?.Invoke(config);
+        // Vectors are embedded by a queued rule; without queue storage, a save embeds them itself.
+        if (EmbeddingGenerator != null && QueueServiceClientFactory != null)
+            config.AddEmbedRules();
         config.CheckRules();
         config.Opened = true;
         // Before the database is built: building it creates an index that would then be left behind.

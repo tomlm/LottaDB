@@ -299,6 +299,28 @@ internal class TableStorageAdapter
         return new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity);
     }
 
+    /// <summary>
+    /// Writes several objects in one transaction, each only if its row still has the ETag given:
+    /// all of them, or, if any row has changed or is gone, none. Unlike <see cref="SubmitTransactionAsync"/>
+    /// there is no falling back to writing them one by one, which would drop the condition.
+    /// </summary>
+    /// <returns>The new ETags, in order; null when nothing was written because a row had changed or was gone.</returns>
+    internal async Task<string[]?> ReplaceManyAsync(string tableName, IReadOnlyList<(string Key, object Object, TypeMetadata Meta, string ETag)> items, CancellationToken cancellationToken = default)
+    {
+        var table = GetTable(tableName);
+        var actions = items.Select(item => new TableTransactionAction(TableTransactionActionType.UpdateReplace,
+            EntityMapper.ToTableEntity(_partitionKey, item.Key, item.Object, item.Meta), new ETag(item.ETag))).ToList();
+        try
+        {
+            var responses = await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+            return [.. responses.Value.Select(r => r.Headers.ETag?.ToString() ?? "")];
+        }
+        catch (RequestFailedException e) when (e.Status is 412 or 404)
+        {
+            return null;
+        }
+    }
+
     internal TableTransactionAction CreateJsonDocumentUpsertAction(string key, string schemaName, JsonDocument json, JsonMetadata schema)
     {
         var entity = EntityMapper.ToTableEntity(_partitionKey, key, json, schema);

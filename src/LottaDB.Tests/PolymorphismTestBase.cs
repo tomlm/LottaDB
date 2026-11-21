@@ -160,5 +160,49 @@ public abstract class PolymorphismTestBase : LottaTestBase
         Assert.IsType<Employee>(all[0]);
         Assert.Equal("Sales", ((Employee)all[0]).Department);
     }
+
+    // A derived object is indexed with the fields of its own type: those its base types declare
+    // and those it adds. Saved, and after a rebuild of the index, the same.
+
+    [Fact]
+    public async Task Search_ByAFieldTheDerivedTypeAdds_FindsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(cancellationToken: ct);
+
+        await db.SaveAsync(new Employee { Id = "semp4", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, ct);
+
+        Assert.Equal("semp4", db.Search<Employee>(e => e.Department == "Engineering").Single().Id);
+        Assert.Equal("semp4", db.Search<Person>(p => p.Email == "bob@test.com").Single().Id);
+        Assert.Equal("semp4", db.Search<BaseEntity>(b => b.Name == "Bob").Single().Id);
+        // Free text covers the derived type's fields too.
+        Assert.Equal("semp4", db.Search<Employee>("Engineering").Single().Id);
+    }
+
+    [Fact]
+    public async Task Search_ByAFieldTheDerivedTypeAdds_FindsIt_AfterARebuild()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Employee { Id = "semp5", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }, ct);
+
+        await db.RebuildSearchIndex(ct);
+
+        Assert.Equal("semp5", db.Search<Employee>(e => e.Department == "Engineering").Single().Id);
+        Assert.Equal("semp5", db.Search<Person>(p => p.Email == "bob@test.com").Single().Id);
+        Assert.Equal("semp5", db.Search<Employee>("Engineering").Single().Id);
+    }
+
+    [Fact]
+    public async Task Search_ByAFieldTheDerivedTypeAdds_FindsIt_AfterSaveMany()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(cancellationToken: ct);
+
+        await db.SaveManyAsync([new Employee { Id = "semp6", Name = "Bob", Email = "bob@test.com", Department = "Engineering" }], ct);
+
+        Assert.Equal("semp6", db.Search<Employee>(e => e.Department == "Engineering").Single().Id);
+        Assert.Equal("semp6", db.Search<Employee>("Engineering").Single().Id);
+    }
 }
 

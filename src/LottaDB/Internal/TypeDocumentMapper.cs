@@ -85,11 +85,10 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
 
             if (indexed.IsVectorField)
             {
-                // Vector field: analyzed for full-text + vector embeddings for similarity search.
-                // AsVectorField() creates a new VectorPropertyMap replacing this one in the ClassMap,
-                // so we chain all config on the returned instance.
-                propMap.AsVectorField()
-                    .WithEmbeddingGenerator(embeddingGenerator);
+                // Vector field: analyzed for full-text, with a {Field}_vector for similarity search.
+                // No embedding generator: the vector is the one stored on the object's row, which
+                // MapFieldsToDocument copies in. Similar(...) embeds its query text with the provider's.
+                propMap.AsVectorField();
             }
         }
 
@@ -127,18 +126,43 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         else
         {
             // No user default — create _content_ composite field (include string collection properties)
-            var contentProps = meta.IndexedProperties
-                .Where(p => !p.IsNotAnalyzed && (p.Property.PropertyType == typeof(string) || TypeUtils.IsStringCollection(p.Property.PropertyType)))
-                .Select(p => p.Property);
-
-            IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, contentProps);
+            IFieldMapper<T> contentMapper = new ContentFieldMapper<T>(version, analyzer, StoredVectors.ContentProperties(meta));
             if (embeddingGenerator != null)
             {
-                contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator);
+                // Marks _content as a vector field for Similar(...); its vector is copied in, as above.
+                contentMapper = new VectorFieldMapper<T>(contentMapper, embeddingGenerator: null!);
             }
             AddField(contentMapper);
 
             DefaultSearchProperty = StorageFields.Content;
+        }
+    }
+
+    /// <summary>
+    /// Maps the fields, then adds each vector field's stored vector, as <c>{Field}_vector</c>.
+    /// A vector is added only while it is still the one for the field's text, so the index
+    /// never holds a vector of other text; a field without one gets none, and is not found by
+    /// <c>Similar</c> until it is embedded. The model is never called here.
+    /// </summary>
+    /// <remarks>
+    /// The fields are those of the object's own type, not of <typeparamref name="T"/>: a save of
+    /// a derived object is indexed by the mapper of each stored type it is, and the vectors are
+    /// those of its own text (a base type's <c>_content</c> leaves out the derived type's fields).
+    /// </remarks>
+    public override void MapFieldsToDocument(T source, Document target)
+    {
+        base.MapFieldsToDocument(source, target);
+        if (source.GetVectors() is not { Count: > 0 } stored)
+            return;
+        foreach (var field in _db.VectorFieldsOf(source.GetType()))
+        {
+            var vectorField = field.Name + "_vector";
+            target.RemoveFields(vectorField);
+            if (!stored.TryGetValue(field.Name, out var vector) || field.Text(source) is not { Length: > 0 } text)
+                continue;
+            if (vector.Hash != StoredVectors.Hash(_db.EmbeddingModelId!, text))
+                continue;
+            target.Add(new BinaryDocValuesField(vectorField, new Lucene.Net.Util.BytesRef(vector.Bytes)));
         }
     }
 

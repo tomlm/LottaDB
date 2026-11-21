@@ -71,11 +71,17 @@ internal class ContentFieldMapper<T> : IFieldMapper<T>
 
     public SortField CreateSortField(bool reverse) => throw new NotSupportedException();
 
-    private string BuildContent(T source)
+    private string BuildContent(T source) => ContentText.Build(source, _properties);
+}
+
+/// <summary>The text of the <c>_content_</c> field: the given properties' text, joined with spaces.</summary>
+internal static class ContentText
+{
+    public static string Build(object? source, PropertyInfo[] properties)
     {
-        if (source == null || _properties.Length == 0) return string.Empty;
+        if (source == null || properties.Length == 0) return string.Empty;
         var sb = new StringBuilder();
-        foreach (var prop in _properties)
+        foreach (var prop in properties)
         {
             var val = prop.GetValue(source);
             if (val == null) continue;

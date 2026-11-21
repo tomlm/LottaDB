@@ -89,6 +89,14 @@ public partial class LottaDB : IDisposable
     private const int WriterYieldCooldownMs = 1500;
 
     private volatile bool _indexDirty;
+
+    // Set by every index write, cleared when the readers are refreshed: whether a search would
+    // miss something this process wrote. Apart from _indexDirty (not yet committed), because a
+    // reader opened from the writer sees what is not committed.
+    private volatile bool _readersBehind;
+
+    // Whether the searcher manager reads from the IndexWriter (near real time) or the directory.
+    private bool _searcherFromWriter;
     private bool _disposed;
     private readonly CancellationTokenSource _disposeCts = new();
 
@@ -153,7 +161,13 @@ public partial class LottaDB : IDisposable
         // fields like _key_ are stored verbatim. Per-type field analyzers are merged below.
         _perFieldAnalyzer = new PerFieldAnalyzer(new Lucene.Net.Analysis.Core.KeywordAnalyzer());
         _perFieldAnalyzer.AddAnalyzer(Internal.StorageFields.Key, new Lucene.Net.Analysis.Core.KeywordAnalyzer());
-        foreach (var mapper in _mappers.Values)
+        // One analyzer serves a field name for every type, and a later merge replaces an earlier
+        // one, so the order is fixed: LottaDB's own types first (JsonSchema's key is a keyword
+        // field called Name), then the application's in the order they were registered. Merging
+        // in dictionary order let the keyword analyzer win for every type's Name in some processes.
+        var registered = _config.StorageConfigurations.Keys.ToList();
+        foreach (var (_, mapper) in _mappers
+            .OrderBy(m => m.Key == typeof(JsonSchema) ? -1 : registered.IndexOf(m.Key) is var i and >= 0 ? i : int.MaxValue))
             _perFieldAnalyzer.Merge(mapper.Analyzer);
         foreach (var mapper in _dynamicMappers.Values)
             _perFieldAnalyzer.Merge(mapper.Analyzer);
@@ -245,6 +259,22 @@ public partial class LottaDB : IDisposable
         _searcherManager = new Lucene.Net.Search.SearcherManager(_directory, null);
         _lastRefreshTimestamp = Stopwatch.GetTimestamp();
         _indexAvailable = true;
+    }
+
+    /// <summary>The generation of the index's last commit: it goes up with each commit. For tests.</summary>
+    internal long CommittedGeneration => SegmentInfos.GetLastCommitGeneration(_directory);
+
+    /// <summary>
+    /// Takes a searcher, with the manager it is to be released to. Under the lock, so a manager
+    /// being replaced (the writer came or went) is not disposed between being read and used.
+    /// </summary>
+    private (Lucene.Net.Search.SearcherManager Manager, Lucene.Net.Search.IndexSearcher Searcher) AcquireSearcher()
+    {
+        lock (_lock)
+        {
+            var manager = Searchers;
+            return (manager, manager.Acquire());
+        }
     }
 
     /// <summary>The open searcher. Only valid after <see cref="IndexAvailable"/> returns true.</summary>
@@ -496,7 +526,7 @@ public partial class LottaDB : IDisposable
                 lock (_lock)
                 {
                     RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schema.Name));
-                    _indexDirty = true;
+                    _indexDirty = _readersBehind = true;
                 }
                 ScheduleRefresh();
             }
@@ -519,6 +549,12 @@ public partial class LottaDB : IDisposable
     {
         var luceneHandler = (EntityHandler<T>)((entity, kind, db, cancellationToken) =>
         {
+            // The handlers of every stored type an object is run for it (Employee, Person,
+            // BaseEntity), and each would write the whole document again with its own type's
+            // fields, the last (the base type's) leaving out what the derived types add. The
+            // object's own stored type indexes it, as a rebuild of the index does.
+            if (entity.GetType() != typeof(T) && _metadata.ContainsKey(entity.GetType()))
+                return Task.CompletedTask;
             var meta = GetMeta<T>();
             var key = meta.GetKey(entity);
             WriteIndexDocument(key, () =>
@@ -553,7 +589,7 @@ public partial class LottaDB : IDisposable
         lock (_lock)
         {
             RequireWriter().DeleteAll();
-            _indexDirty = true;
+            _indexDirty = _readersBehind = true;
         }
 
         // Single pass over all rows — dispatch to typed or dynamic mapper based on Type column
@@ -564,7 +600,7 @@ public partial class LottaDB : IDisposable
             lock (_lock)
             {
                 RequireWriter().AddDocument(document);
-                _indexDirty = true;
+                _indexDirty = _readersBehind = true;
             }
         }
 
@@ -595,7 +631,7 @@ public partial class LottaDB : IDisposable
                 if (documents[i] is { } document)
                     writer.AddDocument(document);
             }
-            _indexDirty = true;
+            _indexDirty = _readersBehind = true;
             ScheduleRefresh();
         }
     }
@@ -771,6 +807,8 @@ public partial class LottaDB : IDisposable
                 updateErrors = await RunModifiesAsync(entity, cancellationToken);
                 // For Materialize rules: what the object produces now, so this write records it.
                 await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
+                // Its vectors, kept where the text is unchanged, so this write carries them.
+                await PrepareVectorsAsync(entity, key, known: null, cancellationToken);
 
                 var existingETag = entity.GetETag();
                 if (existingETag != null)
@@ -1000,6 +1038,8 @@ public partial class LottaDB : IDisposable
                 var updateErrors = await RunModifiesAsync(mutated, cancellationToken);
                 // For Materialize rules: what the object produces now, so this write records it.
                 await PrepareMaterializeAsync(mutated, key, current.GetProduced() ?? ObjectMetadata.NothingProduced, cancellationToken);
+                // Its vectors, kept where the text is unchanged, so this write carries them.
+                await PrepareVectorsAsync(mutated, key, current.GetVectors() ?? StoredVectors.None, cancellationToken);
                 try
                 {
                     newETag = await _tableAdapter.ReplaceAsync(_lottaCatalog.Name, key, mutated!, meta, etag, cancellationToken: cancellationToken);
@@ -1120,7 +1160,7 @@ public partial class LottaDB : IDisposable
 
             // Read through the SearcherManager rather than the IndexWriter — this path must
             // work on a process that does not hold the write lock.
-            var searcher = Searchers.Acquire();
+            var (manager, searcher) = AcquireSearcher();
             try
             {
                 var hits = searcher.Search(luceneQuery, int.MaxValue);
@@ -1135,7 +1175,7 @@ public partial class LottaDB : IDisposable
             }
             finally
             {
-                Searchers.Release(searcher);
+                manager.Release(searcher);
             }
         }
 
@@ -1187,7 +1227,7 @@ public partial class LottaDB : IDisposable
         bq.Add(new Lucene.Net.Search.TermQuery(new Lucene.Net.Index.Term(Internal.StorageFields.Type, typeof(JsonDocument).FullName!)),
             Lucene.Net.Search.Occur.MUST);
 
-        var searcher = Searchers.Acquire();
+        var (manager, searcher) = AcquireSearcher();
         try
         {
             var hits = searcher.Search(bq, int.MaxValue);
@@ -1203,7 +1243,7 @@ public partial class LottaDB : IDisposable
         }
         finally
         {
-            Searchers.Release(searcher);
+            manager.Release(searcher);
         }
     }
 
@@ -1339,7 +1379,7 @@ public partial class LottaDB : IDisposable
         lock (_lock)
         {
             RequireWriter().DeleteDocuments(new Term(Internal.StorageFields.Schema, schemaName));
-            _indexDirty = true;
+            _indexDirty = _readersBehind = true;
         }
 
         await foreach (var doc in _tableAdapter.GetManyJsonDocumentsAsync(
@@ -1352,7 +1392,7 @@ public partial class LottaDB : IDisposable
             lock (_lock)
             {
                 RequireWriter().AddDocument(document);
-                _indexDirty = true;
+                _indexDirty = _readersBehind = true;
             }
         }
 
@@ -1415,11 +1455,20 @@ public partial class LottaDB : IDisposable
         {
             if (_disposed) return;
 
-            if (_indexDirty && _indexWriter != null)
+            if (_indexWriter != null)
             {
-                _indexWriter.Commit();
-                _indexDirty = false;
-                force = true;   // our own writes must be visible immediately
+                // ReloadSearcher() commits, as it says; a search does not need to: the readers are
+                // opened from the writer, which sees its own writes uncommitted (near real time).
+                if (force && _indexDirty)
+                {
+                    _indexWriter.Commit();
+                    _indexDirty = false;
+                }
+                // While this process holds the write lock no other can write, so there is nothing
+                // else to look for: only what this one wrote since the readers were refreshed.
+                if (force || _readersBehind)
+                    RefreshReadersLocked();
+                return;
             }
 
             if (!force)
@@ -1436,16 +1485,48 @@ public partial class LottaDB : IDisposable
     }
 
     /// <summary>
-    /// Re-open both readers against the directory, picking up commits from any process.
-    /// Cheap when the index is unchanged — both end in DirectoryReader.OpenIfChanged, which
-    /// returns null and short-circuits. Callers must hold <c>_lock</c>.
+    /// Re-open both readers: from the IndexWriter while this process holds it (near real time,
+    /// what it wrote is seen without a commit), otherwise from the directory (what any process
+    /// has committed). Switches between the two when the writer comes or goes; a search in
+    /// progress keeps the reader it has. Cheap when nothing changed: both end in
+    /// DirectoryReader.OpenIfChanged, which returns null. Callers must hold <c>_lock</c>.
     /// </summary>
     private void RefreshReadersLocked()
     {
         if (_searcherManager == null) return;   // index does not exist yet
-        _searcherManager.MaybeRefresh();
-        _lucene.Refresh();
+        var writer = _indexWriter;
+        if (writer != null)
+        {
+            if (_searcherFromWriter)
+                _searcherManager.MaybeRefresh();
+            else
+                SwapSearcherManager(new Lucene.Net.Search.SearcherManager(writer, true, null), fromWriter: true);
+            _lucene.Refresh(writer);
+        }
+        else
+        {
+            // A reader from a closed writer cannot be reopened from it: the directory is read again.
+            if (_searcherFromWriter)
+                SwapSearcherManager(new Lucene.Net.Search.SearcherManager(_directory, null), fromWriter: false);
+            else
+                _searcherManager.MaybeRefresh();
+            _lucene.Refresh();
+        }
+        _readersBehind = false;
         _lastRefreshTimestamp = Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>
+    /// Replaces the searcher manager. A search holding a searcher of the old one releases it to
+    /// the old one (it keeps the manager it acquired from), and the old one's reader is closed
+    /// once released. Callers must hold <c>_lock</c>.
+    /// </summary>
+    private void SwapSearcherManager(Lucene.Net.Search.SearcherManager next, bool fromWriter)
+    {
+        var old = _searcherManager;
+        _searcherManager = next;
+        _searcherFromWriter = fromWriter;
+        old?.Dispose();
     }
 
     /// <summary>
@@ -1486,7 +1567,7 @@ public partial class LottaDB : IDisposable
     {
         lock (_lock)
         {
-            _indexDirty = true;
+            _indexDirty = _readersBehind = true;
             _lastWriteTimestamp = Stopwatch.GetTimestamp();
             StartRefreshLoopIfNeededLocked();
         }
@@ -2090,6 +2171,8 @@ public partial class LottaDB : IDisposable
                         allErrors.AddRange(updateErrors);
                     // For Materialize rules: what the object produces now, so this write records it.
                     await PrepareMaterializeAsync(entity, key, known: null, cancellationToken);
+                    // Its vectors, kept where the text is unchanged, so this write carries them.
+                    await PrepareVectorsAsync(entity, key, known: null, cancellationToken);
                     action = _tableAdapter.CreateUpsertAction(key, entity, meta);
                     entity.SetSchema(entity.GetType().Name);
                 }
@@ -2471,6 +2554,34 @@ public partial class LottaDB : IDisposable
     {
         await _keyLocks[index].WaitAsync(ct);
         return new KeyLock(_keyLocks[index], index, _heldLocks);
+    }
+
+    /// <summary>
+    /// Takes the locks of several keys only if every one is free now; otherwise takes none. For a
+    /// caller that would hold many locks while it works (a batch), which, waiting for them, could
+    /// wait on a save that holds one of them and waits for another the caller already has: a save
+    /// nested in another save's handlers takes its locks after its outer save's, not in order.
+    /// </summary>
+    /// <returns>The locks, or null when one was taken: do the work some other way.</returns>
+    private KeyLocks? TryAcquireLocks(IEnumerable<string> keys)
+    {
+        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
+        var indices = keys
+            .Select(LockStripeOf)
+            .Distinct()
+            .Where(i => !held.Contains(i))
+            .OrderBy(i => i)
+            .ToArray();
+        for (var acquired = 0; acquired < indices.Length; acquired++)
+        {
+            if (_keyLocks[indices[acquired]].Wait(0))
+                continue;
+            for (var i = acquired - 1; i >= 0; i--)
+                _keyLocks[indices[i]].Release();
+            return null;
+        }
+        _heldLocks.Value = held.Union(indices);
+        return new KeyLocks(_keyLocks, indices, _heldLocks);
     }
 
     // Not async, for the same reason as AcquireLockAsync.

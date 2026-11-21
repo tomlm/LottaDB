@@ -48,6 +48,19 @@ public class ObjectMetadata
     /// </summary>
     internal IReadOnlyDictionary<string, string[]>? Produced { get; set; }
 
+    /// <summary>
+    /// The vectors kept on the object's row, by field, each with the hash of the text it was
+    /// computed from. Null when not known (the object was not read from its row). Never changed
+    /// in place.
+    /// </summary>
+    internal IReadOnlyDictionary<string, Internal.StoredVector>? Vectors { get; set; }
+
+    /// <summary>
+    /// Whether a vector field's text has no vector yet, as worked out by the save or the
+    /// embedding of this object; null when not worked out.
+    /// </summary>
+    internal bool? VectorsStale { get; set; }
+
     /// <summary>During a save: what the object's <c>Materialize</c> rules are to write once its row is written, per rule.</summary>
     internal Dictionary<string, LottaDB.PendingViews>? PendingMaterialize { get; set; }
 
@@ -162,6 +175,30 @@ public static class ObjectExtensions
     /// <summary>The keys of the objects made from this one, per rule; null when not known.</summary>
     internal static IReadOnlyDictionary<string, string[]>? GetProduced(this object obj) =>
         _table.TryGetValue(obj, out var meta) ? meta.Produced : null;
+
+    /// <summary>Notes the vectors the object's row holds (or is about to); null for not known.</summary>
+    internal static void SetVectors(this object obj, IReadOnlyDictionary<string, Internal.StoredVector>? vectors)
+    {
+        if (vectors == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).Vectors = vectors;
+    }
+
+    /// <summary>The vectors the object's row holds, by field; null when not known.</summary>
+    internal static IReadOnlyDictionary<string, Internal.StoredVector>? GetVectors(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.Vectors : null;
+
+    /// <summary>Notes whether a vector field's text has no vector yet; null for not worked out.</summary>
+    internal static void SetVectorsStale(this object obj, bool? stale)
+    {
+        if (stale == null && !_table.TryGetValue(obj, out _))
+            return;
+        _table.GetOrCreateValue(obj).VectorsStale = stale;
+    }
+
+    /// <summary>Whether a vector field's text has no vector yet; null when not worked out.</summary>
+    internal static bool? GetVectorsStale(this object obj) =>
+        _table.TryGetValue(obj, out var meta) ? meta.VectorsStale : null;
 
     internal static void SetPendingMaterialize(this object obj, Dictionary<string, LottaDB.PendingViews>? pending)
     {

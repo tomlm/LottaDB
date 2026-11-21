@@ -89,6 +89,30 @@ public static class Rule
     public static bool Changed(params object?[] values) =>
         throw new InvalidOperationException(
             "Changed(...) only means something inside a rule's filter: Rules.When<Note>(n => Changed(n.Content)). It cannot be called.");
+
+    /// <summary>
+    /// In a rule's filter: true when a vector field of the object has text with no vector for it
+    /// yet: the object is new, its text changed, it was saved before vectors were kept on the row,
+    /// or the embedding model changed. A save works this out; where it has not been worked out
+    /// (a queued run coming up, a backfill), it is true, and <see cref="EmbedVectors"/> finds out.
+    /// <para>
+    /// LottaDB registers, for each type with vector fields, the rule
+    /// <c>When&lt;T&gt;(x =&gt; VectorsStale(x)).ModifyQueued("embed", EmbedVectors)</c>, unless the
+    /// configuration already has a rule named <c>embed</c> for the type. Register your own under that
+    /// name to narrow it: <c>When&lt;Note&gt;(n =&gt; n.IsPublished &amp;&amp; VectorsStale(n)).ModifyQueued("embed", EmbedVectors)</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="item">The object the rule is for.</param>
+    public static bool VectorsStale(object item) => item.GetVectorsStale() ?? true;
+
+    /// <summary>
+    /// A <c>ModifyQueued</c> handler that embeds the vector fields of the object whose text has no
+    /// vector, in one call to the catalog's embedding generator, and keeps the vectors on the
+    /// object's row. The search index then gets them, and <c>Similar</c> finds the object.
+    /// See <see cref="VectorsStale"/>.
+    /// </summary>
+    public static Task EmbedVectors<T>(T item, RuleContext context, CancellationToken cancellationToken) where T : class
+        => context.Db.EmbedVectorsAsync(item, cancellationToken);
 }
 
 /// <summary>
@@ -333,9 +357,15 @@ public sealed class RuleBuilder<T> where T : class, new()
     /// <param name="handler">The work to do.</param>
     /// <exception cref="ArgumentException">The name is not a valid rule name, or is already used for the type.</exception>
     /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
-    public RuleBuilder<T> DoQueued(string name, RuleHandler<T> handler)
+    public RuleBuilder<T> DoQueued(string name, RuleHandler<T> handler) => DoQueued(name, handler, options: null);
+
+    /// <summary>
+    /// Run a task later, from a queue, as <see cref="DoQueued(string, RuleHandler{T})"/>, with a
+    /// priority or a concurrency limit of its own; see <see cref="QueuedRuleOptions"/>.
+    /// </summary>
+    public RuleBuilder<T> DoQueued(string name, RuleHandler<T> handler, QueuedRuleOptions? options)
     {
-        _config.AddQueuedRule(RuleVerb.Do, name, _filter, handler);
+        _config.AddQueuedRule(RuleVerb.Do, name, _filter, handler, options: options);
         _rule.Actions++;
         return this;
     }
@@ -411,9 +441,15 @@ public sealed class RuleBuilder<T> where T : class, new()
     /// <param name="handler">The work to do, on the copy it is given.</param>
     /// <exception cref="ArgumentException">The name is not a valid rule name, or is already used for the type.</exception>
     /// <exception cref="NotSupportedException">Thrown when the database is opened, if its storage has no queues.</exception>
-    public RuleBuilder<T> ModifyQueued(string name, RuleHandler<T> handler)
+    public RuleBuilder<T> ModifyQueued(string name, RuleHandler<T> handler) => ModifyQueued(name, handler, options: null);
+
+    /// <summary>
+    /// Change the object later, from a queue, as <see cref="ModifyQueued(string, RuleHandler{T})"/>,
+    /// with a priority or a concurrency limit of its own; see <see cref="QueuedRuleOptions"/>.
+    /// </summary>
+    public RuleBuilder<T> ModifyQueued(string name, RuleHandler<T> handler, QueuedRuleOptions? options)
     {
-        _config.AddQueuedRule(RuleVerb.Modify, name, _filter, handler);
+        _config.AddQueuedRule(RuleVerb.Modify, name, _filter, handler, options: options);
         _rule.Actions++;
         return this;
     }
@@ -986,6 +1022,42 @@ public sealed record RuleStatus(string Rule, int Running, int Poisoned, string? 
 public sealed record RuleTypeStatus(string Type, int Waiting, int Poisoned, bool Orphaned = false);
 
 /// <summary>The kinds of queued action, in the order a run does them.</summary>
+/// <summary>Which queued work is taken first when there is more ready than can run at once.</summary>
+public enum RulePriority
+{
+    /// <summary>Taken only when no other work is ready: slow work that can wait, such as calls to a language model.</summary>
+    Low = -1,
+
+    /// <summary>The default.</summary>
+    Normal = 0,
+
+    /// <summary>Taken before all other work.</summary>
+    High = 1,
+}
+
+/// <summary>
+/// How a queued rule's work is scheduled, beyond the database's own settings. A rule given
+/// either setting has a queue of its own, apart from the other rules of its type, so that its
+/// waiting work never holds theirs up.
+/// </summary>
+public sealed record QueuedRuleOptions
+{
+    /// <summary>
+    /// Which work is taken first. When a slot to run in frees up, ready work of a higher priority
+    /// is always taken before work of a lower one; work of the same priority is taken in turn.
+    /// Give slow work <see cref="RulePriority.Low"/> so it cannot keep quick work waiting.
+    /// </summary>
+    public RulePriority Priority { get; init; } = RulePriority.Normal;
+
+    /// <summary>
+    /// The most runs of this rule at once, in one process, within
+    /// <see cref="ILottaConfiguration.MaxConcurrency"/>; null for no limit of its own. Use it to
+    /// keep within what a service the rule calls can take (a model server's slots, an API's rate
+    /// limit) while other rules use the rest.
+    /// </summary>
+    public int? MaxConcurrency { get; init; }
+}
+
 internal enum RuleVerb
 {
     /// <summary>Changes the object itself.</summary>
@@ -1053,7 +1125,24 @@ internal sealed class QueuedRule
 
     /// <summary>The time, taken from the object, at which the rule runs (<c>At</c>); null when the rule has none.</summary>
     public Func<object, DateTimeOffset?>? At { get; set; }
+
+    /// <summary>Which work is taken first; see <see cref="QueuedRuleOptions.Priority"/>.</summary>
+    public RulePriority Priority { get; set; }
+
+    /// <summary>The most runs of the rule at once in one process; null for no limit of its own.</summary>
+    public int? MaxConcurrency { get; set; }
+
+    /// <summary>
+    /// The most objects one run of the rule takes at once, from its own queue; 1 for one at a
+    /// time. Only the <c>embed</c> rule (<see cref="Rule.EmbedVectors"/>) is run in batches: one
+    /// call to the embedding generator and one write for all of them.
+    /// </summary>
+    public int BatchSize { get; set; } = 1;
+
+    /// <summary>Whether the rule's work has a queue of its own, apart from the other rules of its type.</summary>
+    public bool OwnQueue => Priority != RulePriority.Normal || MaxConcurrency != null || BatchSize > 1;
 }
+
 
 /// <summary>A rule made by <c>When</c> or <c>WhenDeleted</c>, counted so a rule with no action is caught at open.</summary>
 internal sealed class RuleRegistration(Type objectType, bool deleted)

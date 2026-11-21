@@ -20,7 +20,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
 
     private async Task<LottaDB> CreateVectorDbAsync(CancellationToken cancellationToken = default, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {
-        return await CreateDbAsync(cancellationToken: cancellationToken, testName: testName);
+        return await CreateDbAsync(config => config.QueueMode = QueueMode.Manual, cancellationToken: cancellationToken, testName: testName);
     }
 
     // =====================================================================
@@ -121,6 +121,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping on a warm blanket" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory research paper" }, ct);
 
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<VectorNote>(n => n.Similar("cute cat napping")).ToList();
         Assert.NotEmpty(results);
     }
@@ -134,6 +135,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten", Category = "animals", Body = "sleeping peacefully on a warm soft blanket" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics", Category = "science", Body = "string theory and particle research" }, ct);
 
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<VectorNote>(n => n.Similar("cute cat napping on a bed")).ToList();
         Assert.NotEmpty(results);
         Assert.Equal("2", results[0].Id);
@@ -152,6 +154,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
 
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<VectorNote>(n => n.Title.Similar("a cute cat napping")).ToList();
         Assert.NotEmpty(results);
     }
@@ -165,6 +168,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new VectorNote { Id = "2", Title = "a small kitten sleeping on a warm blanket", Category = "animals" }, ct);
         await db.SaveAsync(new VectorNote { Id = "3", Title = "quantum physics and string theory research", Category = "science" }, ct);
 
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<VectorNote>(n => n.Title.Similar("a cute cat napping")).ToList();
         Assert.NotEmpty(results);
         Assert.Equal("2", results[0].Id);
@@ -262,6 +266,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics", Body = "string theory research" }, ct);
 
         // a.Similar("...") should target Content (the DefaultSearch property)
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<Article>(a => a.Similar("cute cat napping")).ToList();
         Assert.NotEmpty(results);
         Assert.Equal("a2", results[0].Id);
@@ -277,6 +282,7 @@ public abstract class QueryMethodTestBase : LottaTestBase
         await db.SaveAsync(new Article { Id = "a3", Title = "quantum physics and string theory research", Body = "science journal" }, ct);
 
         // a.Title.Similar("...") targets Title specifically, not Content
+        await db.DrainAsync(cancellationToken: ct);
         var results = db.Search<Article>(a => a.Title.Similar("a cute cat napping")).ToList();
         Assert.NotEmpty(results);
         Assert.Equal("a2", results[0].Id);

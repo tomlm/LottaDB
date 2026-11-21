@@ -262,12 +262,11 @@ A retry names rules, so every queued rule needs a name that stays the same acros
 
 **Safety valve for renames and removals.** A retry that names a rule that no longer exists reruns all of the type's queued rules for that object. Rules must be safe to run twice anyway, so a rename or removal costs at most one extra run per waiting retry, never lost or misrouted work. Poison records with unknown names show in status as orphaned.
 
-### No priority; concurrency instead
+### Concurrency first; priority where a rule asks for it
 
-- With one queue per type, priority cannot mean what it does with a queue per rule, where a high-priority rule jumps ahead of other objects' work.
-- Instead, a per-database `MaxConcurrency` processes several objects at once, so slow work stops blocking fast work.
-- Two runs for the same object never overlap.
-- Priority can come back if a real need appears. So can `.Isolated()`, giving one slow rule a queue of its own.
+- A per-database `MaxConcurrency` processes several objects at once, and two runs for the same object never overlap.
+- That alone did not keep slow work from blocking fast work. In Symplist Reno (2026-11), three describe calls to a local model, about 15 seconds each, filled all three slots almost all the time; embeddings of a few milliseconds waited behind them, and 14,000 passages piled up while 1,300 messages were described.
+- So a rule can ask for a priority and a limit of its own (`QueuedRuleOptions`; see Rules-Design.md). Either gives the rule a queue of its own, as `.Isolated()` was to have. Rules without them share their type's queue as before.
 
 ## No public raw queues
 

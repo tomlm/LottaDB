@@ -18,8 +18,37 @@ namespace Lotta;
 public partial class LottaDB
 {
     /// <summary>The queue of one concrete object type, with the queue its failed work is set aside in.</summary>
-    private sealed class TypeQueue(string typeName, Type? type, QueueClient queue, QueueClient poison, QueuedRule[] rules)
+    private sealed class TypeQueue(string typeName, Type? type, QueueClient queue, QueueClient poison, QueuedRule[] rules,
+        string? rule = null, RulePriority priority = RulePriority.Normal, int? limit = null)
     {
+        /// <summary>For a queue of one rule (one with a priority or a limit of its own), that rule's identity; null for the type's shared queue.</summary>
+        public string? Rule { get; } = rule;
+
+        /// <summary>Which queues are read first: higher before lower, the same in turn.</summary>
+        public RulePriority Priority { get; } = priority;
+
+        /// <summary>The most messages of this queue run at once in this process; null for no limit of its own.</summary>
+        public int? Limit { get; } = limit;
+
+        private int _running;
+
+        /// <summary>Takes a place to run one message, if the queue's limit leaves one; <see cref="Leave"/> gives it back.</summary>
+        public bool TryEnter()
+        {
+            if (Limit is not { } most)
+                return true;
+            if (Interlocked.Increment(ref _running) <= most)
+                return true;
+            Interlocked.Decrement(ref _running);
+            return false;
+        }
+
+        public void Leave()
+        {
+            if (Limit != null)
+                Interlocked.Decrement(ref _running);
+        }
+
         /// <summary>The full name of the type, as the queue records it.</summary>
         public string TypeName { get; } = typeName;
 
@@ -104,11 +133,12 @@ public partial class LottaDB
 
     private static readonly AsyncLocal<AsyncRun?> _asyncRun = new();
 
-    private readonly ConcurrentDictionary<Type, TypeQueue> _queueByType = new();
+    /// <summary>The queues by type and rule: the rule's identity for a queue of one rule, "" for the type's shared queue.</summary>
+    private readonly ConcurrentDictionary<(Type Type, string Rule), TypeQueue> _queueByType = new();
     private readonly ConcurrentDictionary<Type, QueuedRule[]> _rulesByType = new();
     private readonly ConcurrentDictionary<string, RuleState> _ruleStates = new(StringComparer.Ordinal);
     private readonly object _typeQueuesLock = new();
-    /// <summary>Every known type queue, orphaned ones included. Replaced, never changed, when one is added.</summary>
+    /// <summary>Every known queue, orphaned ones included, highest priority first. Replaced, never changed, when one is added.</summary>
     private volatile TypeQueue[] _typeQueues = [];
     private int _nextQueue;
 
@@ -237,12 +267,16 @@ public partial class LottaDB
         {
             var queue = queues.GetQueueClient(name);
             string? typeName = null;
+            string? ruleId = null;
             try
             {
                 var about = (await queue.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.Metadata;
                 var entry = about?.FirstOrDefault(m => string.Equals(m.Key, RuleQueueNames.TypeMetadata, StringComparison.OrdinalIgnoreCase));
                 if (entry?.Value is { Length: > 0 } recorded)
                     typeName = Uri.UnescapeDataString(recorded);
+                var ruleEntry = about?.FirstOrDefault(m => string.Equals(m.Key, RuleQueueNames.RuleMetadata, StringComparison.OrdinalIgnoreCase));
+                if (ruleEntry?.Value is { Length: > 0 } recordedRule)
+                    ruleId = Uri.UnescapeDataString(recordedRule);
             }
             catch (RequestFailedException e) when (e.Status == 404)
             {
@@ -253,7 +287,11 @@ public partial class LottaDB
             var poison = queues.GetQueueClient(RuleQueueNames.Poison(name));
             await poison.CreateIfNotExistsAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
             // A queue that does not say whose it is, or is for a type no rule is for now, is kept and shown, but not run.
-            AddTypeQueue(new TypeQueue(typeName ?? name, type, queue, poison, type == null ? [] : QueuedRulesFor(type)));
+            // A queue of one rule takes the rule's priority and limit as they are now; if the rule has
+            // neither any more (or is gone), its waiting work is still run, with neither.
+            var rules = type == null ? [] : QueuedRulesFor(type);
+            var own = ruleId == null ? null : rules.FirstOrDefault(r => r.Id == ruleId && r.OwnQueue);
+            AddTypeQueue(new TypeQueue(typeName ?? name, type, queue, poison, rules, ruleId, own?.Priority ?? RulePriority.Normal, own?.MaxConcurrency));
         }
     }
 
@@ -263,24 +301,38 @@ public partial class LottaDB
         {
             if (queue.Type != null)
             {
-                if (_queueByType.TryGetValue(queue.Type, out var known))
+                if (_queueByType.TryGetValue((queue.Type, queue.Rule ?? ""), out var known))
                     return known;
-                _queueByType[queue.Type] = queue;
+                _queueByType[(queue.Type, queue.Rule ?? "")] = queue;
             }
-            _typeQueues = [.. _typeQueues, queue];
+            // Kept in priority order, highest first, for the pump; the sort is stable, so the rest stay as added.
+            _typeQueues = [.. _typeQueues.Append(queue).OrderByDescending(q => q.Priority)];
             return queue;
         }
     }
 
-    /// <summary>The queue of a concrete type, made the first time work is queued for the type.</summary>
-    private async Task<TypeQueue> TypeQueueAsync(Type type, CancellationToken cancellationToken)
+    /// <summary>The queue a rule's work goes to for a concrete type: its own if it has a priority or a limit, otherwise the type's shared queue.</summary>
+    private Task<TypeQueue> QueueForRuleAsync(Type type, string ruleId, CancellationToken cancellationToken) =>
+        TypeQueueAsync(type, OwnQueueRule(type, ruleId), cancellationToken);
+
+    /// <summary>The rule, if it has a queue of its own for the type; null when its work goes to the type's shared queue.</summary>
+    private QueuedRule? OwnQueueRule(Type type, string ruleId) =>
+        QueuedRulesFor(type).FirstOrDefault(r => r.Id == ruleId) is { OwnQueue: true } own ? own : null;
+
+    /// <summary>
+    /// The queue of a concrete type, or of one rule for it (<paramref name="rule"/>, which has a
+    /// priority or a limit of its own), made the first time work is queued to it.
+    /// </summary>
+    private async Task<TypeQueue> TypeQueueAsync(Type type, QueuedRule? rule, CancellationToken cancellationToken)
     {
-        if (_queueByType.TryGetValue(type, out var known))
+        if (_queueByType.TryGetValue((type, rule?.Id ?? ""), out var known))
             return known;
         var queues = _lottaCatalog.GetQueueServiceClient()
             ?? throw new NotSupportedException($"Rules that run from a queue (.DoQueued, .ModifyQueued, .Materialize, .After, .At) need queue storage, which {_lottaCatalog.StorageProvider} storage does not provide.");
 
-        var name = RuleQueueNames.Queue(_lottaCatalog.Name, _databaseId, type);
+        var name = rule == null
+            ? RuleQueueNames.Queue(_lottaCatalog.Name, _databaseId, type)
+            : RuleQueueNames.Queue(_lottaCatalog.Name, _databaseId, type, rule.Id);
         var queue = queues.GetQueueClient(name);
         var poison = queues.GetQueueClient(RuleQueueNames.Poison(name));
         var typeName = type.FullName ?? type.Name;
@@ -291,9 +343,12 @@ public partial class LottaDB
             ["database"] = Uri.EscapeDataString(_databaseId),
             [RuleQueueNames.TypeMetadata] = Uri.EscapeDataString(typeName),
         };
+        if (rule != null)
+            about[RuleQueueNames.RuleMetadata] = Uri.EscapeDataString(rule.Id);
         await queue.CreateIfNotExistsAsync(about, cancellationToken).ConfigureAwait(false);
         await poison.CreateIfNotExistsAsync(about, cancellationToken).ConfigureAwait(false);
-        return AddTypeQueue(new TypeQueue(typeName, type, queue, poison, QueuedRulesFor(type)));
+        // Every queue of a type knows all the type's rules: a message names its rules, and one naming a rule renamed since runs them all.
+        return AddTypeQueue(new TypeQueue(typeName, type, queue, poison, QueuedRulesFor(type), rule?.Id, rule?.Priority ?? RulePriority.Normal, rule?.MaxConcurrency));
     }
 
     /// <summary>
@@ -421,12 +476,12 @@ public partial class LottaDB
         var hop = run is null ? 0 : run.Hop + 1;
         try
         {
-            var queue = await TypeQueueAsync(type, cancellationToken).ConfigureAwait(false);
             if (hop > _config.MaxQueueHops)
             {
                 // A chain this long is rules feeding one another; stop it where it can be seen.
                 foreach (var rule in matched.Concat(later.Select(l => l.Rule)))
                 {
+                    var queue = await QueueForRuleAsync(type, rule, cancellationToken).ConfigureAwait(false);
                     var record = new PoisonRecord
                     {
                         Type = queue.TypeName,
@@ -440,14 +495,18 @@ public partial class LottaDB
                 return;
             }
 
-            if (matched.Count > 0)
+            // One message per queue: the rules that share the type's queue together, and each rule
+            // with a queue of its own (a priority or a limit) by itself.
+            foreach (var group in matched.GroupBy(rule => OwnQueueRule(type, rule)?.Id ?? "", StringComparer.Ordinal))
             {
-                var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = matched, Hop = hop };
+                var queue = await QueueForRuleAsync(type, group.First(), cancellationToken).ConfigureAwait(false);
+                var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = [.. group], Hop = hop };
                 await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
             }
             // A delayed rule has a message of its own, hidden until its time (or as long as a queue can hide it).
             foreach (var (rule, due) in later)
             {
+                var queue = await QueueForRuleAsync(type, rule, cancellationToken).ConfigureAwait(false);
                 var message = new RuleMessage { Key = key, ETag = entity.GetETag(), Rules = [rule], Hop = hop, Due = due };
                 await queue.Queue.SendMessageAsync(message.ToText(), HideFor(due, now), NeverExpires, cancellationToken).ConfigureAwait(false);
             }
@@ -508,12 +567,12 @@ public partial class LottaDB
         string? unsent = null;
         try
         {
-            var queue = await TypeQueueAsync(type, cancellationToken).ConfigureAwait(false);
             if (hop > _config.MaxQueueHops)
             {
                 // A chain this long is rules feeding one another; stop it where it can be seen.
                 foreach (var rule in matched)
                 {
+                    var queue = await QueueForRuleAsync(type, rule, cancellationToken).ConfigureAwait(false);
                     unsent = await WriteTombstoneAsync(entity, cancellationToken).ConfigureAwait(false);
                     var record = new PoisonRecord
                     {
@@ -531,18 +590,23 @@ public partial class LottaDB
                 return;
             }
 
-            unsent = await WriteTombstoneAsync(entity, cancellationToken).ConfigureAwait(false);
-            var message = new RuleMessage
+            // One message per queue, as for a save; each names a tombstone of its own, which its last rule removes.
+            foreach (var group in matched.GroupBy(rule => OwnQueueRule(type, rule)?.Id ?? "", StringComparer.Ordinal))
             {
-                Key = key,
-                ETag = entity.GetETag(),
-                Rules = matched,
-                Hop = hop,
-                Tombstone = unsent,
-                Deleted = deleted,
-            };
-            await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
-            unsent = null;
+                var queue = await QueueForRuleAsync(type, group.First(), cancellationToken).ConfigureAwait(false);
+                unsent = await WriteTombstoneAsync(entity, cancellationToken).ConfigureAwait(false);
+                var message = new RuleMessage
+                {
+                    Key = key,
+                    ETag = entity.GetETag(),
+                    Rules = [.. group],
+                    Hop = hop,
+                    Tombstone = unsent,
+                    Deleted = deleted,
+                };
+                await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+                unsent = null;
+            }
             Signal();
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -681,16 +745,27 @@ public partial class LottaDB
                     return runs;
 
                 var started = false;
+                var limited = false;
                 if (running.Count < most)
                 {
                     await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
                     var held = true;
                     try
                     {
-                        if (await ReceiveNextAsync(lease, cancellationToken).ConfigureAwait(false) is { } next)
+                        var next = await ReceiveNextAsync(lease, cancellationToken).ConfigureAwait(false);
+                        limited = next.Limited;
+                        if (next.Queue is { } queue && next.Message is { } message)
                         {
                             held = false;
-                            running.Add(RunInSlotAsync(next.Queue, next.Message, lease, max - runs, cancellationToken));
+                            // A rule run in batches takes more of its queue's messages with this one,
+                            // unless the drain has a limit, which is kept one message at a time.
+                            // They are taken here, before the pump looks again, so it does not take them first.
+                            if (max is null && BatchRuleOf(queue) is { } batched)
+                                running.Add(RunBatchInSlotAsync(queue, batched,
+                                    [message, .. await ReceiveMoreAsync(queue, batched, lease, cancellationToken).ConfigureAwait(false)],
+                                    lease, cancellationToken));
+                            else
+                                running.Add(RunInSlotAsync(queue, message, lease, max - runs, cancellationToken));
                             started = true;
                         }
                     }
@@ -708,6 +783,13 @@ public partial class LottaDB
 
                 if (!forever)
                 {
+                    // Work held back only by a rule's limit, which another pump's runs (the background
+                    // loop's, or another drain's) are using up: not done yet, so wait for a place.
+                    if (running.Count == 0 && limited)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
                     if (running.Count == 0)
                         return runs;
                     // What is in progress may queue more, or free an object another message waits for.
@@ -736,6 +818,19 @@ public partial class LottaDB
             }
         }
 
+        async Task<int> RunBatchInSlotAsync(TypeQueue queue, QueuedRule rule, List<QueueMessage> messages, TimeSpan held, CancellationToken token)
+        {
+            try
+            {
+                return await RunBatchAsync(queue, rule, messages, held, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                queue.Leave();
+                slots.Release();
+            }
+        }
+
         async Task<int> RunInSlotAsync(TypeQueue queue, QueueMessage message, TimeSpan held, int? budget, CancellationToken token)
         {
             try
@@ -744,25 +839,56 @@ public partial class LottaDB
             }
             finally
             {
+                queue.Leave();
                 slots.Release();
             }
         }
     }
 
-    /// <summary>Takes the next ready message, looking at the type queues in turn so none is starved.</summary>
-    private async Task<(TypeQueue Queue, QueueMessage Message)?> ReceiveNextAsync(TimeSpan lease, CancellationToken cancellationToken)
+    /// <summary>
+    /// Takes the next ready message: from the queues of the highest priority first, and among
+    /// queues of one priority in turn, so none of them is starved. A queue whose rule is already
+    /// running as often as its limit allows is passed over. The queue a message is taken from has
+    /// a place held for it, which the run gives back (<see cref="TypeQueue.Leave"/>).
+    /// </summary>
+    /// <returns>The message and its queue, or neither; and whether a queue was passed over for its limit.</returns>
+    private async Task<(TypeQueue? Queue, QueueMessage? Message, bool Limited)> ReceiveNextAsync(TimeSpan lease, CancellationToken cancellationToken)
     {
         var queues = _typeQueues;
-        for (var n = 0; n < queues.Length; n++)
+        var limited = false;
+        for (var start = 0; start < queues.Length;)
         {
-            var queue = queues[(int)((uint)Interlocked.Increment(ref _nextQueue) % (uint)queues.Length)];
-            if (queue.Orphaned)
-                continue;
-            var received = (await queue.Queue.ReceiveMessagesAsync(1, lease, cancellationToken).ConfigureAwait(false)).Value;
-            if (received.Length > 0)
-                return (queue, received[0]);
+            var end = start;
+            while (end < queues.Length && queues[end].Priority == queues[start].Priority)
+                end++;
+            var count = (uint)(end - start);
+            var first = (uint)Interlocked.Increment(ref _nextQueue);
+            for (var n = 0u; n < count; n++)
+            {
+                var queue = queues[start + (int)((first + n) % count)];
+                if (queue.Orphaned)
+                    continue;
+                if (!queue.TryEnter())
+                {
+                    limited = true;
+                    continue;
+                }
+                try
+                {
+                    var received = (await queue.Queue.ReceiveMessagesAsync(1, lease, cancellationToken).ConfigureAwait(false)).Value;
+                    if (received.Length > 0)
+                        return (queue, received[0], limited);
+                }
+                catch
+                {
+                    queue.Leave();
+                    throw;
+                }
+                queue.Leave();
+            }
+            start = end;
         }
-        return null;
+        return (null, null, limited);
     }
 
     /// <summary>
@@ -788,6 +914,14 @@ public partial class LottaDB
         {
             await queue.Queue.UpdateMessageAsync(received.MessageId, received.PopReceipt, (string?)null, hide, cancellationToken).ConfigureAwait(false);
             return 0;
+        }
+
+        // Work queued before its rule was given a priority or a limit is in the type's shared queue:
+        // moved to the rule's own queue, so that it is run as the rule now asks.
+        if (queue.Rule == null && queue.Type is { } type && message.Rules.Any(rule => OwnQueueRule(type, rule) != null))
+        {
+            if (await MoveToOwnQueuesAsync(queue, type, received, message, cancellationToken).ConfigureAwait(false))
+                return 0;
         }
 
         // The pop receipt changes every time the hold on the message is extended.
@@ -861,15 +995,26 @@ public partial class LottaDB
         if (holdLost)
             return state.Runs;
 
+        await SettleAsync(queue, received.MessageId, receipt, message, state).ConfigureAwait(false);
+        return state.Runs;
+    }
+
+    /// <summary>
+    /// Settles a message after its run: deleted when nothing is left to do; otherwise each failed
+    /// rule is counted, and set aside once it has failed too often, and the message is kept in
+    /// place listing what is left, hidden until its next try.
+    /// </summary>
+    private async Task SettleAsync(TypeQueue queue, string messageId, string receipt, RuleMessage message, MessageRun state)
+    {
         // What follows must happen even while closing, or the work would be done again for nothing.
         var settle = CancellationToken.None;
         try
         {
             if (state.Gone)
             {
-                await queue.Queue.DeleteMessageAsync(received.MessageId, receipt, settle).ConfigureAwait(false);
+                await queue.Queue.DeleteMessageAsync(messageId, receipt, settle).ConfigureAwait(false);
                 await RemoveTombstoneAsync(message.Tombstone).ConfigureAwait(false);
-                return state.Runs;
+                return;
             }
 
             var tries = 0;
@@ -896,10 +1041,10 @@ public partial class LottaDB
 
             if (state.Pending.Count == 0)
             {
-                await queue.Queue.DeleteMessageAsync(received.MessageId, receipt, settle).ConfigureAwait(false);
+                await queue.Queue.DeleteMessageAsync(messageId, receipt, settle).ConfigureAwait(false);
                 // The last rule of a delete has run: the object goes for good.
                 await RemoveTombstoneAsync(message.Tombstone).ConfigureAwait(false);
-                return state.Runs;
+                return;
             }
 
             // Kept in place, listing only what is left, with each failure written into it.
@@ -919,13 +1064,12 @@ public partial class LottaDB
                 wait = RetryWait(++message.Waits);    // no failure counted, but given back at once it would spin while the lock is held
             else
                 wait = TimeSpan.Zero;                 // interrupted: given back at once, with no failure counted
-            await queue.Queue.UpdateMessageAsync(received.MessageId, receipt, message.ToText(), wait, settle).ConfigureAwait(false);
+            await queue.Queue.UpdateMessageAsync(messageId, receipt, message.ToText(), wait, settle).ConfigureAwait(false);
         }
         catch (RequestFailedException)
         {
             // The hold ran out before this could be recorded. The message is still queued and will be run again.
         }
-        return state.Runs;
 
         static Dictionary<string, TValue>? Only<TValue>(Dictionary<string, TValue>? all, List<string> rules)
         {
@@ -934,6 +1078,42 @@ public partial class LottaDB
             var kept = all.Where(entry => rules.Contains(entry.Key)).ToDictionary(entry => entry.Key, entry => entry.Value);
             return kept.Count == 0 ? null : kept;
         }
+    }
+
+    /// <summary>
+    /// Sends the rules of a message from a type's shared queue that now have queues of their own
+    /// to those queues, each with its attempts so far, and a tombstone of its own for a delete.
+    /// What is left stays in <paramref name="message"/> to be run here.
+    /// </summary>
+    /// <returns>True when nothing is left, and the message is gone from the shared queue.</returns>
+    private async Task<bool> MoveToOwnQueuesAsync(TypeQueue queue, Type type, QueueMessage received, RuleMessage message, CancellationToken cancellationToken)
+    {
+        var moving = message.Rules.Where(rule => OwnQueueRule(type, rule) != null).ToList();
+        foreach (var rule in moving)
+        {
+            var target = await QueueForRuleAsync(type, rule, cancellationToken).ConfigureAwait(false);
+            var moved = new RuleMessage
+            {
+                Key = message.Key,
+                ETag = message.ETag,
+                Rules = [rule],
+                Hop = message.Hop,
+                Due = message.Due,
+                Deleted = message.Deleted,
+                Tombstone = message.Tombstone == null ? null : await CopyTombstoneAsync(message.Tombstone, cancellationToken).ConfigureAwait(false),
+                Attempts = message.Attempts?.TryGetValue(rule, out var attempts) == true ? new() { [rule] = attempts } : null,
+                LastError = message.LastError?.TryGetValue(rule, out var error) == true ? new() { [rule] = error } : null,
+            };
+            await target.Queue.SendMessageAsync(moved.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+        }
+        Signal();
+
+        message.Rules = [.. message.Rules.Except(moving, StringComparer.Ordinal)];
+        if (message.Rules.Count > 0)
+            return false;
+        await queue.Queue.DeleteMessageAsync(received.MessageId, received.PopReceipt, cancellationToken).ConfigureAwait(false);
+        await RemoveTombstoneAsync(message.Tombstone).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>
@@ -1097,7 +1277,8 @@ public partial class LottaDB
         await rule.Invoke(copy, new RuleContext(this, rule.Name, rule.Id, attempt, copy, etag), cancellationToken).ConfigureAwait(false);
 
         var copyJson = JsonSerializer.Serialize(copy, type);
-        if (copyJson == originalJson)
+        var jsonChanged = copyJson != originalJson;
+        if (!jsonChanged && SameVectors(copy, original))
             return;   // nothing changed, nothing to write
 
         try
@@ -1112,6 +1293,15 @@ public partial class LottaDB
 
         // Saved by someone else during the run. The rules after this one get the newer object.
         run.Dirty = true;
+
+        // Only vectors set (embedding): they go onto the newer version, whatever changed in it,
+        // since a save keeps a vector only where it is that of the version's text.
+        if (!jsonChanged)
+        {
+            await WriteVectorsOntoLatestAsync(rule, key, type, copy, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         // Without named inputs there is no telling whether the result still fits the newer object.
         if (rule.Inputs.Length == 0)
             return;
@@ -1143,6 +1333,7 @@ public partial class LottaDB
             }
             var latestJson = latest.GetJson() ?? JsonSerializer.Serialize(latest, type);
             var result = CopyOf(merged.ToJsonString(), type, key, latest.GetETag(), latest);
+            AddVectors(result, copy);
             // As loaded, so the save sees what it replaces.
             result.SetJson(latestJson);
             try
@@ -1172,6 +1363,7 @@ public partial class LottaDB
         copy.SetSchema(type.Name);
         copy.SetSource(like.GetSource());       // an object a Materialize rule produced stays that rule's
         copy.SetProduced(like.GetProduced());   // and what was produced from it stays listed
+        copy.SetVectors(like.GetVectors());     // and its vectors stay with it
         if (copy is BlobFile blob)
             blob.Database = this;
         return copy;
@@ -1229,19 +1421,25 @@ public partial class LottaDB
         // Readable after the database is disposed: the queues belong to the catalog.
         var poisoned = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var types = new List<RuleTypeStatus>();
-        foreach (var queue in _typeQueues.OrderBy(q => q.TypeName, StringComparer.Ordinal))
+        // One entry per type: the type's shared queue and the queues of its rules that have their own, added up.
+        foreach (var ofType in _typeQueues.GroupBy(q => q.TypeName, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
         {
-            var waiting = (await queue.Queue.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
-            var aside = (await queue.Poison.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
-            types.Add(new RuleTypeStatus(queue.TypeName, waiting, aside, queue.Orphaned));
-            if (aside == 0)
-                continue;
-            // Which rules the set-aside work belongs to is only in the records themselves.
-            foreach (var peeked in (await queue.Poison.PeekMessagesAsync(32, cancellationToken).ConfigureAwait(false)).Value)
+            int waiting = 0, aside = 0;
+            foreach (var queue in ofType)
             {
-                if (PoisonRecord.TryParse(peeked.Body.ToString()) is { } record)
-                    poisoned[record.Rule] = poisoned.GetValueOrDefault(record.Rule) + 1;
+                waiting += (await queue.Queue.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
+                var queueAside = (await queue.Poison.GetPropertiesAsync(cancellationToken).ConfigureAwait(false)).Value.ApproximateMessagesCount;
+                aside += queueAside;
+                if (queueAside == 0)
+                    continue;
+                // Which rules the set-aside work belongs to is only in the records themselves.
+                foreach (var peeked in (await queue.Poison.PeekMessagesAsync(32, cancellationToken).ConfigureAwait(false)).Value)
+                {
+                    if (PoisonRecord.TryParse(peeked.Body.ToString()) is { } record)
+                        poisoned[record.Rule] = poisoned.GetValueOrDefault(record.Rule) + 1;
+                }
             }
+            types.Add(new RuleTypeStatus(ofType.Key, waiting, aside, ofType.All(q => q.Orphaned)));
         }
 
         var rules = new List<RuleStatus>();
@@ -1270,7 +1468,8 @@ public partial class LottaDB
         {
             // A fresh start: no attempts, and not part of the chain of rules that led to it.
             var message = new RuleMessage { Key = record.Key, ETag = record.ETag, Rules = [id], Tombstone = record.Tombstone, Deleted = record.Deleted };
-            await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
+            var target = queue.Type is { } type ? await QueueForRuleAsync(type, id, cancellationToken).ConfigureAwait(false) : queue;
+            await target.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
         if (moved > 0)
             Signal();
@@ -1365,10 +1564,10 @@ public partial class LottaDB
         return count;
     }
 
-    /// <summary>Queues one rule for one stored object, in the queue of the object's type. The caller wakes the loop.</summary>
+    /// <summary>Queues one rule for one stored object, in the queue the rule's work goes to for the object's type. The caller wakes the loop.</summary>
     private async Task QueueRuleAsync(object entity, string ruleId, int hop, CancellationToken cancellationToken)
     {
-        var queue = await TypeQueueAsync(entity.GetType(), cancellationToken).ConfigureAwait(false);
+        var queue = await QueueForRuleAsync(entity.GetType(), ruleId, cancellationToken).ConfigureAwait(false);
         var message = new RuleMessage { Key = AsyncKeyOf(entity), ETag = entity.GetETag(), Rules = [ruleId], Hop = hop };
         await queue.Queue.SendMessageAsync(message.ToText(), null, NeverExpires, cancellationToken).ConfigureAwait(false);
     }
