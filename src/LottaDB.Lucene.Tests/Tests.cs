@@ -49,6 +49,7 @@ public class Lucene_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public 
 public class Lucene_VectorSearchTests : VectorSearchTestBase { public Lucene_VectorSearchTests() : base(Tests.Configure) { } }
 public class Lucene_WriteLockTests : WriteLockTestBase { public Lucene_WriteLockTests() : base(Tests.Configure) { } }
 public class Lucene_QueuedRuleTests : QueuedRuleTestBase { public Lucene_QueuedRuleTests() : base(Tests.Configure) { } }
+public class Lucene_RulePriorityTests : RulePriorityTestBase { public Lucene_RulePriorityTests() : base(Tests.Configure) { } }
 public class Lucene_MaterializeTests : MaterializeTestBase { public Lucene_MaterializeTests() : base(Tests.Configure) { } }
 public class Lucene_ModifyRuleTests : ModifyRuleTestBase { public Lucene_ModifyRuleTests() : base(Tests.Configure) { } }
 public class Lucene_ScheduleTests : ScheduleTestBase { public Lucene_ScheduleTests() : base(Tests.Configure) { } }
@@ -66,6 +67,7 @@ public class LuceneFileSystem_BlobTests : BlobTestBase { public LuceneFileSystem
 public class LuceneFileSystem_BlobOnUploadTests : BlobOnUploadTestBase { public LuceneFileSystem_BlobOnUploadTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_RebuildIndexTests : RebuildIndexTestBase { public LuceneFileSystem_RebuildIndexTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_QueuedRuleTests : QueuedRuleTestBase { public LuceneFileSystem_QueuedRuleTests() : base(Tests.ConfigureFileSystem) { } }
+public class LuceneFileSystem_RulePriorityTests : RulePriorityTestBase { public LuceneFileSystem_RulePriorityTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_MaterializeTests : MaterializeTestBase { public LuceneFileSystem_MaterializeTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_ModifyRuleTests : ModifyRuleTestBase { public LuceneFileSystem_ModifyRuleTests() : base(Tests.ConfigureFileSystem) { } }
 public class LuceneFileSystem_ScheduleTests : ScheduleTestBase { public LuceneFileSystem_ScheduleTests() : base(Tests.ConfigureFileSystem) { } }

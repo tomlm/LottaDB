@@ -20,6 +20,9 @@ internal static partial class RuleQueueNames
     /// <summary>The metadata entry of a queue that holds the full name of its object type.</summary>
     public const string TypeMetadata = "type";
 
+    /// <summary>The queue metadata naming the rule a queue of one rule is for.</summary>
+    public const string RuleMetadata = "rule";
+
     private const int MaxTypeSlugLength = 30;
     private const string Base32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -156,13 +159,21 @@ internal static partial class RuleQueueNames
     /// name so that two types with one name in different namespaces get different queues.
     /// </summary>
     public static string Queue(string catalog, string databaseId, Type type) =>
-        DatabasePrefix(catalog, databaseId) + TypeSlug(type.Name) + "-" + Hash(type.FullName ?? type.Name, 6);
+        DatabasePrefix(catalog, databaseId) + TypeSlug(type.Name, MaxTypeSlugLength) + "-" + Hash(type.FullName ?? type.Name, 6);
+
+    /// <summary>
+    /// The queue for one rule of one object type, for a rule with a priority or a concurrency
+    /// limit of its own: the type's readable name made shorter, so that with a second hash, for
+    /// the rule, the name and its poison queue's still fit in 63 characters.
+    /// </summary>
+    public static string Queue(string catalog, string databaseId, Type type, string ruleId) =>
+        DatabasePrefix(catalog, databaseId) + TypeSlug(type.Name, MaxTypeSlugLength - 7) + "-" + Hash(type.FullName ?? type.Name, 6) + Hash(ruleId, 6);
 
     /// <summary>Where the work of a queue goes when it has failed too often.</summary>
     public static string Poison(string queue) => queue + PoisonSuffix;
 
     /// <summary>A type's name as a queue name allows it: <c>BlobPhoto</c> gives <c>blob-photo</c>.</summary>
-    private static string TypeSlug(string typeName)
+    private static string TypeSlug(string typeName, int maxLength)
     {
         var slug = new StringBuilder();
         foreach (var c in KebabCase(typeName))
@@ -171,7 +182,7 @@ internal static partial class RuleQueueNames
                 slug.Append(c);
             else if (slug.Length > 0 && slug[^1] != '-')
                 slug.Append('-');   // generic arity marks, nested-type marks and the like
-            if (slug.Length == MaxTypeSlugLength)
+            if (slug.Length == maxLength)
                 break;
         }
         var text = slug.ToString().Trim('-');

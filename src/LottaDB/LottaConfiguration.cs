@@ -119,6 +119,44 @@ public class LottaConfiguration : ILottaConfiguration
         return this;
     }
 
+    /// <summary>
+    /// Registers one rule per stored type with vector fields, which embeds all of them:
+    /// <c>When&lt;T&gt;(x =&gt; VectorsStale(x)).ModifyQueued("embed", EmbedVectors)</c>. A save
+    /// queues it once, however many fields changed, and its run embeds every stale field in one
+    /// call and writes the object back once. Called when a database with an embedding generator
+    /// and queue storage is opened.
+    /// </summary>
+    internal void AddEmbedRules()
+    {
+        var addEmbedRule = typeof(LottaConfiguration).GetMethod(nameof(AddEmbedRule), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        // Base types first, so a derived type sees that its base's rule already covers it.
+        foreach (var storedType in StorageConfigurations.Keys.OrderBy(InheritanceDepth).ToList())
+            addEmbedRule.MakeGenericMethod(storedType).Invoke(this, null);
+    }
+
+    private static int InheritanceDepth(Type type)
+    {
+        var depth = 0;
+        for (var t = type.BaseType; t != null; t = t.BaseType)
+            depth++;
+        return depth;
+    }
+
+    /// <summary>
+    /// Registers the embed rule for one type, unless a rule named <c>embed</c> already applies to
+    /// it: one the configuration made, or the rule of a base type, which runs for this type's
+    /// objects too and embeds their own fields.
+    /// </summary>
+    private void AddEmbedRule<T>() where T : class, new()
+    {
+        if (QueuedRules.Any(r => r.Name == LottaDB.EmbedRuleName && r.ObjectType.IsAssignableFrom(typeof(T))))
+            return;
+        var meta = Internal.TypeMetadata.Build((StorageConfiguration<T>)StorageConfigurations[typeof(T)], AutoKeyProperties);
+        if (Internal.StoredVectors.FieldsOf(meta, hasGenerator: true).Count == 0)
+            return;
+        Rules.When<T>(x => Rule.VectorsStale(x)).ModifyQueued(LottaDB.EmbedRuleName, Rule.EmbedVectors);
+    }
+
     /// <summary>Throws if a rule was started with <c>When</c> or <c>WhenDeleted</c> and given no action.</summary>
     internal void CheckRules()
     {
@@ -170,15 +208,31 @@ public class LottaConfiguration : ILottaConfiguration
     /// </summary>
     /// <param name="after">How long after the save the rule runs; null for as soon as it can.</param>
     /// <param name="at">The time, taken from the object, at which the rule runs; null for as soon as it can.</param>
+    /// <param name="options">The rule's priority and concurrency limit; null for neither.</param>
     internal void AddQueuedRule<T>(RuleVerb verb, string name, Internal.RuleFilter<T> filter, RuleHandler<T> handler,
-        TimeSpan? after = null, Func<T, DateTimeOffset?>? at = null)
+        TimeSpan? after = null, Func<T, DateTimeOffset?>? at = null, QueuedRuleOptions? options = null)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(handler);
+        if (options?.MaxConcurrency is < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), options.MaxConcurrency, "A rule's MaxConcurrency must be at least 1.");
         var rule = AddQueuedRule(verb, name, filter, (entity, context, cancellationToken) => handler((T)entity, context, cancellationToken), project: null);
         rule.After = after;
         rule.At = at == null ? null : entity => at((T)entity);
+        rule.Priority = options?.Priority ?? RulePriority.Normal;
+        rule.MaxConcurrency = options?.MaxConcurrency;
+        // The embed rule, LottaDB's own or one registered with Rule.EmbedVectors to narrow it, is run
+        // in batches: its handler is known, so a batch can do what the handler does for each object.
+        if (verb == RuleVerb.Modify && name == LottaDB.EmbedRuleName && after == null && at == null
+            && handler.Method.IsGenericMethod && handler.Method.GetGenericMethodDefinition() == EmbedVectorsMethod)
+            rule.BatchSize = EmbedBatchSize;
     }
+
+    /// <summary>How many objects one run of the embed rule embeds at once.</summary>
+    internal const int EmbedBatchSize = 32;
+
+    private static readonly System.Reflection.MethodInfo EmbedVectorsMethod =
+        typeof(Rule).GetMethod(nameof(Rule.EmbedVectors))!.GetGenericMethodDefinition();
 
     /// <summary>
     /// Registers a <c>Materialize</c> rule, checking its name. It is kept with the queued rules, by

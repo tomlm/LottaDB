@@ -59,7 +59,7 @@ public abstract class QueryScoreTestBase : LottaTestBase
 
     private async Task<LottaDB> SeedAsync(CancellationToken ct, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null)
     {
-        var db = await CreateDbAsync(c => c.Store<ScoredNote>(), cancellationToken: ct, testName: testName);
+        var db = await CreateDbAsync(c => { c.Store<ScoredNote>(); c.QueueMode = QueueMode.Manual; }, cancellationToken: ct, testName: testName);
         await db.SaveManyAsync(
         [
             new ScoredNote { Id = "1", Category = "animals", Title = "a small kitten sleeping on a warm blanket" },
@@ -67,6 +67,8 @@ public abstract class QueryScoreTestBase : LottaTestBase
             new ScoredNote { Id = "3", Category = "science", Title = "quantum physics and string theory research" },
             new ScoredNote { Id = "4", Category = "animals", Title = "a kitten and another kitten playing" },
         ], ct);
+        // Vectors are computed by the embed rule, from the queue.
+        await db.DrainAsync(cancellationToken: ct);
         return db;
     }
 

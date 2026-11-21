@@ -8,6 +8,7 @@ internal static class Tests
 }
 
 public class FileSystem_QueuedRuleTests : QueuedRuleTestBase { public FileSystem_QueuedRuleTests() : base(Tests.Configure) { } }
+public class FileSystem_RulePriorityTests : RulePriorityTestBase { public FileSystem_RulePriorityTests() : base(Tests.Configure) { } }
 public class FileSystem_MaterializeTests : MaterializeTestBase { public FileSystem_MaterializeTests() : base(Tests.Configure) { } }
 public class FileSystem_ModifyRuleTests : ModifyRuleTestBase { public FileSystem_ModifyRuleTests() : base(Tests.Configure) { } }
 public class FileSystem_ScheduleTests : ScheduleTestBase { public FileSystem_ScheduleTests() : base(Tests.Configure) { } }

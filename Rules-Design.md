@@ -396,7 +396,26 @@ All retry state is in the message. Example: rules A, B and C are listed, and B t
 | `RuleTimeout` | 5 min | How long one run of a rule may take |
 | `MaxQueueHops` | 16 | How long a chain of queued rules may get |
 
-There is no priority. Several objects are worked on at once, so slow work does not hold up fast work.
+### Priority and a rule's own limit
+
+Working on several objects at once does not by itself keep slow work from holding up fast work: when every slot is taken by a slow rule (a language model, seconds a call), quick work (an embedding, milliseconds) waits for a slot to free. A queued rule can therefore be given `QueuedRuleOptions`:
+
+```csharp
+config.Rules.When<Message>(m => Changed(m.Text))
+    .ModifyQueued("describe", Describe, new QueuedRuleOptions { Priority = RulePriority.Low, MaxConcurrency = 3 });
+```
+
+| Option | What it does |
+| --- | --- |
+| `Priority` | `Low`, `Normal` (the default) or `High`. When a slot frees, ready work of a higher priority is always taken first; queues of one priority are read in turn. |
+| `MaxConcurrency` | The most runs of the rule at once in one process, within the database's `MaxConcurrency`: what the service the rule calls can take. Not shared between processes. |
+
+- **A queue of its own.** A rule given either option has its own queue for each type (`{type}-{hash}{rule hash}`, with the rule's identity in the queue's metadata). A save that matches it and other rules sends one message to the type's queue and one to the rule's. That is what lets the scheduler pass over the rule's waiting work without holding up the rest; with one shared queue it could not see which rules a message is for.
+- **Status** adds a type's queues up, so `Types` still has one entry per type.
+- **Work queued before the rule had options** is in the type's shared queue. When the pump takes such a message, it moves the rule's part to the rule's own queue, with its attempts so far and, for a delete, a tombstone of its own, and runs only what is left.
+- **Reopened** queues take the rule's options as they are now. A rule that has lost both still has its waiting work run, from its own queue, with neither.
+- **Starvation.** Low-priority work runs only when nothing else is ready. That suits slow work fed by quick work (the quick work is bounded by it), not a stream of high-priority work that never ends.
+- **Two runs for one object still never overlap,** across queues too. A quick rule for an object whose slow rule is running waits for it, in its slot.
 
 ## The pump
 

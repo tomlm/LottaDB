@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Lotta.Tests;
 
 /// <summary>
@@ -152,5 +154,98 @@ public abstract class NearRealTimeSearchTestBase : LottaTestBase
         // Must see the Actor immediately — no staleness after the fix
         var actorResults = db.Search<Actor>().ToList();
         Assert.Single(actorResults);
+    }
+
+    // =========================================================
+    // Without a commit: while this process holds the writer, readers are opened from it,
+    // so a search sees what was written without the index being committed first.
+    // =========================================================
+
+    // Background commits held off for the test, so any commit seen is one a search made.
+    private Task<LottaDB> CreateUncommittedDbAsync(CancellationToken ct, [System.Runtime.CompilerServices.CallerMemberName] string? testName = null) =>
+        CreateDbAsync(config => config.AutoCommitDelay = 600_000, cancellationToken: ct, testName: testName);
+
+    [Fact]
+    public async Task Search_SeesEachSave_WithoutCommitting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateUncommittedDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "u1", DisplayName = "One" }, ct);
+        Assert.Single(db.Search<Actor>().ToList());
+        var committed = db.CommittedGeneration;
+
+        for (var i = 2; i <= 4; i++)
+        {
+            await db.SaveAsync(new Actor { Username = $"u{i}", DisplayName = "More" }, ct);
+            Assert.Equal(i, db.Search<Actor>().ToList().Count);
+            Assert.Equal(i, db.Search<object>().ToList().OfType<Actor>().Count());
+        }
+
+        Assert.Equal(committed, db.CommittedGeneration);
+    }
+
+    [Fact]
+    public async Task JsonSearch_SeesEachSave_WithoutCommitting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateUncommittedDbAsync(ct);
+        await db.SaveAsync(JsonDocument.Parse("""{"id":"1","name":"Alice"}"""), ct);
+        Assert.Single(db.Search(j => j["name"] == "Alice").ToList());
+        var committed = db.CommittedGeneration;
+
+        await db.SaveAsync(JsonDocument.Parse("""{"id":"2","name":"Alice"}"""), ct);
+
+        Assert.Equal(2, db.Search(j => j["name"] == "Alice").ToList().Count);
+        Assert.Equal(committed, db.CommittedGeneration);
+    }
+
+    [Fact]
+    public async Task Search_DoesNotSeeADeletedDocument_WithoutCommitting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateUncommittedDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "d1", DisplayName = "One" }, ct);
+        await db.SaveAsync(new Actor { Username = "d2", DisplayName = "Two" }, ct);
+        Assert.Equal(2, db.Search<Actor>().ToList().Count);
+
+        await db.DeleteAsync<Actor>("d1", ct);
+
+        Assert.Equal(["d2"], db.Search<Actor>().Select(a => a.Username).ToList());
+    }
+
+    [Fact]
+    public async Task Search_AfterTheWriterIsGivenUpAndTakenAgain_SeesEverything()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateUncommittedDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "w1", DisplayName = "One" }, ct);
+        Assert.Single(db.Search<Actor>().ToList());
+
+        // Commits and closes the writer: searches read what is committed, which is everything.
+        await db.ReleaseWriteLockAsync(ct);
+        Assert.False(db.HoldsWriteLock);
+        Assert.Single(db.Search<Actor>().ToList());
+        Assert.Single(db.Search<object>().ToList().OfType<Actor>());
+
+        // The next write takes the writer again, and searches read from it again.
+        await db.SaveAsync(new Actor { Username = "w2", DisplayName = "Two" }, ct);
+        Assert.True(db.HoldsWriteLock);
+        Assert.Equal(2, db.Search<Actor>().ToList().Count);
+        Assert.Equal(2, db.Search<object>().ToList().OfType<Actor>().Count());
+    }
+
+    [Fact]
+    public async Task ReloadSearcher_StillCommits()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateUncommittedDbAsync(ct);
+        await db.SaveAsync(new Actor { Username = "r1", DisplayName = "One" }, ct);
+        Assert.Single(db.Search<Actor>().ToList());
+        var committed = db.CommittedGeneration;
+
+        db.ReloadSearcher();
+
+        Assert.True(db.CommittedGeneration > committed);
+        Assert.Single(db.Search<Actor>().ToList());
     }
 }

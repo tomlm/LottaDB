@@ -26,6 +26,8 @@ internal static class EntityMapper
             entity[StorageFields.Source] = source;
         if (obj.GetProduced() is { Count: > 0 } produced)
             SetProduced(entity, produced);
+        if (obj.GetVectors() is { Count: > 0 } vectors)
+            StoredVectors.Write(entity, vectors);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj, obj.GetType());
         obj.SetJson(Encoding.UTF8.GetString(bytes));
@@ -133,6 +135,8 @@ internal static class EntityMapper
                     obj.SetSource(producedFrom);
                 // Read from its row, so what it produced is known, even when that is nothing.
                 obj.SetProduced(GetProduced(entity));
+                // And so are its vectors.
+                obj.SetVectors(StoredVectors.Read(entity));
             }
             return obj;
         }

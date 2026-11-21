@@ -45,6 +45,7 @@ public class SQLite_ToAsyncEnumerableTests : ToAsyncEnumerableTestBase { public 
 public class SQLite_VectorSearchTests : VectorSearchTestBase { public SQLite_VectorSearchTests() : base(Tests.Configure) { } }
 public class SQLite_WriteLockTests : WriteLockTestBase { public SQLite_WriteLockTests() : base(Tests.Configure) { } }
 public class SQLite_QueuedRuleTests : QueuedRuleTestBase { public SQLite_QueuedRuleTests() : base(Tests.Configure) { } }
+public class SQLite_RulePriorityTests : RulePriorityTestBase { public SQLite_RulePriorityTests() : base(Tests.Configure) { } }
 public class SQLite_MaterializeTests : MaterializeTestBase { public SQLite_MaterializeTests() : base(Tests.Configure) { } }
 public class SQLite_ModifyRuleTests : ModifyRuleTestBase { public SQLite_ModifyRuleTests() : base(Tests.Configure) { } }
 public class SQLite_ScheduleTests : ScheduleTestBase { public SQLite_ScheduleTests() : base(Tests.Configure) { } }
