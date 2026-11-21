@@ -400,7 +400,8 @@ public abstract class VectorSearchTestBase : LottaTestBase
         while (await db.DrainAsync(cancellationToken: ct) > 0) { }
 
         Assert.Equal("pets", (await db.GetAsync<VectorNote>("2", ct))!.Category);
-        Assert.Equal(3, db.Search<VectorNote>(n => n.Title.Similar("a sleeping cat")).ToList().Count);
+        var errors = string.Join("; ", (await db.Rules.StatusAsync(ct)).Rules.Where(r => r.LastError != null).Select(r => $"{r.Rule}: {r.LastError}"));
+        Assert.True(db.Search<VectorNote>(n => n.Title.Similar("a sleeping cat")).ToList().Count == 3, $"all three embedded; rule errors: {errors}");
         var status = await StatusOf<VectorNote>(db, ct);
         Assert.Equal(0, status.Waiting);
         Assert.Equal(0, status.Poisoned);

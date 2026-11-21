@@ -31,8 +31,8 @@
     <PackageReference Include="System.IO.Pipelines" Version="10.0.14" />
     <PackageReference Include="System.Linq.Async" Version="7.0.1" Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="Ulid" Version="1.4.1" />
-    <PackageReference Include="Iciclecreek.Azure.Storage.Lucene" Version="2.1.0-rc002" />
-    <PackageReference Include="Iciclecreek.Azure.Storage.OData" Version="2.1.0-rc002" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.Lucene" Version="2.1.1" />
+    <PackageReference Include="Iciclecreek.Azure.Storage.OData" Version="2.1.1" />
   </ItemGroup>
 
 </Project>
