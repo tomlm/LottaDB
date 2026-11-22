@@ -25,8 +25,15 @@ namespace Lotta.Internal
         static readonly Dictionary<string, Type> _fullNameToType = new();
         static readonly Dictionary<Type, List<Type>> _derivedTypes = new();
 
+        /// <summary>How many assemblies were loaded when the types were last read; a name not found is looked for again only once more have loaded.</summary>
+        static int _assembliesRead;
+        static readonly HashSet<string> _notFound = new(StringComparer.Ordinal);
+
         /// <summary>
-        /// Resolve Type.FullName => Type
+        /// Resolve Type.FullName => Type; null when no loaded assembly defines it. A stored row
+        /// can name a type that no longer exists (a class removed since the row was saved):
+        /// reading it gives nothing rather than failing, so rebuilding the index and listing the
+        /// queues pass it by.
         /// </summary>
         internal static Type? ResolveType(string? fullName)
         {
@@ -37,12 +44,20 @@ namespace Lotta.Internal
                 if (_fullNameToType.TryGetValue(fullName, out var t))
                     return t;
 
-                foreach (var type in AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => a.DefinedTypes))
+                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                if (_notFound.Contains(fullName) && assemblies.Length == _assembliesRead)
+                    return null;
+                foreach (var type in assemblies.SelectMany(a => a.DefinedTypes))
                 {
                     _fullNameToType[type.FullName!] = type;
                 }
+                _assembliesRead = assemblies.Length;
+                _notFound.Clear();
 
-                return _fullNameToType[fullName];
+                if (_fullNameToType.TryGetValue(fullName, out t))
+                    return t;
+                _notFound.Add(fullName);
+                return null;
             }
         }
 
