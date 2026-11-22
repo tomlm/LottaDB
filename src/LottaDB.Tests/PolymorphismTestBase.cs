@@ -204,5 +204,29 @@ public abstract class PolymorphismTestBase : LottaTestBase
         Assert.Equal("semp6", db.Search<Employee>(e => e.Department == "Engineering").Single().Id);
         Assert.Equal("semp6", db.Search<Employee>("Engineering").Single().Id);
     }
-}
 
+    /// <summary>
+    /// A row can name a type that no longer exists: a class removed since the row was saved.
+    /// Opening the database rebuilds the index when its configuration changed, so such a row
+    /// must be passed by, not stop the database from opening.
+    /// </summary>
+    [Fact]
+    public async Task RebuildSearchIndex_PassesByARowOfATypeThatNoLongerExists()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(cancellationToken: ct);
+        await db.SaveAsync(new Actor { Username = "kept", DisplayName = "Kept" }, ct);
+
+        var table = Catalog.GetTableClient();
+        var row = table.Query<Azure.Data.Tables.TableEntity>(cancellationToken: ct)
+            .First(e => e.GetString(Internal.StorageFields.Type) == typeof(Actor).FullName);
+        var gone = new Azure.Data.Tables.TableEntity(row) { RowKey = row.RowKey + "-gone" };
+        gone[Internal.StorageFields.Type] = "Lotta.Tests.RemovedLongAgo";
+        await table.UpsertEntityAsync(gone, cancellationToken: ct);
+
+        await db.RebuildSearchIndex(ct);
+
+        Assert.Equal("kept", db.Search<Actor>(a => a.Username == "kept").Single().Username);
+        Assert.Null(Internal.TypeUtils.ResolveType("Lotta.Tests.RemovedLongAgo"));
+    }
+}
