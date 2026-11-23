@@ -169,6 +169,28 @@ public abstract class TemporalTestBase : LottaTestBase
         Assert.Equal(["bad"], Ids<DatedNote>(db, mentions.MakeQuery("2026-11-19", Now)));
     }
 
+    // "(XXXX-02-30,...)" parses, so IgnoreInvalidReferences does not catch it: the library throws
+    // ArgumentOutOfRangeException while making the fields. The value must be dropped, not the object.
+    [Fact]
+    public async Task AnImpossibleRecurringDate_IsSkipped_AndTheRestIndexed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(c => c.Store<DatedNote>(), cancellationToken: ct);
+        await db.SaveManyAsync([
+            new DatedNote { Id = "bad", Sent = Noon(2026, 11, 2), Mentions = ["(XXXX-02-30,XXXX-03-01,P1D)", "XXXX-WXX-4"] },
+            new DatedNote { Id = "other", Sent = Noon(2026, 11, 19) },
+        ], ct);
+
+        var mentions = db.TemporalStrategy<DatedNote>(nameof(DatedNote.Mentions));
+        var sent = db.TemporalStrategy<DatedNote>(nameof(DatedNote.Sent));
+        Assert.Equal(["bad"], Ids<DatedNote>(db, mentions.MakeQuery("2026-11-19", Now)));
+
+        await db.RebuildSearchIndex(ct);
+        Assert.Equal(["bad"], Ids<DatedNote>(db, mentions.MakeQuery("2026-11-19", Now)));
+        Assert.Equal(["other"], Ids<DatedNote>(db, sent.MakeQuery("2026-11-19", Now)));
+        Assert.Equal(["bad", "other"], [.. db.Search<DatedNote>().ToList().Select(n => n.Id).Order()]);
+    }
+
     [Fact]
     public async Task ADefaultDateTimeOffset_IsNotIndexed()
     {
