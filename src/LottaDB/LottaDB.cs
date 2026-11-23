@@ -74,7 +74,7 @@ public partial class LottaDB : IDisposable
     private int _activeWriters;
 
     // Reentrancy for handler chains: a nested write inherits the outer lease rather than
-    // taking its own (mirrors _heldLocks for the striped key locks).
+    // taking its own (mirrors _heldLocks for the key locks).
     private readonly AsyncLocal<int> _writerLeaseDepth = new();
 
     private long _lastRefreshTimestamp;
@@ -100,11 +100,12 @@ public partial class LottaDB : IDisposable
     private bool _disposed;
     private readonly CancellationTokenSource _disposeCts = new();
 
-    // Striped per-key locks: ensures table write + Lucene handler execute atomically for a given key.
-    // Prevents out-of-order Lucene writes when multiple tasks write to the same key concurrently.
-    private const int LockStripeCount = 1024;
-    private readonly SemaphoreSlim[] _keyLocks = Enumerable.Range(0, LockStripeCount)
-        .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    // Per-key locks: table write + Lucene handler execute atomically for a given key, so writes to one
+    // key from several tasks reach the index in order. One lock per key in use, made when a save first
+    // wants it and dropped when no one holds or waits for it. Exact keys, not hashed stripes: a save's
+    // handlers save other objects while it holds its key, and two such saves whose keys merely shared
+    // a stripe each waited on the other forever.
+    private readonly Dictionary<string, KeyGate> _keyLocks = new(StringComparer.Ordinal);
 
     internal readonly ConcurrentDictionary<Type, TypeMetadata> _metadata = new();
     private readonly ConcurrentDictionary<Type, IDocumentMapper> _mappers = new();
@@ -2527,33 +2528,78 @@ public partial class LottaDB : IDisposable
     //     Dispose(disposing: false);
     // }
 
-    // Tracks which stripe indices the current async call chain already holds,
-    // so reentrant calls (e.g., handler chains) skip re-acquisition and avoid deadlock.
-    // Immutable, so concurrent child tasks each see their parent's set without sharing mutations.
-    private readonly AsyncLocal<ImmutableHashSet<int>?> _heldLocks = new();
+    // Tracks which keys the current async call chain already holds, so reentrant calls (e.g.,
+    // handler chains) skip re-acquisition and avoid deadlock. Immutable, so concurrent child tasks
+    // each see their parent's set without sharing mutations.
+    private readonly AsyncLocal<ImmutableHashSet<string>?> _heldLocks = new();
 
-    /// <summary>The lock stripe a key maps to. Keys sharing a stripe serialize against each other.</summary>
-    internal static int LockStripeOf(string key) => (key.GetHashCode() & 0x7FFFFFFF) % LockStripeCount;
+    private static readonly ImmutableHashSet<string> NoKeys = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
 
-    // Not async: the stripe must be recorded as held in the caller's execution context, so the
+    /// <summary>A key's lock, and how many hold or wait for it: it is dropped when none do.</summary>
+    private sealed class KeyGate
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int Users;
+    }
+
+    /// <summary>The key's lock, counted as used until <see cref="Leave"/>: made when no one has it.</summary>
+    private KeyGate Enter(string key)
+    {
+        lock (_keyLocks)
+        {
+            if (!_keyLocks.TryGetValue(key, out var gate))
+                _keyLocks[key] = gate = new KeyGate();
+            gate.Users++;
+            return gate;
+        }
+    }
+
+    /// <summary>One use of the key's lock done; the last drops it.</summary>
+    private void Leave(string key, KeyGate gate)
+    {
+        lock (_keyLocks)
+        {
+            if (--gate.Users == 0)
+                _keyLocks.Remove(key);
+        }
+    }
+
+    /// <summary>How many keys have a lock made: those held or waited for. For tests.</summary>
+    internal int KeyLocksInUse
+    {
+        get
+        {
+            lock (_keyLocks)
+                return _keyLocks.Count;
+        }
+    }
+
+    // Not async: the key must be recorded as held in the caller's execution context, so the
     // handlers the caller runs inherit it. An async method's AsyncLocal changes are undone when it
-    // returns — recording it in there left nested saves on the same stripe waiting on their own
+    // returns — recording it in there left nested saves of the same key waiting on their own
     // call chain forever.
     private Task<KeyLock> AcquireLockAsync(string key, CancellationToken ct)
     {
-        var index = LockStripeOf(key);
-        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
-        if (held.Contains(index))
-            return Task.FromResult(new KeyLock(null, -1, _heldLocks)); // already held — no-op
+        var held = _heldLocks.Value ?? NoKeys;
+        if (held.Contains(key))
+            return Task.FromResult(default(KeyLock)); // already held — no-op
 
-        _heldLocks.Value = held.Add(index);
-        return WaitForLockAsync(index, ct);
+        _heldLocks.Value = held.Add(key);
+        return WaitForLockAsync(key, Enter(key), ct);
     }
 
-    private async Task<KeyLock> WaitForLockAsync(int index, CancellationToken ct)
+    private async Task<KeyLock> WaitForLockAsync(string key, KeyGate gate, CancellationToken ct)
     {
-        await _keyLocks[index].WaitAsync(ct);
-        return new KeyLock(_keyLocks[index], index, _heldLocks);
+        try
+        {
+            await gate.Semaphore.WaitAsync(ct);
+        }
+        catch
+        {
+            Leave(key, gate);
+            throw;
+        }
+        return new KeyLock(this, key, gate);
     }
 
     /// <summary>
@@ -2565,97 +2611,101 @@ public partial class LottaDB : IDisposable
     /// <returns>The locks, or null when one was taken: do the work some other way.</returns>
     private KeyLocks? TryAcquireLocks(IEnumerable<string> keys)
     {
-        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
-        var indices = keys
-            .Select(LockStripeOf)
-            .Distinct()
-            .Where(i => !held.Contains(i))
-            .OrderBy(i => i)
-            .ToArray();
-        for (var acquired = 0; acquired < indices.Length; acquired++)
+        var held = _heldLocks.Value ?? NoKeys;
+        var wanted = Wanted(keys, held);
+        var gates = wanted.Select(Enter).ToArray();
+        for (var acquired = 0; acquired < wanted.Length; acquired++)
         {
-            if (_keyLocks[indices[acquired]].Wait(0))
+            if (gates[acquired].Semaphore.Wait(0))
                 continue;
             for (var i = acquired - 1; i >= 0; i--)
-                _keyLocks[indices[i]].Release();
+                gates[i].Semaphore.Release();
+            for (var i = 0; i < wanted.Length; i++)
+                Leave(wanted[i], gates[i]);
             return null;
         }
-        _heldLocks.Value = held.Union(indices);
-        return new KeyLocks(_keyLocks, indices, _heldLocks);
+        _heldLocks.Value = held.Union(wanted);
+        return new KeyLocks(this, wanted, gates);
     }
 
     // Not async, for the same reason as AcquireLockAsync.
     private Task<KeyLocks> AcquireLocksAsync(IEnumerable<string> keys, CancellationToken ct)
     {
-        var held = _heldLocks.Value ?? ImmutableHashSet<int>.Empty;
-        var indices = keys
-            .Select(LockStripeOf)
-            .Distinct()
-            .Where(i => !held.Contains(i)) // skip already-held stripes
-            .OrderBy(i => i)
-            .ToArray();
-
-        _heldLocks.Value = held.Union(indices);
-        return WaitForLocksAsync(indices, ct);
+        var held = _heldLocks.Value ?? NoKeys;
+        var wanted = Wanted(keys, held);
+        _heldLocks.Value = held.Union(wanted);
+        return WaitForLocksAsync(wanted, [.. wanted.Select(Enter)], ct);
     }
 
-    private async Task<KeyLocks> WaitForLocksAsync(int[] indices, CancellationToken ct)
+    /// <summary>The keys not held yet, once each, in one order for every caller, so batches never wait on each other in a ring.</summary>
+    private static string[] Wanted(IEnumerable<string> keys, ImmutableHashSet<string> held) =>
+        [.. keys.Distinct(StringComparer.Ordinal).Where(k => !held.Contains(k)).Order(StringComparer.Ordinal)];
+
+    private async Task<KeyLocks> WaitForLocksAsync(string[] keys, KeyGate[] gates, CancellationToken ct)
     {
         var acquired = 0;
         try
         {
-            for (; acquired < indices.Length; acquired++)
-                await _keyLocks[indices[acquired]].WaitAsync(ct);
+            for (; acquired < keys.Length; acquired++)
+                await gates[acquired].Semaphore.WaitAsync(ct);
         }
         catch
         {
-            // Don't leave the stripes taken so far locked forever.
+            // Don't leave the locks taken so far locked forever, nor any made for this.
             for (var i = acquired - 1; i >= 0; i--)
-                _keyLocks[indices[i]].Release();
+                gates[i].Semaphore.Release();
+            for (var i = 0; i < keys.Length; i++)
+                Leave(keys[i], gates[i]);
             throw;
         }
-        return new KeyLocks(_keyLocks, indices, _heldLocks);
+        return new KeyLocks(this, keys, gates);
     }
 
-    internal readonly struct KeyLock : IDisposable
+    /// <summary>A key's lock while held; the default (a key the call chain already held) releases nothing.</summary>
+    private readonly struct KeyLock : IDisposable
     {
-        private readonly SemaphoreSlim? _semaphore;
-        private readonly int _index;
-        private readonly AsyncLocal<ImmutableHashSet<int>?> _held;
+        private readonly LottaDB? _db;
+        private readonly string? _key;
+        private readonly KeyGate? _gate;
 
-        internal KeyLock(SemaphoreSlim? semaphore, int index, AsyncLocal<ImmutableHashSet<int>?> held)
+        internal KeyLock(LottaDB db, string key, KeyGate gate)
         {
-            _semaphore = semaphore;
-            _index = index;
-            _held = held;
+            _db = db;
+            _key = key;
+            _gate = gate;
         }
 
         public void Dispose()
         {
-            if (_semaphore == null) return; // was reentrant — nothing to release
-            _semaphore.Release();
-            _held.Value = _held.Value?.Remove(_index);
+            if (_db is null) return; // was reentrant — nothing to release
+            _gate!.Semaphore.Release();
+            _db.Leave(_key!, _gate);
+            _db._heldLocks.Value = _db._heldLocks.Value?.Remove(_key!);
         }
     }
 
-    internal readonly struct KeyLocks : IDisposable
+    /// <summary>Several keys' locks while held, released in reverse.</summary>
+    private readonly struct KeyLocks : IDisposable
     {
-        private readonly SemaphoreSlim[] _allLocks;
-        private readonly int[] _acquiredIndices;
-        private readonly AsyncLocal<ImmutableHashSet<int>?> _held;
+        private readonly LottaDB _db;
+        private readonly string[] _keys;
+        private readonly KeyGate[] _gates;
 
-        internal KeyLocks(SemaphoreSlim[] allLocks, int[] acquiredIndices, AsyncLocal<ImmutableHashSet<int>?> held)
+        internal KeyLocks(LottaDB db, string[] keys, KeyGate[] gates)
         {
-            _allLocks = allLocks;
-            _acquiredIndices = acquiredIndices;
-            _held = held;
+            _db = db;
+            _keys = keys;
+            _gates = gates;
         }
 
         public void Dispose()
         {
-            for (int i = _acquiredIndices.Length - 1; i >= 0; i--)
-                _allLocks[_acquiredIndices[i]].Release();
-            _held.Value = _held.Value?.Except(_acquiredIndices);
+            for (var i = _keys.Length - 1; i >= 0; i--)
+            {
+                _gates[i].Semaphore.Release();
+                _db.Leave(_keys[i], _gates[i]);
+            }
+            _db._heldLocks.Value = _db._heldLocks.Value?.Except(_keys);
         }
     }
 

@@ -81,33 +81,53 @@ public abstract class CycleDetectionTestBase : LottaTestBase
         Assert.NotNull(await db.GetAsync<CycleB>("cb-x2", ct));
     }
 
+    /// <summary>
+    /// The lock stripe a key had when key locks were 1,024 hashed stripes, so a test can pick keys
+    /// that shared one. String hashes are randomized per process, so this holds within one run.
+    /// </summary>
+    private static int OldStripeOf(string key) => (key.GetHashCode() & 0x7FFFFFFF) % 1024;
+
     [Fact]
-    public async Task HandlerSave_OnSameLockStripe_DoesNotDeadlock()
+    public async Task CrossingNestedSaves_OfUnrelatedKeys_DoNotDeadlock()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        // Key locks are striped, and string hashes are randomized per process — so pick, for this
-        // process, a second key that lands on the outer key's stripe. The handler's nested save must
-        // see that its own call chain already holds the stripe.
-        const string outer = "stripe-outer";
-        var inner = Enumerable.Range(0, int.MaxValue)
-            .Select(i => $"stripe-inner-{i}")
-            .First(k => LottaDB.LockStripeOf(k) == LottaDB.LockStripeOf(outer));
+        // Two saves side by side, each of whose rules saves another object while the save holds its
+        // own key's lock. Each inner key shared a stripe with the other save's outer key, so with
+        // striped locks each waited on the other forever (as a message's save and its passages'
+        // did). The keys are unrelated: only the exact key's lock may be waited on.
+        const string outer1 = "crossing-outer-1", outer2 = "crossing-outer-2";
+        static string Colliding(string with, string prefix) => Enumerable.Range(0, int.MaxValue)
+            .Select(i => $"{prefix}-{i}")
+            .First(k => OldStripeOf(k) == OldStripeOf(with));
+        var inners = new Dictionary<string, string>
+        {
+            [outer1] = Colliding(outer2, "crossing-inner-1"),
+            [outer2] = Colliding(outer1, "crossing-inner-2"),
+        };
 
+        // Both outer saves hold their locks before either inner save starts.
+        using var bothHolding = new CountdownEvent(2);
         var db = await CreateDbAsync(opts =>
         {
-            opts.Rules.When<CycleA>().Do(async (a, context, _) =>
+            opts.Rules.When<CycleA>().Do(async (a, context, token) =>
             {
-                await context.Db.SaveAsync(new CycleB { Id = inner, Value = "nested" });
+                bothHolding.Signal();
+                await Task.Run(() => bothHolding.Wait(TimeSpan.FromSeconds(10), token), token);
+                await context.Db.SaveAsync(new CycleB { Id = inners[a.Id], Value = "nested" }, token);
             });
         }, cancellationToken: ct);
 
-        var save = db.SaveAsync(new CycleA { Id = outer, Value = "outer" }, ct);
-        Assert.True(await Task.WhenAny(save, Task.Delay(TimeSpan.FromSeconds(10), ct)) == save,
-            "A handler's save on a key sharing the outer key's lock stripe deadlocked.");
-        await save;
+        var saves = Task.WhenAll(
+            Task.Run(() => db.SaveAsync(new CycleA { Id = outer1, Value = "outer" }, ct), ct),
+            Task.Run(() => db.SaveAsync(new CycleA { Id = outer2, Value = "outer" }, ct), ct));
+        Assert.True(await Task.WhenAny(saves, Task.Delay(TimeSpan.FromSeconds(20), ct)) == saves,
+            "Two saves whose rules save unrelated keys waited on each other's locks.");
+        await saves;
 
-        Assert.NotNull(await db.GetAsync<CycleB>(inner, ct));
+        Assert.NotNull(await db.GetAsync<CycleB>(inners[outer1], ct));
+        Assert.NotNull(await db.GetAsync<CycleB>(inners[outer2], ct));
+        Assert.Equal(0, db.KeyLocksInUse); // a key's lock goes once no one holds or waits for it
     }
 }
 
