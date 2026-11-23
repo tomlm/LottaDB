@@ -1,4 +1,5 @@
 using Iciclecreek.Lucene.Net.Temporal;
+using Lotta.Internal;
 using Lucene.Net.Linq;
 
 namespace Lotta.Tests;
@@ -44,7 +45,9 @@ public abstract class TemporalTestBase : LottaTestBase
 
     private static TemporalContext Now => new(TimeZoneInfo.Local, new DateTimeOffset(2026, 11, 22, 12, 0, 0, TimeSpan.Zero));
 
-    private static DateTime Noon(int year, int month, int day) => new(year, month, day, 20, 0, 0, DateTimeKind.Utc);
+    // 12:00 UTC is the same calendar day in every zone from UTC-11 to UTC+11, so the local-zone
+    // day these dates are indexed under is the one the tests name.
+    private static DateTime Noon(int year, int month, int day) => new(year, month, day, 12, 0, 0, DateTimeKind.Utc);
 
     private static string[] Ids<T>(LottaDB db, Lucene.Net.Search.Query query) where T : class, new() =>
         [.. db.Search<T>().Where(query).ToList().Select(n => (string)typeof(T).GetProperty("Id")!.GetValue(n)!).Order()];
@@ -119,6 +122,62 @@ public abstract class TemporalTestBase : LottaTestBase
         var ct = TestContext.Current.CancellationToken;
         var error = await Assert.ThrowsAnyAsync<Exception>(() => CreateDbAsync(c => c.Store<TimexWithoutAnchor>(), cancellationToken: ct));
         Assert.Contains("anchor", error.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ATemporalAttribute_KeepsTheAutoQueryableColumnAndAnalysis()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var meta = TypeMetadata.Build<DatedNote>(null);
+        Assert.Contains(meta.Tags, t => t.Property.Name == nameof(DatedNote.Sent));
+        var mentions = meta.IndexedProperties.Single(p => p.Property.Name == nameof(DatedNote.Mentions));
+        Assert.False(mentions.IsNotAnalyzed);
+        Assert.Equal(TemporalMode.Timex, mentions.Temporal);
+
+        var db = await CreateDbAsync(c => c.Store<DatedNote>(), cancellationToken: ct);
+        await db.SaveManyAsync([
+            new DatedNote { Id = "old", Sent = Noon(2024, 1, 1) },
+            new DatedNote { Id = "new", Sent = Noon(2026, 1, 1) },
+        ], ct);
+        var cutoff = Noon(2025, 1, 1);
+        var found = await db.GetManyAsync<DatedNote>(n => n.Sent > cutoff, cancellationToken: ct).ToListAsync(ct);
+        Assert.Equal(["new"], found.Select(n => n.Id));
+    }
+
+    [Fact]
+    public void ATemporalAttribute_KeepsAFluentFacet()
+    {
+        var config = new StorageConfiguration<DatedNote>();
+        config.AddField(n => n.Sent).Facet();
+        var meta = TypeMetadata.Build<DatedNote>(config, null);
+        var sent = meta.IndexedProperties.Single(p => p.Property.Name == nameof(DatedNote.Sent));
+        Assert.True(sent.IsFacet);
+        Assert.Equal(TemporalMode.Date, sent.Temporal);
+    }
+
+    [Fact]
+    public async Task AnInvalidTimexValue_IsSkipped_AndTheRestIndexed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(c => c.Store<DatedNote>(), cancellationToken: ct);
+        await db.SaveAsync(new DatedNote { Id = "bad", Sent = Noon(2026, 11, 2), Mentions = ["not a timex", "XXXX-WXX-4"] }, ct);
+
+        var mentions = db.TemporalStrategy<DatedNote>(nameof(DatedNote.Mentions));
+        Assert.Equal(["bad"], Ids<DatedNote>(db, mentions.MakeQuery("2026-11-19", Now)));
+
+        await db.RebuildSearchIndex(ct);
+        Assert.Equal(["bad"], Ids<DatedNote>(db, mentions.MakeQuery("2026-11-19", Now)));
+    }
+
+    [Fact]
+    public async Task ADefaultDateTimeOffset_IsNotIndexed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var db = await CreateDbAsync(c => c.Store<FluentDatedNote>(s => s.AddField(n => n.Sent).Temporal()), cancellationToken: ct);
+        await db.SaveAsync(new FluentDatedNote { Id = "unset" }, ct);
+
+        var sent = db.TemporalStrategy<FluentDatedNote>(nameof(FluentDatedNote.Sent));
+        Assert.Empty(Ids<FluentDatedNote>(db, sent.MakeRangeQuery("0001", "0002", true, true, Now)));
     }
 
     [Fact]

@@ -15,8 +15,12 @@ internal static class TemporalFields
 {
     private static readonly ConcurrentDictionary<PropertyInfo, TemporalStrategy> Strategies = new();
 
-    /// <summary>Wall-clock components (day, weekday, time of day) are those of the local time zone.</summary>
-    internal static TemporalOptions Options { get; } = new() { DefaultZone = TimeZoneInfo.Local };
+    /// <summary>
+    /// Wall-clock components (day, weekday, time of day) are those of the local time zone. An
+    /// unparseable TIMEX value is skipped rather than thrown: one bad value must not leave its
+    /// object out of the index, or stop a rebuild (and with it a schema-change database open).
+    /// </summary>
+    internal static TemporalOptions Options { get; } = new() { DefaultZone = TimeZoneInfo.Local, IgnoreInvalidReferences = true };
 
     /// <summary>The strategy of a temporal property.</summary>
     public static TemporalStrategy StrategyFor(IndexedTypeProperty indexed) =>
@@ -53,12 +57,14 @@ internal static class TemporalFields
         _ => [],
     };
 
-    /// <summary>A date as an instant: a <c>DateTime</c> of unspecified kind is taken as UTC, as LottaDB stores dates.</summary>
+    /// <summary>
+    /// A date as an instant, or null for a default (unset) date. A <c>DateTime</c> of unspecified
+    /// kind is taken as local, as LottaDB's UtcDateTimeConverter and table storage take it.
+    /// </summary>
     private static DateTimeOffset? AsDateTimeOffset(object? value) => value switch
     {
-        DateTimeOffset offset => offset,
-        DateTime { Kind: DateTimeKind.Local } local => new DateTimeOffset(local),
-        DateTime other when other != default => new DateTimeOffset(DateTime.SpecifyKind(other, DateTimeKind.Utc)),
+        DateTimeOffset offset when offset != default => offset,
+        DateTime date when date != default => new DateTimeOffset(date),
         _ => null,
     };
 }

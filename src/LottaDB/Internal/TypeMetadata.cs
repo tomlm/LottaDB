@@ -182,19 +182,11 @@ internal class TypeMetadata
             meta.DefaultSearchProperty = prop;
         }
 
-        // [Temporal] and [Timex] add temporal indexing to a property, indexed or not.
-        foreach (var prop in typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance))
-        {
-            if (prop.GetCustomAttribute<TemporalAttribute>() != null)
-                SetTemporal<T>(meta, prop, TemporalMode.Date, null);
-            else if (prop.GetCustomAttribute<TimexAttribute>() is { } timex)
-                SetTemporal<T>(meta, prop, TemporalMode.Timex, timex.Anchor);
-        }
-
         if (fluent == null)
         {
             // AutoQueryable is on by default — always apply unless explicitly disabled
             ApplyAutoQueryable<T>(meta, ignoredProperties: null);
+            ApplyTemporalAttributes<T>(meta);
             ValidateDefaultSearch<T>(meta);
             return;
         }
@@ -255,7 +247,26 @@ internal class TypeMetadata
             ApplyAutoQueryable<T>(meta, ignoredProps);
         }
 
+        ApplyTemporalAttributes<T>(meta);
         ValidateDefaultSearch<T>(meta);
+    }
+
+    /// <summary>
+    /// [Temporal] and [Timex] add temporal indexing to a property, indexed or not. They run after
+    /// the fluent passes and auto-queryable, so they only mark the property's existing entry —
+    /// keeping its table column, analysis, facet and vector settings — and add an entry only for a
+    /// property nothing else indexes. Run earlier, the entry they add would make auto-queryable
+    /// and AddField skip the property.
+    /// </summary>
+    private static void ApplyTemporalAttributes<T>(TypeMetadata meta)
+    {
+        foreach (var prop in typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (prop.GetCustomAttribute<TemporalAttribute>() != null)
+                SetTemporal<T>(meta, prop, TemporalMode.Date, null);
+            else if (prop.GetCustomAttribute<TimexAttribute>() is { } timex)
+                SetTemporal<T>(meta, prop, TemporalMode.Timex, timex.Anchor);
+        }
     }
 
     /// <summary>
