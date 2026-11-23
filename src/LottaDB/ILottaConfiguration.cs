@@ -206,6 +206,17 @@ public interface IQueryableConfiguration
     /// <c>Search&lt;T&gt;()</c> query.
     /// </summary>
     IQueryableConfiguration Facet();
+    /// <summary>
+    /// Index a <c>DateTime</c> or <c>DateTimeOffset</c> property for temporal queries, whole or
+    /// partial (Christmas in any year, Monday mornings): see <see cref="TemporalAttribute"/>.
+    /// </summary>
+    IQueryableConfiguration Temporal();
+    /// <summary>
+    /// Index a property of TIMEX values for temporal queries, anchored on another property:
+    /// see <see cref="TimexAttribute"/>.
+    /// </summary>
+    /// <param name="anchorProperty">The <c>DateTime</c> or <c>DateTimeOffset</c> property the values were said on (<c>nameof(Sent)</c>).</param>
+    IQueryableConfiguration Timex(string anchorProperty);
 }
 
 /// <summary>
@@ -224,4 +235,15 @@ public interface IFieldConfiguration
     /// <c>Search&lt;T&gt;()</c> query.
     /// </summary>
     IFieldConfiguration Facet();
+    /// <summary>
+    /// Index a <c>DateTime</c> or <c>DateTimeOffset</c> property for temporal queries, whole or
+    /// partial (Christmas in any year, Monday mornings): see <see cref="TemporalAttribute"/>.
+    /// </summary>
+    IFieldConfiguration Temporal();
+    /// <summary>
+    /// Index a property of TIMEX values for temporal queries, anchored on another property:
+    /// see <see cref="TimexAttribute"/>.
+    /// </summary>
+    /// <param name="anchorProperty">The <c>DateTime</c> or <c>DateTimeOffset</c> property the values were said on (<c>nameof(Sent)</c>).</param>
+    IFieldConfiguration Timex(string anchorProperty);
 }

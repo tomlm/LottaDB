@@ -33,6 +33,7 @@ public class Memory_MatchTests : MatchTestBase { public Memory_MatchTests() : ba
 public class Memory_MultiValuedFieldTests : MultiValuedFieldTestBase { public Memory_MultiValuedFieldTests() : base(Tests.Configure) { } }
 public class Memory_ObserveTests : ObserveTestBase { public Memory_ObserveTests() : base(Tests.Configure) { } }
 public class Memory_PolymorphismTests : PolymorphismTestBase { public Memory_PolymorphismTests() : base(Tests.Configure) { } }
+public class Memory_TemporalTests : TemporalTestBase { public Memory_TemporalTests() : base(Tests.Configure) { } }
 public class Memory_QueryMethodTests : QueryMethodTestBase { public Memory_QueryMethodTests() : base(Tests.Configure) { } }
 public class Memory_QueryScoreTests : QueryScoreTestBase { public Memory_QueryScoreTests() : base(Tests.Configure) { } }
 public class Memory_QueryTests : QueryTestBase { public Memory_QueryTests() : base(Tests.Configure) { } }

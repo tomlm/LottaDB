@@ -186,6 +186,7 @@ internal class TypeMetadata
         {
             // AutoQueryable is on by default — always apply unless explicitly disabled
             ApplyAutoQueryable<T>(meta, ignoredProperties: null);
+            ApplyTemporalAttributes<T>(meta);
             ValidateDefaultSearch<T>(meta);
             return;
         }
@@ -195,7 +196,10 @@ internal class TypeMetadata
         {
             var propInfo = ExtractPropertyInfo(config.Expression);
             if (propInfo != null && !meta.Tags.Any(t => t.Property == propInfo))
+            {
                 AddQueryable(meta, propInfo, config.Mode, config.IsVectorField, config.IsFacet);
+                SetTemporal<T>(meta, propInfo, config.TemporalMode, config.TimexAnchor);
+            }
         }
 
         // Fluent AddTag → Table Storage column only
@@ -220,6 +224,8 @@ internal class TypeMetadata
                     IsFacet = config.IsFacet,
                 });
             }
+            if (propInfo != null)
+                SetTemporal<T>(meta, propInfo, config.TemporalMode, config.TimexAnchor);
         }
 
         // Fluent DefaultSearch overrides attribute
@@ -241,7 +247,68 @@ internal class TypeMetadata
             ApplyAutoQueryable<T>(meta, ignoredProps);
         }
 
+        ApplyTemporalAttributes<T>(meta);
         ValidateDefaultSearch<T>(meta);
+    }
+
+    /// <summary>
+    /// [Temporal] and [Timex] add temporal indexing to a property, indexed or not. They run after
+    /// the fluent passes and auto-queryable, so they only mark the property's existing entry —
+    /// keeping its table column, analysis, facet and vector settings — and add an entry only for a
+    /// property nothing else indexes. Run earlier, the entry they add would make auto-queryable
+    /// and AddField skip the property.
+    /// </summary>
+    private static void ApplyTemporalAttributes<T>(TypeMetadata meta)
+    {
+        foreach (var prop in typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (prop.GetCustomAttribute<TemporalAttribute>() != null)
+                SetTemporal<T>(meta, prop, TemporalMode.Date, null);
+            else if (prop.GetCustomAttribute<TimexAttribute>() is { } timex)
+                SetTemporal<T>(meta, prop, TemporalMode.Timex, timex.Anchor);
+        }
+    }
+
+    /// <summary>
+    /// Marks a property for temporal indexing, adding it to the indexed properties (not
+    /// analyzed) if it is not there yet. The property's type must suit the mode: a date for
+    /// <see cref="TemporalMode.Date"/>; a string or strings of TIMEX values, with a date anchor,
+    /// for <see cref="TemporalMode.Timex"/>.
+    /// </summary>
+    private static void SetTemporal<T>(TypeMetadata meta, PropertyInfo prop, TemporalMode mode, string? anchorName)
+    {
+        if (mode == TemporalMode.None)
+            return;
+        static bool IsDate(Type type) =>
+            (Nullable.GetUnderlyingType(type) ?? type) is var t && (t == typeof(DateTime) || t == typeof(DateTimeOffset));
+        PropertyInfo? anchor = null;
+        if (mode == TemporalMode.Date && !IsDate(prop.PropertyType))
+            throw new InvalidOperationException($"{typeof(T).Name}.{prop.Name} is temporal but is not a DateTime or DateTimeOffset.");
+        if (mode == TemporalMode.Timex)
+        {
+            if (prop.PropertyType != typeof(string) && !TypeUtils.IsStringCollection(prop.PropertyType))
+                throw new InvalidOperationException($"{typeof(T).Name}.{prop.Name} holds TIMEX values but is not a string or a collection of strings.");
+            anchor = typeof(T).GetProperty(anchorName ?? "")
+                ?? throw new InvalidOperationException($"{typeof(T).Name}.{prop.Name}: its TIMEX anchor '{anchorName}' is not a property.");
+            if (!IsDate(anchor.PropertyType))
+                throw new InvalidOperationException($"{typeof(T).Name}.{anchor.Name}, the TIMEX anchor of {prop.Name}, is not a DateTime or DateTimeOffset.");
+        }
+
+        var existing = meta.IndexedProperties.FindIndex(i => i.Property == prop);
+        var indexed = existing >= 0 ? meta.IndexedProperties[existing] : null;
+        var marked = new IndexedTypeProperty
+        {
+            Property = prop,
+            IsNotAnalyzed = indexed?.IsNotAnalyzed ?? true,
+            IsVectorField = indexed?.IsVectorField ?? false,
+            IsFacet = indexed?.IsFacet ?? false,
+            Temporal = mode,
+            TimexAnchor = anchor,
+        };
+        if (existing >= 0)
+            meta.IndexedProperties[existing] = marked;
+        else
+            meta.IndexedProperties.Add(marked);
     }
 
     /// <summary>Default convention-based key property names.</summary>
@@ -375,6 +442,9 @@ internal class TypeMetadata
                         };
                         if (p.IsFacet)
                             entry["IsFacet"] = true;
+                        // Written only when set, as IsFacet is: schemas without temporal fields hash as before.
+                        if (p.Temporal != TemporalMode.None)
+                            entry["Temporal"] = p.Temporal == TemporalMode.Timex ? $"timex:{p.TimexAnchor?.Name}" : "date";
                         return entry;
                     }),
                 Tags = m.Tags
@@ -456,4 +526,17 @@ internal class IndexedTypeProperty
     public bool IsNotAnalyzed { get; init; }
     public bool IsVectorField { get; init; }
     public bool IsFacet { get; init; }
+    public TemporalMode Temporal { get; init; }
+    /// <summary>The property TIMEX values are resolved against, when <see cref="Temporal"/> is <see cref="TemporalMode.Timex"/>.</summary>
+    public PropertyInfo? TimexAnchor { get; init; }
+}
+
+/// <summary>How a property is indexed for temporal queries (Iciclecreek.Lucene.Net.Temporal).</summary>
+internal enum TemporalMode
+{
+    None,
+    /// <summary>A date or time property: <c>TemporalDateStrategy</c>.</summary>
+    Date,
+    /// <summary>TIMEX values, anchored on another property: <c>TimexStrategy</c>.</summary>
+    Timex,
 }

@@ -80,6 +80,10 @@ internal class QueryablePropertyConfig : IQueryableConfiguration
     public IQueryableConfiguration Vector() { IsVectorField = true; return this; }
     public IQueryableConfiguration Facet() { IsFacet = true; return this; }
     internal bool IsFacet { get; private set; }
+    public IQueryableConfiguration Temporal() { TemporalMode = Internal.TemporalMode.Date; return this; }
+    public IQueryableConfiguration Timex(string anchorProperty) { TemporalMode = Internal.TemporalMode.Timex; TimexAnchor = anchorProperty; return this; }
+    internal Internal.TemporalMode TemporalMode { get; private set; }
+    internal string? TimexAnchor { get; private set; }
 }
 
 internal class FieldPropertyConfig : IFieldConfiguration
@@ -98,4 +102,8 @@ internal class FieldPropertyConfig : IFieldConfiguration
     public IFieldConfiguration Vector() { IsVectorField = true; return this; }
     public IFieldConfiguration Facet() { IsFacet = true; return this; }
     internal bool IsFacet { get; private set; }
+    public IFieldConfiguration Temporal() { TemporalMode = Internal.TemporalMode.Date; return this; }
+    public IFieldConfiguration Timex(string anchorProperty) { TemporalMode = Internal.TemporalMode.Timex; TimexAnchor = anchorProperty; return this; }
+    internal Internal.TemporalMode TemporalMode { get; private set; }
+    internal string? TimexAnchor { get; private set; }
 }
