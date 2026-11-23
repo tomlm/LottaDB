@@ -31,6 +31,7 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     private static readonly Analyzer _propertyAnalyzer = new StandardAnalyzer(Version.LUCENE_48);
     private readonly LottaDB _db;
     private readonly PropertyInfo? _scoreProperty;
+    private readonly List<IndexedTypeProperty> _temporal = [];
 
     public TypeDocumentMapper(Version version, Analyzer analyzer, TypeMetadata? meta, IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator, LottaDB db)
         : base(version, analyzer)
@@ -38,6 +39,7 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
         _db = db;
         _scoreProperty = meta?.ScoreProperty;
         if (meta == null) return;
+        _temporal.AddRange(meta.IndexedProperties.Where(p => p.Temporal != TemporalMode.None));
         var classMap = new ClassMap<T>(version);
 
         // Key property → Lucene document key for upsert/delete
@@ -153,6 +155,10 @@ internal class TypeDocumentMapper<T> : DocumentMapperBase<T>
     public override void MapFieldsToDocument(T source, Document target)
     {
         base.MapFieldsToDocument(source, target);
+        // Temporal properties: Iciclecreek.Lucene.Net.Temporal's fields, made from the object as
+        // it is, so rebuilding the index makes them again.
+        if (_temporal.Count > 0)
+            TemporalFields.AddTo(source, _temporal, target);
         if (source.GetVectors() is not { Count: > 0 } stored)
             return;
         foreach (var field in _db.VectorFieldsOf(source.GetType()))
